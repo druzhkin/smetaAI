@@ -24,7 +24,7 @@ release even when repository tests pass.
 | Operational scenario modelling | approved-policy scenarios execute from fixed snapshots, persist results, and independently recalculate; portfolio comparison UI and business qualification remain absent | **PARTIAL** |
 | Export packages | released fixed snapshots produce deterministic content-addressed Ed25519-signed JSON packages with lineage, versions, approvals, workflow, release decision and verified audit chain; external delivery adapters, approved public-key distribution/trust registry and business qualification are absent | **PARTIAL** |
 | Load test | no representative document corpus/workload/SLO approved | **OPEN** |
-| Malware scanning/sandbox | not connected; untrusted parsers remain in API process | **OPEN** |
+| Malware scanning/sandbox | streamed separate quarantine, immutable qualification-bound exact-hash scan results, bounded archive streams, and worker-only parser/CLI are implemented and tested; real scanner provider, job orchestrator, disposable runtime limits, network policy and qualification evidence are absent | **PARTIAL - PRODUCTION BLOCKER** |
 | Security review | code review completed; residual findings remain below | **OPEN** |
 | Backup and point-in-time recovery | runbook drafted; restore evidence absent | **OPEN** |
 | Disaster recovery | target RPO/RTO and alternate environment not approved | **OPEN** |

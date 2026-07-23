@@ -1244,13 +1244,10 @@ dependencies = [
     { name = "alembic" },
     { name = "boto3" },
     { name = "fastapi" },
-    { name = "openpyxl" },
-    { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
-    { name = "pypdf" },
     { name = "python-multipart" },
     { name = "sqlalchemy" },
     { name = "structlog" },
@@ -1262,11 +1259,19 @@ dev = [
     { name = "boto3-stubs", extra = ["s3"] },
     { name = "httpx" },
     { name = "mypy" },
+    { name = "openpyxl" },
+    { name = "pillow" },
     { name = "pip-audit" },
+    { name = "pypdf" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "types-openpyxl" },
+]
+document-worker = [
+    { name = "openpyxl" },
+    { name = "pillow" },
+    { name = "pypdf" },
 ]
 
 [package.metadata]
@@ -1277,14 +1282,17 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14,<2" },
-    { name = "openpyxl", specifier = ">=3.1,<4" },
-    { name = "pillow", specifier = ">=11,<13" },
+    { name = "openpyxl", marker = "extra == 'dev'", specifier = ">=3.1,<4" },
+    { name = "openpyxl", marker = "extra == 'document-worker'", specifier = ">=3.1,<4" },
+    { name = "pillow", marker = "extra == 'dev'", specifier = ">=11,<13" },
+    { name = "pillow", marker = "extra == 'document-worker'", specifier = ">=11,<13" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7,<3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
-    { name = "pypdf", specifier = ">=5,<7" },
+    { name = "pypdf", marker = "extra == 'dev'", specifier = ">=5,<7" },
+    { name = "pypdf", marker = "extra == 'document-worker'", specifier = ">=5,<7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<8" },
     { name = "python-multipart", specifier = ">=0.0.20,<1" },
@@ -1294,7 +1302,7 @@ requires-dist = [
     { name = "types-openpyxl", marker = "extra == 'dev'", specifier = ">=3.1,<4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["document-worker", "dev"]
 
 [[package]]
 name = "tomli"

@@ -18,6 +18,7 @@ all operational qualification evidence remain open.
 | Layer | Independent evidence | Failure response |
 |---|---|---|
 | Input integrity | archive manifest, hashes, file health, revision graph | block or `DOCUMENTS_INCOMPLETE` |
+| Untrusted file boundary | separate quarantine, qualified exact-hash malware result, worker-only bounded parsing | no evidence promotion; `BLOCKED`/`DOCUMENTS_INCOMPLETE` |
 | Extraction | independent observations and reconciliation | conflict; no auto-merge |
 | Scope | WBS/rule/dependency companion-work checks | scope issue; expert review |
 | Quantity | source/formula/unit/geometry/alternatives and checks | unverified quantity hard stop |
@@ -78,8 +79,10 @@ and creates a new verified derived observation with recursive lineage.
 - A package-carried public key proves internal consistency but not external
   organisational identity by itself; independent consumers must trust the key
   ID/fingerprint through an approved out-of-band registry.
-- Untrusted parsing still occurs without a qualified malware quarantine and
-  isolated worker boundary; this is a production blocker.
+- The code enforces quarantine and a worker-only parser entry point, but no
+  organisation-qualified malware provider or runtime sandbox/network policy is
+  deployed by this repository; production remains blocked until operational
+  evidence proves that boundary.
 
 ## Required production evidence
 

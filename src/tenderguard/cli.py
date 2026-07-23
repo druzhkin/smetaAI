@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
+from uuid import uuid4
 
 from sqlalchemy import text
 
 from tenderguard.config import get_settings
-from tenderguard.infrastructure.database import create_database_engine
-from tenderguard.infrastructure.object_store import build_object_store
+from tenderguard.domain.enums import ActorRole
+from tenderguard.domain.quarantine import QuarantineStatus
+from tenderguard.infrastructure.auth import Actor
+from tenderguard.infrastructure.database import (
+    CURRENT_SCHEMA_REVISION,
+    create_database_engine,
+    create_session_factory,
+)
+from tenderguard.infrastructure.object_store import (
+    build_object_store,
+    build_quarantine_store,
+)
+from tenderguard.infrastructure.orm import QuarantinedUploadRow
 
 
 def doctor() -> int:
@@ -15,7 +27,9 @@ def doctor() -> int:
     checks: dict[str, bool | str] = {
         "environment": settings.app_env,
         "database": False,
+        "schema_current": False,
         "object_store": False,
+        "quarantine_store": False,
         "oidc_configured": bool(
             settings.allow_insecure_dev_auth
             or (settings.oidc_issuer and settings.oidc_audience and settings.oidc_jwks_url)
@@ -26,7 +40,11 @@ def doctor() -> int:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one_or_none()
         checks["database"] = True
+        checks["schema_current"] = revision == CURRENT_SCHEMA_REVISION
     except Exception as error:
         checks["database_error"] = type(error).__name__
     finally:
@@ -35,21 +53,107 @@ def doctor() -> int:
         checks["object_store"] = build_object_store(settings).healthcheck()
     except Exception as error:
         checks["object_store_error"] = type(error).__name__
+    try:
+        checks["quarantine_store"] = build_quarantine_store(settings).healthcheck()
+    except Exception as error:
+        checks["quarantine_store_error"] = type(error).__name__
     print(json.dumps(checks, ensure_ascii=False, indent=2, sort_keys=True))
     return (
         0
-        if all(checks[key] is True for key in ("database", "object_store", "oidc_configured"))
+        if all(
+            checks[key] is True
+            for key in (
+                "database",
+                "schema_current",
+                "object_store",
+                "quarantine_store",
+                "oidc_configured",
+            )
+        )
         else 1
     )
+
+
+def process_quarantined_upload(upload_id: str) -> int:
+    try:
+        from tenderguard.application.document_processing import DocumentProcessingService
+    except ModuleNotFoundError as error:
+        if error.name not in {"PIL", "openpyxl", "pypdf"}:
+            raise
+        print(
+            json.dumps(
+                {
+                    "status": "BLOCKED",
+                    "detail": (
+                        "document-worker parser dependencies are not installed; "
+                        "use the document-worker image"
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    settings = get_settings()
+    if not settings.document_worker_actor_id:
+        print(
+            json.dumps(
+                {"status": "BLOCKED", "detail": "document worker actor is not configured"},
+                sort_keys=True,
+            )
+        )
+        return 2
+    engine = create_database_engine(settings)
+    factory = create_session_factory(engine)
+    evidence_store = build_object_store(settings)
+    quarantine_store = build_quarantine_store(settings)
+    try:
+        with factory.begin() as session:
+            upload = session.get(QuarantinedUploadRow, upload_id)
+            if upload is None:
+                print(
+                    json.dumps(
+                        {"status": "NOT_FOUND", "upload_id": upload_id},
+                        sort_keys=True,
+                    )
+                )
+                return 2
+            actor = Actor(
+                actor_id=settings.document_worker_actor_id,
+                organization_id=upload.organization_id,
+                roles=frozenset({ActorRole.SYSTEM}),
+            )
+            result = DocumentProcessingService(
+                session=session,
+                settings=settings,
+                evidence_store=evidence_store,
+                quarantine_store=quarantine_store,
+            ).process(
+                actor=actor,
+                upload_id=upload_id,
+                request_id=f"worker-{uuid4()}",
+                reason="Qualified isolated document-intake worker execution",
+            )
+            print(result.model_dump_json(indent=2))
+            return 0 if result.status is QuarantineStatus.PROCESSED else 2
+    finally:
+        engine.dispose()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tenderguard")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("doctor", help="Check runtime dependencies without changing data")
+    process_parser = subcommands.add_parser(
+        "process-quarantined-upload",
+        help="Process one CLEAN upload in the isolated document worker runtime",
+    )
+    process_parser.add_argument("--upload-id", required=True)
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         raise SystemExit(doctor())
+    if arguments.command == "process-quarantined-upload":
+        raise SystemExit(process_quarantined_upload(arguments.upload_id))
 
 
 if __name__ == "__main__":

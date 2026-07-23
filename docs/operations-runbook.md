@@ -19,12 +19,36 @@ No critical change may be approved by its author.
 ## Runtime health probes
 
 - `GET /health/live` returns HTTP 200 while the process can serve requests.
-- `GET /health/ready` returns HTTP 200 only when the database, object store,
-  authentication configuration, and valid Ed25519 export signing key are
-  ready. It returns HTTP 503 with a structured diagnostic body otherwise.
+- `GET /health/ready` returns HTTP 200 only when the database is at the exact
+  application Alembic head, evidence and quarantine stores are reachable,
+  authentication is configured, malware-scanner and document-processor
+  qualifications are active, the worker actor is configured, and the Ed25519
+  export signing key is valid. It returns HTTP 503 otherwise.
 - Normative-engine qualification is reported by readiness but remains a
   separate bid-release hard stop; an operational API process is not, by that
   fact alone, authorised to issue a bid.
+
+## Quarantined document intake
+
+The upload endpoint returns `202` and an opaque upload ID. Do not expect a
+document revision until the upload status becomes `PROCESSED`.
+
+1. The scanner integration reads the quarantine object by its server-side
+   identity and submits an exact-hash result as a `SYSTEM` identity.
+2. For `CLEAN`, dispatch
+   `tenderguard process-quarantined-upload --upload-id <id>` only into the
+   approved disposable worker profile built from Docker target
+   `document-worker`. Do not run this command in an API container.
+3. Poll the upload status endpoint. `REJECTED`, `SCAN_FAILED`, and
+   `PROCESSING_FAILED` are not successful intake.
+4. For an infected file, obtain a clean replacement from an authorised source.
+   Do not override the verdict. A replacement resolves the old blocker only
+   when it is itself scanned and processed.
+
+Use separate object-store buckets and credentials for quarantine and evidence.
+The worker must have no unrestricted network egress and must be constrained by
+CPU, memory, process, temporary-disk, and wall-clock limits. The detailed
+contract is in `docs/quarantined-intake.md`.
 
 ## Controlled workflow
 

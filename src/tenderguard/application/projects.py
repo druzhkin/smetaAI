@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
@@ -31,6 +30,7 @@ from tenderguard.domain.enums import (
     VerificationStatus,
     VersionStatus,
 )
+from tenderguard.domain.intake import IntakeManifest
 from tenderguard.domain.models import (
     CalculationSnapshot,
     ControlledVersion,
@@ -45,8 +45,7 @@ from tenderguard.domain.release import (
 )
 from tenderguard.domain.workflow import validate_transition
 from tenderguard.infrastructure.auth import Actor
-from tenderguard.infrastructure.intake import IntakeManifest, inspect_intake
-from tenderguard.infrastructure.object_store import ObjectStore
+from tenderguard.infrastructure.object_store import ObjectStore, StoredObject
 from tenderguard.infrastructure.orm import (
     AdapterQualificationRow,
     ApprovalRecordRow,
@@ -72,6 +71,7 @@ from tenderguard.infrastructure.orm import (
     ProjectPassportFactRow,
     ProjectRow,
     QuantityRow,
+    QuarantinedUploadRow,
     ReleaseDecisionRow,
     RiskCalculationRow,
     RiskItemRow,
@@ -184,6 +184,15 @@ class ProjectService:
             payload=payload,
         )
 
+    def enqueue_event(
+        self,
+        *,
+        topic: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        self._outbox(topic=topic, aggregate_id=aggregate_id, payload=payload)
+
     def get_project(self, *, actor: Actor, project_id: str, lock: bool = False) -> ProjectRow:
         query: Select[tuple[ProjectRow]] = select(ProjectRow).where(
             ProjectRow.id == project_id,
@@ -199,7 +208,7 @@ class ProjectService:
     def project_view(self, *, actor: Actor, project_id: str) -> ProjectView:
         return self._view(self.get_project(actor=actor, project_id=project_id))
 
-    def upload_document_revision(
+    def register_scanned_document_revision(
         self,
         *,
         actor: Actor,
@@ -211,12 +220,17 @@ class ProjectService:
         revision_label: str,
         filename: str,
         media_type: str,
-        content: bytes,
+        stored: StoredObject,
+        manifest: IntakeManifest,
+        member_objects: dict[str, str],
+        quarantine_upload_id: str,
+        submitted_by: str,
         request_id: str,
         reason: str,
         make_candidate_current: bool = True,
+        invalidated_document_set_revision_id: str | None = None,
     ) -> DocumentUploadResult:
-        actor.require_any(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT, ActorRole.ADMIN)
+        actor.require_any(ActorRole.SYSTEM)
         project = self.get_project(actor=actor, project_id=project_id, lock=True)
         if ApprovalState(project.state) in {
             ApprovalState.APPROVED_FOR_BID,
@@ -224,24 +238,21 @@ class ProjectService:
             ApprovalState.ARCHIVED,
         }:
             raise ValueError("Released/superseded/archived projects are immutable")
-        invalidated_document_set_id = (
-            project.current_document_set_revision_id if make_candidate_current else None
+        quarantine = self.session.scalar(
+            select(QuarantinedUploadRow).where(
+                QuarantinedUploadRow.id == quarantine_upload_id,
+                QuarantinedUploadRow.project_id == project.id,
+            )
         )
-
-        stored = self.object_store.put(BytesIO(content))
-        member_objects: dict[str, str] = {}
-
-        def store_member(path: str, payload: bytes) -> None:
-            member_objects[path] = self.object_store.put(BytesIO(payload)).object_hash
-
-        manifest = inspect_intake(
-            filename,
-            content,
-            self.settings,
-            on_member=store_member,
-        )
+        if quarantine is None:
+            raise LookupError(quarantine_upload_id)
+        if quarantine.object_hash != stored.object_hash:
+            raise RuntimeError("Promoted object differs from quarantined object")
         if manifest.root_sha256 != stored.object_hash:
             raise RuntimeError("Object-store hash differs from intake hash")
+        invalidated_document_set_id = (
+            invalidated_document_set_revision_id if make_candidate_current else None
+        )
 
         now = utc_now()
         document = self.session.scalar(
@@ -348,7 +359,7 @@ class ProjectService:
                 replacement_document_revision_id=revision.id,
                 invalidated_at=now,
             )
-        candidate_id = self._create_document_set_candidate(project, actor.actor_id, now)
+        candidate_id = self._create_document_set_candidate(project, submitted_by, now)
         if make_candidate_current:
             project.current_document_set_revision_id = None
         if (
@@ -382,7 +393,7 @@ class ProjectService:
         self._audit(
             aggregate_type="project",
             aggregate_id=project.id,
-            event_type="document_revision_uploaded",
+            event_type="document_revision_registered_after_scan",
             actor=actor,
             request_id=request_id,
             reason=reason,
@@ -396,6 +407,8 @@ class ProjectService:
                 "candidate_document_set_revision_id": candidate_id,
                 "invalidated_document_set_revision_id": invalidated_document_set_id,
                 "invalidated_derived_record_counts": invalidated_counts,
+                "quarantine_upload_id": quarantine_upload_id,
+                "submitted_by": submitted_by,
             },
         )
         self._outbox(
@@ -414,6 +427,111 @@ class ProjectService:
             manifest=manifest,
             project_state=ApprovalState(project.state),
         )
+
+    def register_quarantined_upload(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        upload_id: str,
+        object_hash: str,
+        make_candidate_current: bool,
+        inherited_invalidated_document_set_id: str | None,
+        request_id: str,
+        reason: str,
+    ) -> str | None:
+        actor.require_any(
+            ActorRole.ESTIMATOR,
+            ActorRole.TECHNICAL_EXPERT,
+            ActorRole.ADMIN,
+        )
+        project = self.get_project(actor=actor, project_id=project_id, lock=True)
+        state = ApprovalState(project.state)
+        if state in {
+            ApprovalState.APPROVED_FOR_BID,
+            ApprovalState.SUPERSEDED,
+            ApprovalState.ARCHIVED,
+        }:
+            raise ValueError("Released/superseded/archived projects are immutable")
+        invalidated_document_set_id = (
+            (project.current_document_set_revision_id or inherited_invalidated_document_set_id)
+            if make_candidate_current
+            else None
+        )
+        now = utc_now()
+        if make_candidate_current:
+            project.current_document_set_revision_id = None
+            if state is ApprovalState.DRAFT:
+                self._change_state(
+                    project=project,
+                    to_state=ApprovalState.DOCUMENTS_INCOMPLETE,
+                    actor=actor,
+                    request_id=request_id,
+                    reason="Current-candidate upload is quarantined pending qualified scanning",
+                )
+            elif state not in {
+                ApprovalState.DOCUMENTS_INCOMPLETE,
+                ApprovalState.BLOCKED,
+            }:
+                self._change_state(
+                    project=project,
+                    to_state=ApprovalState.BLOCKED,
+                    actor=actor,
+                    request_id=request_id,
+                    reason="Potential new document revision is quarantined",
+                )
+            else:
+                project.row_version += 1
+                project.updated_at = now
+        else:
+            project.row_version += 1
+            project.updated_at = now
+        finding_payload = {
+            "upload_id": upload_id,
+            "object_hash": object_hash,
+            "make_candidate_current": make_candidate_current,
+        }
+        self.session.add(
+            VerificationFindingRow(
+                id=self.quarantine_finding_id(upload_id),
+                project_id=project.id,
+                contour="INPUT_INTEGRITY",
+                code="QUARANTINE_SCAN_PENDING",
+                severity=(
+                    Severity.BLOCKER.value if make_candidate_current else Severity.WARNING.value
+                ),
+                resolved=False,
+                payload=finding_payload,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        self._audit(
+            aggregate_type="project",
+            aggregate_id=project.id,
+            event_type="document_upload_quarantined",
+            actor=actor,
+            request_id=request_id,
+            reason=reason,
+            payload={
+                **finding_payload,
+                "invalidated_document_set_revision_id": invalidated_document_set_id,
+            },
+        )
+        self._outbox(
+            topic="document.upload.quarantined",
+            aggregate_id=upload_id,
+            payload={
+                "project_id": project.id,
+                "upload_id": upload_id,
+                "object_hash": object_hash,
+            },
+        )
+        return invalidated_document_set_id
+
+    @staticmethod
+    def quarantine_finding_id(upload_id: str) -> str:
+        return f"finding-quarantine-{content_hash(upload_id)[:24]}"
 
     def confirm_document_set(
         self,

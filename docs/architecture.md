@@ -28,8 +28,10 @@ Nothing crosses a boundary merely because a model reports high confidence.
 ## Modules
 
 - `identity`: OIDC validation, roles, project access, segregation of duties.
-- `intake`: archive expansion, manifest, file health, Excel visibility/formula
-  checks, document revision, referenced-document discovery.
+- `intake`: separately stored streamed quarantine, qualification-bound malware
+  results, worker-only bounded archive expansion, manifest, file health, Excel
+  visibility/formula checks, document revision, and referenced-document
+  discovery.
 - `evidence`: source locations, extraction runs, independent observations,
   conflicts, mandatory conflict-review tasks, manual corrections, and
   verification status.
@@ -74,6 +76,10 @@ Production deployment requires:
 - versioned S3-compatible storage with object lock/WORM for originals and
   released snapshots;
 - at least two API replicas and isolated worker pools;
+- separate API and document-worker images; parser libraries are absent from
+  the API image;
+- distinct quarantine and evidence buckets; parser workers run with network,
+  CPU, memory, process, time, and temporary-disk limits;
 - a transactional outbox and idempotent consumers;
 - OIDC with MFA enforced by the identity provider;
 - central logs, metrics, traces, security audit export, alerting, and time
@@ -88,6 +94,8 @@ Production deployment requires:
 - Money uses `Decimal`; floating point is forbidden.
 - Currency, VAT basis, unit, rounding, and effective date are explicit.
 - Original observations are immutable. Corrections create new observations.
+- An original upload cannot enter the evidence zone or reach a parser before
+  an exact qualified malware result is `CLEAN`; scan-result rows are immutable.
 - Every current value points to evidence or an approved assumption.
 - Current passport, quantity, contract, risk, actual, nomenclature, and price
   records supersede prior revisions; upstream changes never overwrite history.

@@ -9,43 +9,52 @@ container, locked dependencies, production host validation, disabled
 production API docs, request-size checks, and immutable audit/snapshot database
 triggers.
 
-It is **not ready for production**. Two high-severity controls depend on
-infrastructure that is not implemented: malware/sandbox processing and
-streaming isolation for large untrusted documents.
+It is **not ready for production**. The application now enforces streamed
+separate quarantine, qualification-bound exact-hash malware results, and a
+worker-only bounded parser entry point. A real malware provider, disposable
+runtime sandbox, network/resource policy, job orchestrator, and their
+qualification evidence are external controls and remain production blockers.
 
 ## High severity
 
-### SEC-001 - Untrusted document parsing is not sandboxed or malware-scanned
+### SEC-001 - Operational malware scanner and parser sandbox are not deployed
 
 - Rule ID: FASTAPI-UPLOAD-001 / defence-in-depth input boundary
-- Location: `src/tenderguard/application/projects.py:219`,
-  `src/tenderguard/infrastructure/intake.py:145`,
-  `src/tenderguard/infrastructure/intake.py:196`
-- Evidence: uploaded bytes are parsed by PDF, Excel, Pillow, and ZIP libraries
-  in the API process. No qualified malware scanner or isolated worker is called.
-- Impact: a malicious tender file could exploit a parser vulnerability, cause
-  resource exhaustion, or reach internal services under API credentials.
-- Fix: quarantine originals first; scan with a qualified engine; parse only in
-  network-restricted, disposable workers with CPU/memory/time limits and
-  read-only inputs; promote evidence only after scan success.
-- Mitigation: strict file allowlist, patched parsers, upload limits, and archive
-  checks are implemented, but do not close this finding.
-- Status: **OPEN - production blocker**.
+- Location: `src/tenderguard/application/quarantine.py:184`,
+  `src/tenderguard/application/document_processing.py:45`,
+  `src/tenderguard/cli.py:77`
+- Evidence: the API can only quarantine; a `SYSTEM` result must reproduce the
+  report/object hashes and an active configured `MALWARE_SCAN` qualification;
+  parsing is reachable through the worker service/CLI after `CLEAN`. The
+  repository does not deploy the scanner product, worker orchestrator,
+  container network policy, or resource limits.
+- Impact: if operators run the worker without the mandated disposable sandbox,
+  a malicious clean-missed file could exploit a parser vulnerability under
+  worker credentials.
+- Fix: connect and qualify the organisation's scanner, deploy the CLI only as a
+  network-denied disposable job with read-only image and CPU/memory/time/disk
+  limits, restrict credentials, and capture qualification/load/abuse evidence.
+- Mitigation: separate stores, exact-hash promotion, immutable scan evidence,
+  a parser-free API image, parser qualification, strict allowlist, patched
+  worker libraries, and bounded spooling materially reduce exposure but cannot
+  prove the runtime boundary.
+- Status: **PARTIALLY REMEDIATED - production blocker**.
 
-### SEC-002 - Large uploads and archive members are materialized in memory
+### SEC-002 - Application-level whole-file materialisation
 
 - Rule ID: FASTAPI-RES-001 / FASTAPI-UPLOAD-001
-- Location: `src/tenderguard/api/main.py:291`,
-  `src/tenderguard/infrastructure/intake.py:492`
-- Evidence: the endpoint reads the complete upload and `ZipFile.read` reads each
-  archive member as bytes.
-- Impact: concurrent valid-size uploads or highly expanded files can exhaust
-  API memory and cause availability loss during tender deadlines.
-- Fix: stream uploads into quarantine object storage; inspect archives via
-  bounded streams in workers; apply per-tenant concurrency/rate quotas.
-- Mitigation: Content-Length middleware, endpoint limit, file-count,
-  uncompressed-size, depth, and compression-ratio checks exist.
-- Status: **OPEN - production blocker**.
+- Location: `src/tenderguard/api/main.py:538`,
+  `src/tenderguard/infrastructure/object_store.py:48`,
+  `src/tenderguard/infrastructure/intake.py:567`
+- Evidence: the API copies the `UploadFile` spool into quarantine with a hard
+  byte limit. Archive members use `ZipFile.open`, bounded copy, and
+  `SpooledTemporaryFile`; `ZipFile.read` is not used.
+- Impact: the prior API/archive memory-exhaustion path is removed. Aggregate
+  concurrency can still exhaust workers or temporary disk without edge and
+  per-tenant quotas (tracked in SEC-005).
+- Fix: retain the bounded streaming code and add representative concurrent
+  upload/archive load tests plus ingress and tenant quotas.
+- Status: **REMEDIATED IN APPLICATION CODE; operational load evidence OPEN**.
 
 ## Medium severity
 
@@ -135,3 +144,13 @@ streaming isolation for large untrusted documents.
   artifact rows retain key ID/public-key fingerprint and are immutable in
   PostgreSQL. External authenticity still depends on an independently trusted
   public-key registry.
+- Uploads now land in a distinct quarantine store through a size-limited
+  stream. Current-candidate uploads immediately clear current document-set
+  authority and create a blocker. Only immutable exact-hash results from the
+  configured active scanner qualification can set `CLEAN`; infected files
+  cannot be parsed or manually overridden.
+- PDF/Office/image/archive parsing is no longer an API route action. The
+  worker-only entry point promotes the exact clean hash, streams archive
+  members through bounded disk-spilling spools, and requires an active
+  document-processor qualification. Docker builds a parser-free `api` target
+  and a distinct parser-equipped `document-worker` target.

@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+pysqlite:///./var/tenderguard.db"
     object_store_backend: Literal["local", "s3"] = "local"
     local_object_store_path: Path = Path("./var/objects")
+    local_quarantine_store_path: Path = Path("./var/quarantine")
     max_upload_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    max_parser_spool_memory_bytes: int = Field(default=8 * 1024 * 1024, gt=0)
+    max_scan_report_bytes: int = Field(default=1024 * 1024, gt=0)
     max_archive_depth: int = Field(default=3, ge=0, le=10)
     max_archive_files: int = Field(default=10_000, gt=0)
     max_archive_unpacked_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
@@ -38,11 +41,17 @@ class Settings(BaseSettings):
 
     s3_endpoint_url: str | None = None
     s3_bucket: str | None = None
+    s3_quarantine_bucket: str | None = None
     s3_access_key: SecretStr | None = None
     s3_secret_key: SecretStr | None = None
 
     normative_adapter: str | None = None
     normative_adapter_qualification_id: str | None = None
+    malware_scanner_adapter: str | None = None
+    malware_scanner_qualification_id: str | None = None
+    document_processor_adapter: str | None = None
+    document_processor_qualification_id: str | None = None
+    document_worker_actor_id: str | None = None
 
     @model_validator(mode="after")
     def production_is_fail_closed(self) -> Settings:
@@ -67,11 +76,20 @@ class Settings(BaseSettings):
             if not all(
                 (
                     self.s3_bucket,
+                    self.s3_quarantine_bucket,
                     self.s3_access_key,
                     self.s3_secret_key,
                 )
             ):
-                problems.append("S3 credentials/bucket are incomplete")
+                problems.append("S3 credentials/evidence/quarantine buckets are incomplete")
+            if self.s3_bucket and self.s3_bucket == self.s3_quarantine_bucket:
+                problems.append("quarantine and evidence must use different S3 buckets")
+            if not self.malware_scanner_configured:
+                problems.append("qualified malware scanner binding is incomplete")
+            if not self.document_processor_configured:
+                problems.append("qualified isolated document processor binding is incomplete")
+            if not self.document_worker_actor_id:
+                problems.append("isolated document worker actor is not configured")
             if problems:
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         if self.allow_insecure_dev_auth and self.app_env not in {"development", "test"}:
@@ -85,6 +103,14 @@ class Settings(BaseSettings):
     @property
     def export_signing_configured(self) -> bool:
         return bool(self.export_signing_key_id and self.export_signing_private_key_b64)
+
+    @property
+    def malware_scanner_configured(self) -> bool:
+        return bool(self.malware_scanner_adapter and self.malware_scanner_qualification_id)
+
+    @property
+    def document_processor_configured(self) -> bool:
+        return bool(self.document_processor_adapter and self.document_processor_qualification_id)
 
 
 @lru_cache

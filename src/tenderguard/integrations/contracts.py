@@ -8,6 +8,7 @@ from pydantic import Field
 
 from tenderguard.domain.enums import EvidenceMethod, PriceEvidenceClass
 from tenderguard.domain.models import DomainModel, Observation, PriceQuote
+from tenderguard.domain.quarantine import MalwareScanResult
 
 
 class AdapterQualification(DomainModel):
@@ -26,6 +27,22 @@ class ConnectorHealth(DomainModel):
     checked_at: datetime
     source_as_of: datetime | None = None
     message: str
+
+
+class MalwareScanRequest(DomainModel):
+    upload_id: str
+    project_id: str
+    object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0)
+    original_filename: str
+
+
+class MalwareScanner(Protocol):
+    qualification: AdapterQualification
+
+    def scan(self, request: MalwareScanRequest, content: BinaryIO) -> MalwareScanResult: ...
+
+    def health(self) -> ConnectorHealth: ...
 
 
 class ExtractionRequest(DomainModel):

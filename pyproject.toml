@@ -14,13 +14,10 @@ dependencies = [
   "alembic>=1.14,<2",
   "boto3>=1.35,<2",
   "fastapi>=0.115,<1",
-  "openpyxl>=3.1,<4",
-  "pillow>=11,<13",
   "psycopg[binary]>=3.2,<4",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
   "PyJWT[crypto]>=2.10,<3",
-  "pypdf>=5,<7",
   "python-multipart>=0.0.20,<1",
   "sqlalchemy>=2.0,<3",
   "structlog>=24.4,<27",
@@ -28,11 +25,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+document-worker = [
+  "openpyxl>=3.1,<4",
+  "pillow>=11,<13",
+  "pypdf>=5,<7",
+]
 dev = [
   "boto3-stubs[s3]>=1.35,<2",
   "httpx>=0.28,<1",
   "mypy>=1.14,<2",
+  "openpyxl>=3.1,<4",
+  "pillow>=11,<13",
   "pip-audit>=2.7,<3",
+  "pypdf>=5,<7",
   "pytest>=8.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.9,<1",

@@ -70,7 +70,7 @@ from tenderguard.domain.approvals import ApprovalSubject
 from tenderguard.domain.calculation import AtomicCostInput, CalculationPolicy
 from tenderguard.domain.enums import ApprovalState
 from tenderguard.domain.models import ControlledVersion, GateDecision, Observation
-from tenderguard.infrastructure.intake import IntakeManifest
+from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadView
 
 
 class ApiModel(BaseModel):
@@ -99,12 +99,13 @@ class ReleaseRequest(ApiModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
-class DocumentUploadResponse(ApiModel):
-    document_id: str
-    document_revision_id: str
-    candidate_document_set_revision_id: str
-    manifest: IntakeManifest
-    project_state: ApprovalState
+class QuarantinedUploadResponse(QuarantinedUploadView):
+    pass
+
+
+class RecordMalwareScanResultRequest(ApiModel):
+    result: MalwareScanResult
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class ReleaseGateResponse(ApiModel):
@@ -424,8 +425,12 @@ class ExportVerificationResponse(ExportVerificationResult):
 class ReadinessResponse(ApiModel):
     ready: bool
     database: bool
+    schema_current: bool
     object_store: bool
+    quarantine_store: bool
     authentication_configured: bool
     normative_engine_qualified: bool
+    malware_scanner_qualified: bool
+    document_processor_qualified: bool
     export_signing_configured: bool
     notes: tuple[str, ...]

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from tenderguard.config import Settings
 from tenderguard.infrastructure.orm import Base
+
+CURRENT_SCHEMA_REVISION = "e31c9f0a7b42"
 
 
 def create_database_engine(settings: Settings) -> Engine:
@@ -28,6 +30,18 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
 
 def create_schema_for_tests(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS alembic_version "
+                "(version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+            )
+        )
+        connection.execute(text("DELETE FROM alembic_version"))
+        connection.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+            {"revision": CURRENT_SCHEMA_REVISION},
+        )
 
 
 def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:

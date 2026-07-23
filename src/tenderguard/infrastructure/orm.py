@@ -53,6 +53,83 @@ class ProjectRow(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("organization_id", "code"),)
 
 
+class QuarantinedUploadRow(Base, TimestampMixin):
+    __tablename__ = "quarantined_uploads"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    logical_key: Mapped[str] = mapped_column(String(300), nullable=False)
+    title: Mapped[str] = mapped_column(String(1000), nullable=False)
+    document_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    critical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    revision_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(1000), nullable=False)
+    declared_media_type: Mapped[str] = mapped_column(String(200), nullable=False)
+    make_candidate_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    object_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    invalidated_document_set_revision_id: Mapped[str | None] = mapped_column(String(64))
+    processed_document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"))
+    processed_document_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("document_revisions.id")
+    )
+    candidate_document_set_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("document_set_revisions.id")
+    )
+    result_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    failure_detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        Index(
+            "uq_active_quarantined_upload_per_logical",
+            "project_id",
+            "logical_key",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('QUARANTINED', 'CLEAN', 'SCAN_FAILED', "
+                "'PROCESSING', 'PROCESSING_FAILED')"
+            ),
+            postgresql_where=text(
+                "status IN ('QUARANTINED', 'CLEAN', 'SCAN_FAILED', "
+                "'PROCESSING', 'PROCESSING_FAILED')"
+            ),
+        ),
+    )
+
+
+class MalwareScanResultRow(Base):
+    __tablename__ = "malware_scan_results"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    quarantined_upload_id: Mapped[str] = mapped_column(
+        ForeignKey("quarantined_uploads.id"), nullable=False, index=True
+    )
+    adapter_qualification_id: Mapped[str] = mapped_column(
+        ForeignKey("adapter_qualifications.id"), nullable=False
+    )
+    scanner_run_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    scanned_object_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    definitions_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    report_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "adapter_qualification_id",
+            "scanner_run_id",
+            name="uq_malware_scan_adapter_run",
+        ),
+    )
+
+
 class DocumentRow(Base, TimestampMixin):
     __tablename__ = "documents"
 

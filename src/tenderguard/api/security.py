@@ -12,15 +12,29 @@ class RequestSizeLimitMiddleware:
     must independently reject oversized/chunked bodies before they reach ASGI.
     """
 
-    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_bytes: int,
+        path_suffix_limits: dict[str, int] | None = None,
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.path_suffix_limits = path_suffix_limits or {}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             headers = Headers(scope=scope)
             content_length = headers.get("content-length")
             if content_length:
+                effective_limit = min(
+                    (
+                        limit
+                        for suffix, limit in self.path_suffix_limits.items()
+                        if scope.get("path", "").endswith(suffix)
+                    ),
+                    default=self.max_bytes,
+                )
                 try:
                     declared = int(content_length)
                 except ValueError:
@@ -30,7 +44,7 @@ class RequestSizeLimitMiddleware:
                     )
                     await response(scope, receive, send)
                     return
-                if declared > self.max_bytes:
+                if declared > effective_limit:
                     response = JSONResponse(
                         {"detail": "Request body exceeds configured limit"},
                         status_code=413,

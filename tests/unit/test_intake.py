@@ -6,7 +6,7 @@ import pytest
 from openpyxl import Workbook
 
 from tenderguard.config import Settings
-from tenderguard.infrastructure.intake import inspect_intake
+from tenderguard.infrastructure.intake import inspect_intake, inspect_intake_stream
 from tenderguard.infrastructure.object_store import LocalObjectStore
 
 
@@ -48,6 +48,19 @@ def test_archive_path_traversal_is_blocked() -> None:
     assert any(entry.archive_path.endswith("safe.txt") for entry in manifest.entries)
 
 
+def test_office_container_is_preflighted_before_excel_parser() -> None:
+    payload = BytesIO()
+    with ZipFile(payload, "w", compression=ZIP_DEFLATED) as package:
+        package.writestr("xl/workbook.xml", "A" * 100_000)
+    manifest = inspect_intake(
+        "boq.xlsx",
+        payload.getvalue(),
+        Settings(app_env="test", max_archive_compression_ratio=2),
+    )
+    assert not manifest.all_files_processed
+    assert any(finding.code == "OFFICE_COMPRESSION_RATIO_EXCEEDED" for finding in manifest.findings)
+
+
 def test_local_object_store_is_content_addressed_and_deduplicated(tmp_path: Path) -> None:
     store = LocalObjectStore(tmp_path / "objects")
     first = store.put(BytesIO(b"same content"))
@@ -63,3 +76,20 @@ def test_local_object_store_is_content_addressed_and_deduplicated(tmp_path: Path
         store.open(first.object_hash),
     ):
         pass
+
+
+def test_stream_intake_rejects_signature_mismatch_without_materializing_root() -> None:
+    manifest = inspect_intake_stream(
+        "disguised.pdf",
+        BytesIO(b"this is not a PDF"),
+        Settings(app_env="test"),
+    )
+    assert not manifest.all_files_processed
+    assert any(finding.code == "FILE_SIGNATURE_MISMATCH" for finding in manifest.findings)
+
+
+def test_object_store_size_limit_leaves_no_partial_object(tmp_path: Path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    with pytest.raises(ValueError, match="exceeds configured limit"):
+        store.put(BytesIO(b"too large"), max_bytes=3)
+    assert not [path for path in (tmp_path / "objects").rglob("*") if path.is_file()]

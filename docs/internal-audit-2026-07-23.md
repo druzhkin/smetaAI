@@ -61,10 +61,14 @@ Resolved during the audit:
 - the infrastructure `ADMIN` role no longer substitutes for methodology,
   assigned expert, calibration, document-set, or bid-release approval;
 - snapshot/object tampering is detected on read and blocks release.
+- whole-file API reads and `ZipFile.read` archive expansion were replaced by
+  size-limited quarantine streaming and bounded worker-local spooling;
+- untrusted parser calls were removed from the API path; exact-hash malware
+  results and the worker parser both require active configured qualifications.
 
 Open security blockers remain tracked in
-`security_best_practices_report.md`: untrusted parser sandboxing and malware
-quarantine, streamed upload/archive processing, project-level ACLs, verified
+`security_best_practices_report.md`: deployment/qualification of the real
+scanner and disposable parser runtime, project-level ACLs, verified
 WORM/external audit anchoring, and distributed rate limiting.
 
 ## Usability and developer-experience audit

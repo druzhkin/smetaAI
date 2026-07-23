@@ -3,67 +3,28 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import re
+import tempfile
 import zipfile
+from codecs import getincrementaldecoder
 from collections.abc import Callable, Iterable
 from io import BytesIO
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 from openpyxl import load_workbook
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, ConfigDict, Field
 from pypdf import PdfReader
 
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import Severity
-
-
-class IntakeModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class IntakeFinding(IntakeModel):
-    code: str
-    severity: Severity
-    archive_path: str
-    message: str
-    details: dict[str, Any] = Field(default_factory=dict)
-
-
-class SheetInspection(IntakeModel):
-    name: str
-    state: str
-    max_row: int
-    max_column: int
-    hidden_row_count: int
-    hidden_column_count: int
-    formula_cell_count: int
-    formula_without_cached_value_count: int
-
-
-class FileInspection(IntakeModel):
-    entry_id: str
-    archive_path: str
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    size_bytes: int = Field(ge=0)
-    media_type: str
-    nested_archive: bool = False
-    corrupt: bool = False
-    protected: bool = False
-    unsupported: bool = False
-    page_count: int | None = None
-    embedded_file_count: int = 0
-    sheets: tuple[SheetInspection, ...] = ()
-    findings: tuple[IntakeFinding, ...] = ()
-
-
-class IntakeManifest(IntakeModel):
-    root_filename: str
-    root_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    entries: tuple[FileInspection, ...]
-    findings: tuple[IntakeFinding, ...]
-    all_files_processed: bool
+from tenderguard.domain.intake import (
+    FileInspection,
+    IntakeFinding,
+    IntakeManifest,
+    SheetInspection,
+)
+from tenderguard.infrastructure.object_store import copy_limited
 
 
 class _Budget:
@@ -107,6 +68,8 @@ _SUPPORTED_SUFFIXES = {
     *_UNSUPPORTED_ARCHIVE_SUFFIXES,
 }
 _IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".tif", ".tiff"}
+_TEXT_SUFFIXES = {".csv", ".txt"}
+_QUALIFIED_ADAPTER_SUFFIXES = {".dwg", ".dxf", ".ifc", ".json", ".xml"}
 
 
 def _safe_archive_path(name: str) -> bool:
@@ -139,10 +102,47 @@ def _finding(
     )
 
 
-def _inspect_pdf(path: str, content: bytes) -> tuple[int | None, int, bool, list[IntakeFinding]]:
+def _rewind(stream: BinaryIO) -> None:
+    stream.seek(0)
+
+
+def _hash_stream(stream: BinaryIO) -> tuple[str, int]:
+    _rewind(stream)
+    digest = hashlib.sha256()
+    size = 0
+    while chunk := stream.read(1024 * 1024):
+        digest.update(chunk)
+        size += len(chunk)
+    _rewind(stream)
+    return digest.hexdigest(), size
+
+
+def _starts_with(stream: BinaryIO, signatures: tuple[bytes, ...]) -> bool:
+    _rewind(stream)
+    prefix = stream.read(max(len(signature) for signature in signatures))
+    _rewind(stream)
+    return any(prefix.startswith(signature) for signature in signatures)
+
+
+def _inspect_pdf(path: str, stream: BinaryIO) -> tuple[int | None, int, bool, list[IntakeFinding]]:
     findings: list[IntakeFinding] = []
+    if not _starts_with(stream, (b"%PDF-",)):
+        return (
+            None,
+            0,
+            False,
+            [
+                _finding(
+                    "FILE_SIGNATURE_MISMATCH",
+                    Severity.BLOCKER,
+                    path,
+                    "PDF extension does not match the file signature",
+                )
+            ],
+        )
     try:
-        reader = PdfReader(BytesIO(content), strict=True)
+        _rewind(stream)
+        reader = PdfReader(stream, strict=True)
         protected = bool(reader.is_encrypted)
         if protected and reader.decrypt("") == 0:
             return (
@@ -190,11 +190,15 @@ def _inspect_pdf(path: str, content: bytes) -> tuple[int | None, int, bool, list
 
 
 def _inspect_excel(
-    path: str, content: bytes
+    path: str, stream: BinaryIO
 ) -> tuple[tuple[SheetInspection, ...], list[IntakeFinding]]:
     findings: list[IntakeFinding] = []
-    formulas = load_workbook(BytesIO(content), data_only=False, read_only=False, keep_links=True)
-    cached = load_workbook(BytesIO(content), data_only=True, read_only=False, keep_links=True)
+    if not _starts_with(stream, (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        raise ValueError("Excel extension does not match the ZIP container signature")
+    _rewind(stream)
+    formulas = load_workbook(stream, data_only=False, read_only=False, keep_links=True)
+    _rewind(stream)
+    cached = load_workbook(stream, data_only=True, read_only=False, keep_links=True)
     sheets: list[SheetInspection] = []
     try:
         for worksheet in formulas.worksheets:
@@ -274,10 +278,12 @@ def _inspect_excel(
         cached.close()
 
 
-def _inspect_image(path: str, content: bytes) -> list[IntakeFinding]:
+def _inspect_image(path: str, stream: BinaryIO) -> list[IntakeFinding]:
     try:
-        with Image.open(BytesIO(content)) as image:
+        _rewind(stream)
+        with Image.open(stream) as image:
             image.verify()
+        _rewind(stream)
         return []
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         return [
@@ -291,22 +297,82 @@ def _inspect_image(path: str, content: bytes) -> list[IntakeFinding]:
         ]
 
 
-def _inspect_office_container(path: str, content: bytes) -> tuple[int, list[IntakeFinding]]:
+def _inspect_office_container(
+    path: str,
+    stream: BinaryIO,
+    settings: Settings,
+) -> tuple[int, list[IntakeFinding]]:
     findings: list[IntakeFinding] = []
+    if not _starts_with(stream, (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return 0, [
+            _finding(
+                "FILE_SIGNATURE_MISMATCH",
+                Severity.BLOCKER,
+                path,
+                "Office extension does not match the ZIP container signature",
+            )
+        ]
     try:
-        with zipfile.ZipFile(BytesIO(content)) as package:
-            bad_member = package.testzip()
-            if bad_member:
+        _rewind(stream)
+        with zipfile.ZipFile(stream) as package:
+            members = tuple(info for info in package.infolist() if not info.is_dir())
+            if len(members) > settings.max_archive_files:
                 findings.append(
                     _finding(
-                        "CORRUPT_OFFICE_PACKAGE",
+                        "OFFICE_FILE_COUNT_EXCEEDED",
                         Severity.BLOCKER,
                         path,
-                        "Office package contains a corrupt member",
-                        member=bad_member,
+                        "Office package exceeds the configured member-count limit",
+                        count=len(members),
                     )
                 )
-            embedded = tuple(name for name in package.namelist() if "/embeddings/" in name)
+            total_unpacked = sum(info.file_size for info in members)
+            if total_unpacked > settings.max_archive_unpacked_bytes:
+                findings.append(
+                    _finding(
+                        "OFFICE_UNPACKED_SIZE_EXCEEDED",
+                        Severity.BLOCKER,
+                        path,
+                        "Office package exceeds the configured unpacked-size limit",
+                        size_bytes=total_unpacked,
+                    )
+                )
+            for info in members:
+                member_path = f"{path}!/{info.filename}"
+                if not _safe_archive_path(info.filename):
+                    findings.append(
+                        _finding(
+                            "OFFICE_PATH_TRAVERSAL",
+                            Severity.BLOCKER,
+                            member_path,
+                            "Office package member path is unsafe",
+                        )
+                    )
+                ratio = (
+                    settings.max_archive_compression_ratio + 1
+                    if info.compress_size == 0 and info.file_size > 0
+                    else info.file_size / max(info.compress_size, 1)
+                )
+                if ratio > settings.max_archive_compression_ratio:
+                    findings.append(
+                        _finding(
+                            "OFFICE_COMPRESSION_RATIO_EXCEEDED",
+                            Severity.BLOCKER,
+                            member_path,
+                            "Office member exceeds the compression-ratio safety limit",
+                            ratio=str(ratio),
+                        )
+                    )
+                if info.flag_bits & 0x1:
+                    findings.append(
+                        _finding(
+                            "PROTECTED_OFFICE_MEMBER",
+                            Severity.BLOCKER,
+                            member_path,
+                            "Office package member is encrypted",
+                        )
+                    )
+            embedded = tuple(info.filename for info in members if "/embeddings/" in info.filename)
             if embedded:
                 findings.append(
                     _finding(
@@ -317,6 +383,31 @@ def _inspect_office_container(path: str, content: bytes) -> tuple[int, list[Inta
                         count=len(embedded),
                     )
                 )
+            macro_members = tuple(
+                info.filename
+                for info in members
+                if info.filename.casefold().endswith("vbaproject.bin")
+            )
+            if macro_members:
+                findings.append(
+                    _finding(
+                        "OFFICE_MACROS_PRESENT",
+                        Severity.BLOCKER,
+                        path,
+                        "Office package contains macro code requiring a qualified review",
+                        count=len(macro_members),
+                    )
+                )
+            if not any(finding.severity is Severity.BLOCKER for finding in findings):
+                for info in members:
+                    copied = 0
+                    with package.open(info, "r") as member:
+                        while chunk := member.read(1024 * 1024):
+                            copied += len(chunk)
+                            if copied > info.file_size:
+                                raise RuntimeError("Office member exceeds its declared size")
+                    if copied != info.file_size:
+                        raise RuntimeError("Office member size differs from central directory")
             return len(embedded), findings
     except zipfile.BadZipFile as error:
         return 0, [
@@ -330,9 +421,38 @@ def _inspect_office_container(path: str, content: bytes) -> tuple[int, list[Inta
         ]
 
 
-def _inspect_single(path: str, content: bytes, *, nested_archive: bool = False) -> FileInspection:
+def _inspect_text(path: str, stream: BinaryIO) -> list[IntakeFinding]:
+    decoder = getincrementaldecoder("utf-8-sig")("strict")
+    try:
+        _rewind(stream)
+        while chunk := stream.read(1024 * 1024):
+            if b"\x00" in chunk:
+                raise UnicodeError("NUL byte found")
+            decoder.decode(chunk)
+        decoder.decode(b"", final=True)
+        return []
+    except UnicodeError:
+        return [
+            _finding(
+                "TEXT_CONTENT_INVALID",
+                Severity.BLOCKER,
+                path,
+                "Text document is not valid UTF-8 text or contains binary NUL bytes",
+            )
+        ]
+    finally:
+        _rewind(stream)
+
+
+def _inspect_single_stream(
+    path: str,
+    stream: BinaryIO,
+    settings: Settings,
+    *,
+    nested_archive: bool = False,
+) -> FileInspection:
     suffix = PurePosixPath(path.casefold()).suffix
-    digest = hashlib.sha256(content).hexdigest()
+    digest, size = _hash_stream(stream)
     findings: list[IntakeFinding] = []
     page_count: int | None = None
     embedded_count = 0
@@ -342,32 +462,49 @@ def _inspect_single(path: str, content: bytes, *, nested_archive: bool = False) 
     sheets: tuple[SheetInspection, ...] = ()
 
     if suffix == ".pdf":
-        page_count, embedded_count, protected, pdf_findings = _inspect_pdf(path, content)
+        page_count, embedded_count, protected, pdf_findings = _inspect_pdf(path, stream)
         findings.extend(pdf_findings)
         corrupt = any(item.code == "CORRUPT_PDF" for item in findings)
     elif suffix in {".xlsx", ".xlsm"}:
-        try:
-            sheets, excel_findings = _inspect_excel(path, content)
-            findings.extend(excel_findings)
-        except Exception as error:
-            corrupt = True
-            findings.append(
-                _finding(
-                    "CORRUPT_OR_PROTECTED_EXCEL",
-                    Severity.BLOCKER,
-                    path,
-                    "Excel workbook could not be opened",
-                    error_type=type(error).__name__,
+        embedded_count, office_findings = _inspect_office_container(
+            path,
+            stream,
+            settings,
+        )
+        findings.extend(office_findings)
+        protected = any(item.code == "PROTECTED_OFFICE_MEMBER" for item in office_findings)
+        if not any(item.severity is Severity.BLOCKER for item in office_findings):
+            try:
+                sheets, excel_findings = _inspect_excel(path, stream)
+                findings.extend(excel_findings)
+            except Exception as error:
+                corrupt = True
+                findings.append(
+                    _finding(
+                        "CORRUPT_OR_PROTECTED_EXCEL",
+                        Severity.BLOCKER,
+                        path,
+                        "Excel workbook could not be opened",
+                        error_type=type(error).__name__,
+                    )
                 )
-            )
     elif suffix in {".docx", ".pptx"}:
-        embedded_count, office_findings = _inspect_office_container(path, content)
+        embedded_count, office_findings = _inspect_office_container(
+            path,
+            stream,
+            settings,
+        )
         findings.extend(office_findings)
         corrupt = any(item.code.startswith("CORRUPT_") for item in office_findings)
+        protected = any(item.code == "PROTECTED_OFFICE_MEMBER" for item in office_findings)
     elif suffix in _IMAGE_SUFFIXES:
-        image_findings = _inspect_image(path, content)
+        image_findings = _inspect_image(path, stream)
         findings.extend(image_findings)
         corrupt = bool(image_findings)
+    elif suffix in _TEXT_SUFFIXES:
+        text_findings = _inspect_text(path, stream)
+        findings.extend(text_findings)
+        corrupt = bool(text_findings)
     elif suffix == ".xls":
         unsupported = True
         findings.append(
@@ -376,6 +513,16 @@ def _inspect_single(path: str, content: bytes, *, nested_archive: bool = False) 
                 Severity.BLOCKER,
                 path,
                 "Legacy XLS requires a qualified conversion/parser adapter",
+            )
+        )
+    elif suffix in _QUALIFIED_ADAPTER_SUFFIXES:
+        unsupported = True
+        findings.append(
+            _finding(
+                "DOCUMENT_ADAPTER_REQUIRED",
+                Severity.BLOCKER,
+                path,
+                f"File format {suffix} requires a qualified isolated parser adapter",
             )
         )
     elif suffix in _UNSUPPORTED_ARCHIVE_SUFFIXES:
@@ -404,7 +551,7 @@ def _inspect_single(path: str, content: bytes, *, nested_archive: bool = False) 
         entry_id=f"file-{content_hash({'path': path, 'sha256': digest})[:24]}",
         archive_path=path,
         sha256=digest,
-        size_bytes=len(content),
+        size_bytes=size,
         media_type=_media_type(path),
         nested_archive=nested_archive,
         corrupt=corrupt,
@@ -417,13 +564,13 @@ def _inspect_single(path: str, content: bytes, *, nested_archive: bool = False) 
     )
 
 
-def _walk_zip(
+def _walk_zip_stream(
     *,
     archive_path: str,
-    content: bytes,
+    stream: BinaryIO,
     depth: int,
     budget: _Budget,
-    on_member: Callable[[str, bytes], None] | None = None,
+    on_member: Callable[[str, BinaryIO], None] | None = None,
 ) -> tuple[list[FileInspection], list[IntakeFinding]]:
     entries: list[FileInspection] = []
     findings: list[IntakeFinding] = []
@@ -438,7 +585,8 @@ def _walk_zip(
         )
         return entries, findings
     try:
-        with zipfile.ZipFile(BytesIO(content)) as archive:
+        _rewind(stream)
+        with zipfile.ZipFile(stream) as archive:
             for info in archive.infolist():
                 if info.is_dir():
                     continue
@@ -489,26 +637,47 @@ def _walk_zip(
                         )
                     )
                     continue
-                child = archive.read(info)
-                if on_member is not None:
-                    on_member(child_path, child)
-                suffix = PurePosixPath(info.filename.casefold()).suffix
-                is_archive = (
-                    suffix in _ARCHIVE_SUFFIXES and suffix not in _OFFICE_CONTAINER_SUFFIXES
-                )
-                inspected = _inspect_single(child_path, child, nested_archive=is_archive)
-                entries.append(inspected)
-                findings.extend(inspected.findings)
-                if is_archive:
-                    nested_entries, nested_findings = _walk_zip(
-                        archive_path=child_path,
-                        content=child,
-                        depth=depth + 1,
-                        budget=budget,
-                        on_member=on_member,
+                with (
+                    archive.open(info, "r") as member_stream,
+                    tempfile.SpooledTemporaryFile(
+                        max_size=budget.settings.max_parser_spool_memory_bytes
+                    ) as child,
+                ):
+                    member_binary = cast(BinaryIO, member_stream)
+                    child_binary = cast(BinaryIO, child)
+                    copied = copy_limited(
+                        member_binary,
+                        child_binary,
+                        min(info.file_size, budget.settings.max_archive_unpacked_bytes),
                     )
-                    entries.extend(nested_entries)
-                    findings.extend(nested_findings)
+                    if copied != info.file_size:
+                        raise RuntimeError("Archive member size differs from central directory")
+                    _rewind(child_binary)
+                    if on_member is not None:
+                        on_member(child_path, child_binary)
+                        _rewind(child_binary)
+                    suffix = PurePosixPath(info.filename.casefold()).suffix
+                    is_archive = (
+                        suffix in _ARCHIVE_SUFFIXES and suffix not in _OFFICE_CONTAINER_SUFFIXES
+                    )
+                    inspected = _inspect_single_stream(
+                        child_path,
+                        child_binary,
+                        budget.settings,
+                        nested_archive=is_archive,
+                    )
+                    entries.append(inspected)
+                    findings.extend(inspected.findings)
+                    if is_archive:
+                        nested_entries, nested_findings = _walk_zip_stream(
+                            archive_path=child_path,
+                            stream=child_binary,
+                            depth=depth + 1,
+                            budget=budget,
+                            on_member=on_member,
+                        )
+                        entries.extend(nested_entries)
+                        findings.extend(nested_findings)
     except (zipfile.BadZipFile, RuntimeError) as error:
         findings.append(
             _finding(
@@ -531,29 +700,29 @@ def _walk_zip(
     return entries, findings
 
 
-def inspect_intake(
+def inspect_intake_stream(
     filename: str,
-    content: bytes,
+    stream: BinaryIO,
     settings: Settings,
     *,
-    on_member: Callable[[str, bytes], None] | None = None,
+    on_member: Callable[[str, BinaryIO], None] | None = None,
 ) -> IntakeManifest:
-    if len(content) > settings.max_upload_bytes:
+    root_hash, root_size = _hash_stream(stream)
+    if root_size > settings.max_upload_bytes:
         raise ValueError(f"Upload exceeds configured limit of {settings.max_upload_bytes} bytes")
-    root_hash = hashlib.sha256(content).hexdigest()
     budget = _Budget(settings)
-    budget.consume(len(content))
+    budget.consume(root_size)
     suffix = PurePosixPath(filename.casefold()).suffix
     if suffix in _ARCHIVE_SUFFIXES:
-        entries, findings = _walk_zip(
+        entries, findings = _walk_zip_stream(
             archive_path=filename,
-            content=content,
+            stream=stream,
             depth=0,
             budget=budget,
             on_member=on_member,
         )
     else:
-        entry = _inspect_single(filename, content)
+        entry = _inspect_single_stream(filename, stream, settings)
         entries = [entry]
         findings = list(entry.findings)
     all_processed = (
@@ -567,6 +736,29 @@ def inspect_intake(
         entries=tuple(entries),
         findings=tuple(findings),
         all_files_processed=all_processed,
+    )
+
+
+def inspect_intake(
+    filename: str,
+    content: bytes,
+    settings: Settings,
+    *,
+    on_member: Callable[[str, bytes], None] | None = None,
+) -> IntakeManifest:
+    member_callback: Callable[[str, BinaryIO], None] | None = None
+    if on_member is not None:
+
+        def member_callback(path: str, stream: BinaryIO) -> None:
+            _rewind(stream)
+            on_member(path, stream.read())
+            _rewind(stream)
+
+    return inspect_intake_stream(
+        filename,
+        BytesIO(content),
+        settings,
+        on_member=member_callback,
     )
 
 

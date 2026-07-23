@@ -3,10 +3,14 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine
 
 from tenderguard.api.main import create_app
+from tenderguard.application.document_processing import DocumentProcessingService
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
+from tenderguard.domain.enums import ActorRole
+from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
     create_schema_for_tests,
@@ -14,6 +18,7 @@ from tenderguard.infrastructure.database import (
 )
 from tenderguard.infrastructure.object_store import LocalObjectStore
 from tenderguard.infrastructure.orm import (
+    AdapterQualificationRow,
     BoqLineRow,
     CalculationSnapshotRow,
     NomenclatureMatchRow,
@@ -22,6 +27,124 @@ from tenderguard.infrastructure.orm import (
     RiskCalculationRow,
     RiskItemRow,
 )
+
+
+def _intake_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        local_object_store_path=tmp_path / "objects",
+        local_quarantine_store_path=tmp_path / "quarantine",
+        allow_insecure_dev_auth=True,
+        audit_signing_key="test-audit-signing-key-at-least-32-bytes",
+        malware_scanner_adapter="qualified-test-scanner",
+        malware_scanner_qualification_id="qualification-malware-test",
+        document_processor_adapter="qualified-test-intake",
+        document_processor_qualification_id="qualification-intake-test",
+        document_worker_actor_id="document-worker",
+    )
+
+
+def _seed_intake_qualifications(engine: Engine) -> None:
+    now = datetime.now(UTC)
+    with create_session_factory(engine).begin() as session:
+        session.add_all(
+            [
+                AdapterQualificationRow(
+                    id="qualification-malware-test",
+                    adapter_name="qualified-test-scanner",
+                    adapter_version="test-1",
+                    status="APPROVED",
+                    valid_until=None,
+                    test_evidence_hash="a" * 64,
+                    payload={
+                        "organization_id": "org-1",
+                        "supported_methods": ["MALWARE_SCAN"],
+                        "independence_domain": "test-malware-engine",
+                    },
+                    approved_by="methodology-owner-b",
+                    approved_at=now,
+                ),
+                AdapterQualificationRow(
+                    id="qualification-intake-test",
+                    adapter_name="qualified-test-intake",
+                    adapter_version="test-1",
+                    status="APPROVED",
+                    valid_until=None,
+                    test_evidence_hash="b" * 64,
+                    payload={
+                        "organization_id": "org-1",
+                        "supported_methods": ["DOCUMENT_INTAKE"],
+                        "independence_domain": "test-isolated-intake-worker",
+                    },
+                    approved_by="methodology-owner-b",
+                    approved_at=now,
+                ),
+            ]
+        )
+
+
+def _scan_and_process_upload(
+    *,
+    client: TestClient,
+    engine: Engine,
+    settings: Settings,
+    upload: dict[str, object],
+) -> dict[str, object]:
+    object_hash = str(upload["object_hash"])
+    report = {
+        "engine": "qualified-test-scanner",
+        "object_hash": object_hash,
+        "verdict": "CLEAN",
+    }
+    system_headers = {
+        "X-Dev-Actor": "malware-scanner",
+        "X-Dev-Organization": "org-1",
+        "X-Dev-Roles": "SYSTEM",
+    }
+    scan = client.post(
+        (
+            f"/v1/projects/{upload['project_id']}/document-uploads/"
+            f"{upload['upload_id']}/scan-results"
+        ),
+        headers=system_headers,
+        json={
+            "result": {
+                "scanner_run_id": f"scan-{upload['upload_id']}",
+                "adapter_qualification_id": "qualification-malware-test",
+                "scanned_object_hash": object_hash,
+                "verdict": "CLEAN",
+                "definitions_version": "test-definitions-1",
+                "detected_threats": [],
+                "report": report,
+                "report_hash": content_hash(report),
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+            "reason": "Test-qualified malware scan completed",
+        },
+    )
+    assert scan.status_code == 200, scan.text
+    assert scan.json()["status"] == "CLEAN"
+    with create_session_factory(engine).begin() as session:
+        result = DocumentProcessingService(
+            session=session,
+            settings=settings,
+            evidence_store=LocalObjectStore(settings.local_object_store_path),
+            quarantine_store=LocalObjectStore(settings.local_quarantine_store_path),
+        ).process(
+            actor=Actor(
+                actor_id="document-worker",
+                organization_id="org-1",
+                roles=frozenset({ActorRole.SYSTEM}),
+            ),
+            upload_id=str(upload["upload_id"]),
+            request_id=f"worker-{upload['upload_id']}",
+            reason="Execute in the test worker boundary",
+        )
+    payload = result.model_dump(mode="json")
+    payload["document_id"] = payload["processed_document_id"]
+    payload["document_revision_id"] = payload["processed_document_revision_id"]
+    return payload
 
 
 def test_api_scopes_projects_and_exposes_fail_closed_release_gates(tmp_path: Path) -> None:
@@ -99,19 +222,16 @@ def test_api_scopes_projects_and_exposes_fail_closed_release_gates(tmp_path: Pat
 def test_corrupt_archive_moves_draft_project_to_documents_incomplete(
     tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        app_env="test",
-        database_url="sqlite+pysqlite://",
-        local_object_store_path=tmp_path / "objects",
-        allow_insecure_dev_auth=True,
-        audit_signing_key="test-audit-signing-key-at-least-32-bytes",
-    )
+    settings = _intake_settings(tmp_path)
     engine = create_database_engine(settings)
     create_schema_for_tests(engine)
+    _seed_intake_qualifications(engine)
+    quarantine_store = LocalObjectStore(tmp_path / "quarantine")
     app = create_app(
         settings,
         engine=engine,
         object_store=LocalObjectStore(tmp_path / "objects"),
+        quarantine_store=quarantine_store,
     )
     headers = {
         "X-Dev-Actor": "estimator-1",
@@ -152,31 +272,191 @@ def test_corrupt_archive_moves_draft_project_to_documents_incomplete(
             },
             files={"upload": ("package.zip", b"not-a-valid-zip", "application/zip")},
         )
-        assert response.status_code == 201
+        assert response.status_code == 202
         payload = response.json()
-        assert payload["project_state"] == "DOCUMENTS_INCOMPLETE"
-        assert not payload["manifest"]["all_files_processed"]
-        assert any(
-            finding["code"] == "CORRUPT_ARCHIVE" for finding in payload["manifest"]["findings"]
+        assert payload["status"] == "QUARANTINED"
+        processed = _scan_and_process_upload(
+            client=client,
+            engine=engine,
+            settings=settings,
+            upload=payload,
         )
+        assert processed["status"] == "PROCESSED"
+        manifest = processed["manifest"]
+        assert isinstance(manifest, dict)
+        assert not manifest["all_files_processed"]
+        assert any(finding["code"] == "CORRUPT_ARCHIVE" for finding in manifest["findings"])
+        project_state = client.get(
+            f"/v1/projects/{project['id']}",
+            headers=headers,
+        ).json()["state"]
+        assert project_state == "DOCUMENTS_INCOMPLETE"
+
+
+def test_quarantine_fails_closed_before_scan_and_rejects_forged_or_infected_results(
+    tmp_path: Path,
+) -> None:
+    settings = _intake_settings(tmp_path)
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    _seed_intake_qualifications(engine)
+    evidence_store = LocalObjectStore(tmp_path / "objects")
+    quarantine_store = LocalObjectStore(tmp_path / "quarantine")
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=evidence_store,
+        quarantine_store=quarantine_store,
+    )
+    estimator = {
+        "X-Dev-Actor": "estimator-1",
+        "X-Dev-Organization": "org-1",
+        "X-Dev-Roles": "ESTIMATOR",
+    }
+    system = {
+        "X-Dev-Actor": "malware-scanner",
+        "X-Dev-Organization": "org-1",
+        "X-Dev-Roles": "SYSTEM",
+    }
+    with TestClient(app) as client:
+        project = client.post(
+            "/v1/projects",
+            headers=estimator,
+            json={"code": "T-Q", "name": "Quarantine test", "reason": "Register"},
+        ).json()
+        response = client.post(
+            f"/v1/projects/{project['id']}/documents",
+            headers=estimator,
+            data={
+                "logical_key": "terms",
+                "title": "Tender terms",
+                "document_type": "TENDER_TERMS",
+                "revision_label": "1",
+                "reason": "Submit untrusted document",
+                "critical": "true",
+            },
+            files={"upload": ("terms.txt", b"untrusted input", "text/plain")},
+        )
+        assert response.status_code == 202
+        upload = response.json()
+        assert upload["status"] == "QUARANTINED"
+        assert (
+            client.get(f"/v1/projects/{project['id']}", headers=estimator).json()["state"]
+            == "DOCUMENTS_INCOMPLETE"
+        )
+        assert not [path for path in (tmp_path / "objects").rglob("*") if path.is_file()]
+        assert len([path for path in (tmp_path / "quarantine").rglob("*") if path.is_file()]) == 1
+        duplicate_pending = client.post(
+            f"/v1/projects/{project['id']}/documents",
+            headers=estimator,
+            data={
+                "logical_key": "terms",
+                "title": "Tender terms",
+                "document_type": "TENDER_TERMS",
+                "revision_label": "2",
+                "reason": "Must not overtake an unresolved upload",
+                "critical": "true",
+            },
+            files={"upload": ("terms-v2.txt", b"second input", "text/plain")},
+        )
+        assert duplicate_pending.status_code == 422
+        assert "unresolved quarantined upload" in duplicate_pending.json()["detail"]
+
+        report = {
+            "engine": "qualified-test-scanner",
+            "object_hash": upload["object_hash"],
+            "verdict": "CLEAN",
+        }
+        scan_request = {
+            "result": {
+                "scanner_run_id": "scan-forged",
+                "adapter_qualification_id": "qualification-malware-test",
+                "scanned_object_hash": upload["object_hash"],
+                "verdict": "CLEAN",
+                "definitions_version": "test-definitions-1",
+                "detected_threats": [],
+                "report": report,
+                "report_hash": "f" * 64,
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+            "reason": "Attempt to submit forged scanner evidence",
+        }
+        unauthorized = client.post(
+            (f"/v1/projects/{project['id']}/document-uploads/{upload['upload_id']}/scan-results"),
+            headers=estimator,
+            json=scan_request,
+        )
+        assert unauthorized.status_code == 403
+        forged = client.post(
+            (f"/v1/projects/{project['id']}/document-uploads/{upload['upload_id']}/scan-results"),
+            headers=system,
+            json=scan_request,
+        )
+        assert forged.status_code == 422
+        assert "does not reproduce" in forged.json()["detail"]
+
+        infected_report = {
+            "engine": "qualified-test-scanner",
+            "object_hash": upload["object_hash"],
+            "verdict": "INFECTED",
+            "threats": ["Test.Malware"],
+        }
+        infected = client.post(
+            (f"/v1/projects/{project['id']}/document-uploads/{upload['upload_id']}/scan-results"),
+            headers=system,
+            json={
+                "result": {
+                    "scanner_run_id": "scan-infected",
+                    "adapter_qualification_id": "qualification-malware-test",
+                    "scanned_object_hash": upload["object_hash"],
+                    "verdict": "INFECTED",
+                    "definitions_version": "test-definitions-1",
+                    "detected_threats": ["Test.Malware"],
+                    "report": infected_report,
+                    "report_hash": content_hash(infected_report),
+                    "completed_at": datetime.now(UTC).isoformat(),
+                },
+                "reason": "Record malware detection",
+            },
+        )
+        assert infected.status_code == 200, infected.text
+        assert infected.json()["status"] == "REJECTED"
+        assert infected.json()["failure_code"] == "MALWARE_DETECTED"
+
+        with (
+            create_session_factory(engine).begin() as session,
+            pytest.raises(ValueError, match="Only a qualified CLEAN"),
+        ):
+            DocumentProcessingService(
+                session=session,
+                settings=settings,
+                evidence_store=evidence_store,
+                quarantine_store=quarantine_store,
+            ).process(
+                actor=Actor(
+                    actor_id="document-worker",
+                    organization_id="org-1",
+                    roles=frozenset({ActorRole.SYSTEM}),
+                ),
+                upload_id=upload["upload_id"],
+                request_id="worker-rejected",
+                reason="Must not process an infected upload",
+            )
+    assert not [path for path in (tmp_path / "objects").rglob("*") if path.is_file()]
 
 
 def test_governed_calculation_creates_independently_validated_snapshot(
     tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        app_env="test",
-        database_url="sqlite+pysqlite://",
-        local_object_store_path=tmp_path / "objects",
-        allow_insecure_dev_auth=True,
-        audit_signing_key="test-audit-signing-key-at-least-32-bytes",
-    )
+    settings = _intake_settings(tmp_path)
     engine = create_database_engine(settings)
     create_schema_for_tests(engine)
+    _seed_intake_qualifications(engine)
     app = create_app(
         settings,
         engine=engine,
         object_store=LocalObjectStore(tmp_path / "objects"),
+        quarantine_store=LocalObjectStore(tmp_path / "quarantine"),
     )
     operator = {
         "X-Dev-Actor": "operator-1",
@@ -227,8 +507,13 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
             files={"upload": ("terms.txt", b"current tender terms", "text/plain")},
         )
-        assert uploaded.status_code == 201
-        uploaded_payload = uploaded.json()
+        assert uploaded.status_code == 202
+        uploaded_payload = _scan_and_process_upload(
+            client=client,
+            engine=engine,
+            settings=settings,
+            upload=uploaded.json(),
+        )
         candidate_id = uploaded_payload["candidate_document_set_revision_id"]
         confirmed = client.post(
             f"/v1/projects/{project['id']}/document-set/confirm",
@@ -1018,8 +1303,19 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
             files={"upload": ("terms-v2.txt", b"revised tender terms", "text/plain")},
         )
-        assert replacement.status_code == 201, replacement.text
-        assert replacement.json()["project_state"] == "BLOCKED"
+        assert replacement.status_code == 202, replacement.text
+        replacement_payload = _scan_and_process_upload(
+            client=client,
+            engine=engine,
+            settings=settings,
+            upload=replacement.json(),
+        )
+        assert replacement_payload["status"] == "PROCESSED"
+        blocked_project = client.get(
+            f"/v1/projects/{project['id']}",
+            headers=operator,
+        )
+        assert blocked_project.json()["state"] == "BLOCKED"
         with create_session_factory(engine).begin() as session:
             invalidated_line = session.get(BoqLineRow, line_id)
             invalidated_quantity = (

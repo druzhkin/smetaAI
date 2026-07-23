@@ -40,6 +40,10 @@ plus isolated workers and external adapters:
 - independent calculation validator that does not consume main-engine totals;
 - outbox-driven workers for OCR, visual extraction, connectors, and exports.
 
+The Dockerfile has separate `api` and `document-worker` targets. The API image
+does not install PDF, Excel, or image parser libraries; only the worker target
+does.
+
 See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
 [requirements traceability](docs/requirements-traceability.md), and the
 [signed export package specification](docs/signed-export-package.md).
@@ -50,6 +54,8 @@ The repository currently connects and integration-tests:
 
 - document intake, revision-set confirmation, qualified extraction evidence,
   reconciliation, review-task-backed conflict resolution, and source lineage;
+- streamed, separately stored quarantine uploads, qualification-bound malware
+  results, and a worker-only bounded document/archive parser entry point;
 - fail-closed invalidation of derived data when a newer current document
   revision appears;
 - revisioned project-passport facts, BoQ lines, quantity verification, planned
@@ -96,7 +102,8 @@ startup rejects it.
 This repository contains a substantial fail-closed application core, but it is
 not the complete target system and is not proof of production acceptance. Live
 bid release remains blocked until the organisation supplies and qualifies the
-normative engine, OCR/visual extraction and market/RFQ adapters, approved
+malware scanner and isolated worker runtime, normative engine, OCR/visual
+extraction and market/RFQ adapters, approved
 methodology and financial thresholds, production identity and infrastructure,
 enterprise integrations, historical validation set, operating procedures,
 backup/disaster-recovery evidence, trained users, and named process owners.
@@ -112,3 +119,5 @@ The current gate-by-gate status is maintained in the
 [production readiness register](docs/production-readiness-register.md).
 Open security findings are in
 [the security review](security_best_practices_report.md).
+The untrusted-file boundary is specified in the
+[quarantined intake contract](docs/quarantined-intake.md).

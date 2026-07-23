@@ -17,7 +17,7 @@ Status values:
 
 | Scope | Target module | Delivery evidence |
 |---|---|---|
-| 1-3 intake, versions, graph | intake, document graph | upload/manifest/revision confirmation (`APPLICATION_SLICE`); graph rules (`DOMAIN_CORE`) |
+| 1-3 intake, versions, graph | intake, document graph | streamed quarantine, qualified scan state machine, worker-only bounded manifest/revision processing and revision confirmation (`APPLICATION_SLICE`); external scanner/sandbox (`PORT`/`OPERATIONS`); graph rules (`DOMAIN_CORE`) |
 | 4 extraction | evidence + worker adapters | qualified immutable observations and independent reconciliation (`APPLICATION_SLICE`), OCR/visual providers (`PORT`) |
 | 5 passport | project passport | revisioned provenance-backed facts, verification and stage blockers (`APPLICATION_CORE`) |
 | 6-8 BoQ, completeness, nomenclature | BoQ, scope, nomenclature | BoQ/quantity revisions, exact cost-component plan, scope attestations, deterministic attribute matching and governed analogues (`APPLICATION_CORE`) |
@@ -47,7 +47,7 @@ negative paths through these workflows.
 This does not make every contour operationally qualified. OCR/visual
 extraction, the recognised normative engine, live price/RFQ sources,
 enterprise integrations, detailed logistics/finance workflows,
-project-level access controls, sandboxing, and production operations remain
+project-level access controls, deployed/qualified sandboxing, and production operations remain
 open. Release policy consumes unresolved blocking findings rather than
 informal text; no contour may silently downgrade a failure because another
 contour passed.

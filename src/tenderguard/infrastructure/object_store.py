@@ -23,7 +23,7 @@ class StoredObject(BaseModel):
 
 
 class ObjectStore(Protocol):
-    def put(self, stream: BinaryIO) -> StoredObject: ...
+    def put(self, stream: BinaryIO, *, max_bytes: int | None = None) -> StoredObject: ...
 
     def open(self, object_hash: str) -> AbstractContextManager[BinaryIO]: ...
 
@@ -45,24 +45,31 @@ class LocalObjectStore:
             raise ValueError("Object path escaped the configured store")
         return path
 
-    def put(self, stream: BinaryIO) -> StoredObject:
+    def put(self, stream: BinaryIO, *, max_bytes: int | None = None) -> StoredObject:
         digest = hashlib.sha256()
         size = 0
-        with tempfile.NamedTemporaryFile(dir=self.root, delete=False) as temporary:
-            temporary_path = Path(temporary.name)
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
-                temporary.write(chunk)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        object_hash = digest.hexdigest()
-        destination = self._path_for(object_hash)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists():
-            temporary_path.unlink(missing_ok=True)
-        else:
-            os.replace(temporary_path, destination)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.root, delete=False) as temporary:
+                temporary_path = Path(temporary.name)
+                while chunk := stream.read(1024 * 1024):
+                    size += len(chunk)
+                    if max_bytes is not None and size > max_bytes:
+                        raise ValueError(f"File exceeds configured limit of {max_bytes} bytes")
+                    digest.update(chunk)
+                    temporary.write(chunk)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            object_hash = digest.hexdigest()
+            destination = self._path_for(object_hash)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                temporary_path.unlink(missing_ok=True)
+            else:
+                os.replace(temporary_path, destination)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
         return StoredObject(
             object_hash=object_hash,
             object_key=str(destination.relative_to(self.root)).replace("\\", "/"),
@@ -80,10 +87,12 @@ class LocalObjectStore:
 
 
 class S3ObjectStore:
-    def __init__(self, settings: Settings) -> None:
-        if not (settings.s3_bucket and settings.s3_access_key and settings.s3_secret_key):
+    def __init__(self, settings: Settings, *, bucket: str | None = None) -> None:
+        resolved_bucket = bucket or settings.s3_bucket
+        if not (resolved_bucket and settings.s3_access_key and settings.s3_secret_key):
             raise ValueError("S3 object store configuration is incomplete")
-        self.bucket = settings.s3_bucket
+        self.bucket = resolved_bucket
+        self.spool_memory_bytes = settings.max_parser_spool_memory_bytes
         self.client = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,
@@ -97,13 +106,15 @@ class S3ObjectStore:
             raise ValueError("Invalid SHA-256 object hash")
         return f"objects/{object_hash[:2]}/{object_hash}"
 
-    def put(self, stream: BinaryIO) -> StoredObject:
+    def put(self, stream: BinaryIO, *, max_bytes: int | None = None) -> StoredObject:
         digest = hashlib.sha256()
         size = 0
-        with tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024) as spool:
+        with tempfile.SpooledTemporaryFile(max_size=self.spool_memory_bytes) as spool:
             while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
                 size += len(chunk)
+                if max_bytes is not None and size > max_bytes:
+                    raise ValueError(f"File exceeds configured limit of {max_bytes} bytes")
+                digest.update(chunk)
                 spool.write(chunk)
             object_hash = digest.hexdigest()
             key = self._key(object_hash)
@@ -127,7 +138,7 @@ class S3ObjectStore:
     @contextmanager
     def open(self, object_hash: str) -> Iterator[BinaryIO]:
         key = self._key(object_hash)
-        with tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024) as spool:
+        with tempfile.SpooledTemporaryFile(max_size=self.spool_memory_bytes) as spool:
             self.client.download_fileobj(self.bucket, key, spool)
             spool.seek(0)
             _verify_stream_hash(cast(BinaryIO, spool), object_hash)
@@ -142,6 +153,12 @@ def build_object_store(settings: Settings) -> ObjectStore:
     if settings.object_store_backend == "s3":
         return S3ObjectStore(settings)
     return LocalObjectStore(settings.local_object_store_path)
+
+
+def build_quarantine_store(settings: Settings) -> ObjectStore:
+    if settings.object_store_backend == "s3":
+        return S3ObjectStore(settings, bucket=settings.s3_quarantine_bucket)
+    return LocalObjectStore(settings.local_quarantine_store_path)
 
 
 def copy_limited(source: BinaryIO, destination: BinaryIO, max_bytes: int) -> int:

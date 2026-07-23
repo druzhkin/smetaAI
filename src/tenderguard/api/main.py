@@ -15,7 +15,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -37,18 +37,26 @@ from tenderguard.application.projects import (
     ProjectService,
     ProjectView,
 )
+from tenderguard.application.quarantine import QuarantineService
 from tenderguard.application.risks import RiskService
 from tenderguard.application.scenarios import ScenarioService
 from tenderguard.config import Settings, get_settings
+from tenderguard.domain.common import utc_now
 from tenderguard.domain.enums import ActorRole
 from tenderguard.domain.exports import load_signing_material
 from tenderguard.domain.release import evaluate_bid_release
 from tenderguard.infrastructure.auth import Actor, Authenticator
 from tenderguard.infrastructure.database import (
+    CURRENT_SCHEMA_REVISION,
     create_database_engine,
     create_session_factory,
 )
-from tenderguard.infrastructure.object_store import ObjectStore, build_object_store
+from tenderguard.infrastructure.object_store import (
+    ObjectStore,
+    build_object_store,
+    build_quarantine_store,
+)
+from tenderguard.infrastructure.orm import AdapterQualificationRow
 from tenderguard.observability import RequestLoggingMiddleware, configure_logging
 
 from .schemas import (
@@ -80,7 +88,6 @@ from .schemas import (
     CreateControlledVersionRequest,
     CreateProjectRequest,
     DecideApprovalRequest,
-    DocumentUploadResponse,
     EvaluateItemPriceRequest,
     ExportArtifactResponse,
     ExportVerificationResponse,
@@ -99,10 +106,12 @@ from .schemas import (
     ProposeAnalogueRequest,
     ProposeContractCostImpactRequest,
     QuantityExecutionResponse,
+    QuarantinedUploadResponse,
     ReadinessResponse,
     ReconcileObservationsRequest,
     ReconciliationResponse,
     RecordActualRequest,
+    RecordMalwareScanResultRequest,
     RecordObservationRequest,
     RecordPriceQuoteRequest,
     RecordQuantityRequest,
@@ -136,11 +145,13 @@ def create_app(
     *,
     engine: Engine | None = None,
     object_store: ObjectStore | None = None,
+    quarantine_store: ObjectStore | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     resolved_engine = engine or create_database_engine(resolved_settings)
     session_factory = create_session_factory(resolved_engine)
     resolved_store = object_store or build_object_store(resolved_settings)
+    resolved_quarantine_store = quarantine_store or build_quarantine_store(resolved_settings)
     authenticator = Authenticator(resolved_settings)
     configure_logging()
 
@@ -170,6 +181,9 @@ def create_app(
     application.add_middleware(
         RequestSizeLimitMiddleware,
         max_bytes=resolved_settings.max_upload_bytes + 1024 * 1024,
+        path_suffix_limits={
+            "/scan-results": resolved_settings.max_scan_report_bytes + 64 * 1024,
+        },
     )
     application.add_middleware(SecurityHeadersMiddleware)
     application.add_middleware(RequestLoggingMiddleware)
@@ -177,6 +191,7 @@ def create_app(
     application.state.engine = resolved_engine
     application.state.session_factory = session_factory
     application.state.object_store = resolved_store
+    application.state.quarantine_store = resolved_quarantine_store
     application.state.authenticator = authenticator
 
     def get_session() -> Iterator[Session]:
@@ -211,6 +226,14 @@ def create_app(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
+        )
+
+    def quarantine_service(session: Session) -> QuarantineService:
+        return QuarantineService(
+            session=session,
+            settings=resolved_settings,
+            evidence_store=resolved_store,
+            quarantine_store=resolved_quarantine_store,
         )
 
     def evidence_service(session: Session) -> EvidenceService:
@@ -342,17 +365,33 @@ def create_app(
         session: Annotated[Session, Depends(get_session)],
     ) -> ReadinessResponse:
         database_ok = False
+        schema_current = False
         store_ok = False
+        quarantine_store_ok = False
         notes: list[str] = []
         try:
             session.execute(text("SELECT 1"))
             database_ok = True
         except Exception:
             notes.append("database check failed")
+        if database_ok:
+            try:
+                database_revision = session.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one_or_none()
+                schema_current = database_revision == CURRENT_SCHEMA_REVISION
+                if not schema_current:
+                    notes.append("database schema is not at the application migration head")
+            except Exception:
+                notes.append("database migration state is unavailable")
         try:
             store_ok = resolved_store.healthcheck()
         except Exception:
             notes.append("object-store check failed")
+        try:
+            quarantine_store_ok = resolved_quarantine_store.healthcheck()
+        except Exception:
+            notes.append("quarantine-store check failed")
         auth_configured = resolved_settings.allow_insecure_dev_auth or all(
             (
                 resolved_settings.oidc_issuer,
@@ -362,9 +401,65 @@ def create_app(
         )
         if not auth_configured:
             notes.append("OIDC is not configured")
-        normative_engine_qualified = service(session).normative_engine_qualified()
+        normative_engine_qualified = False
+        if schema_current:
+            try:
+                normative_engine_qualified = service(session).normative_engine_qualified()
+            except Exception:
+                notes.append("normative qualification check failed")
         if not normative_engine_qualified:
             notes.append("bid release remains blocked: normative engine is not qualified")
+        now = utc_now()
+        malware_scanner_qualification = None
+        if schema_current and resolved_settings.malware_scanner_configured:
+            try:
+                malware_scanner_qualification = session.scalar(
+                    select(AdapterQualificationRow).where(
+                        AdapterQualificationRow.id
+                        == resolved_settings.malware_scanner_qualification_id,
+                        AdapterQualificationRow.adapter_name
+                        == resolved_settings.malware_scanner_adapter,
+                        AdapterQualificationRow.status == "APPROVED",
+                        (
+                            (AdapterQualificationRow.valid_until.is_(None))
+                            | (AdapterQualificationRow.valid_until >= now.date())
+                        ),
+                    )
+                )
+            except Exception:
+                notes.append("malware scanner qualification check failed")
+        malware_scanner_qualified = bool(
+            malware_scanner_qualification
+            and "MALWARE_SCAN" in malware_scanner_qualification.payload.get("supported_methods", [])
+        )
+        if not malware_scanner_qualified:
+            notes.append("qualified malware scanner is unavailable")
+        document_processor_qualification = None
+        if schema_current and resolved_settings.document_processor_configured:
+            try:
+                document_processor_qualification = session.scalar(
+                    select(AdapterQualificationRow).where(
+                        AdapterQualificationRow.id
+                        == resolved_settings.document_processor_qualification_id,
+                        AdapterQualificationRow.adapter_name
+                        == resolved_settings.document_processor_adapter,
+                        AdapterQualificationRow.status == "APPROVED",
+                        (
+                            (AdapterQualificationRow.valid_until.is_(None))
+                            | (AdapterQualificationRow.valid_until >= now.date())
+                        ),
+                    )
+                )
+            except Exception:
+                notes.append("document processor qualification check failed")
+        document_processor_qualified = bool(
+            resolved_settings.document_worker_actor_id
+            and document_processor_qualification
+            and "DOCUMENT_INTAKE"
+            in document_processor_qualification.payload.get("supported_methods", [])
+        )
+        if not document_processor_qualified:
+            notes.append("qualified isolated document processor is unavailable")
         export_signing_configured = False
         if resolved_settings.export_signing_configured:
             assert resolved_settings.export_signing_key_id is not None
@@ -381,15 +476,28 @@ def create_app(
                 notes.append("Ed25519 export signing key configuration is invalid")
         else:
             notes.append("Ed25519 export signing key is not configured")
-        ready = bool(database_ok and store_ok and auth_configured and export_signing_configured)
+        ready = bool(
+            database_ok
+            and schema_current
+            and store_ok
+            and quarantine_store_ok
+            and auth_configured
+            and malware_scanner_qualified
+            and document_processor_qualified
+            and export_signing_configured
+        )
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadinessResponse(
             ready=ready,
             database=database_ok,
+            schema_current=schema_current,
             object_store=store_ok,
+            quarantine_store=quarantine_store_ok,
             authentication_configured=bool(auth_configured),
             normative_engine_qualified=normative_engine_qualified,
+            malware_scanner_qualified=malware_scanner_qualified,
+            document_processor_qualified=document_processor_qualified,
             export_signing_configured=export_signing_configured,
             notes=tuple(notes),
         )
@@ -424,46 +532,89 @@ def create_app(
 
     @application.post(
         "/v1/projects/{project_id}/documents",
-        response_model=DocumentUploadResponse,
-        status_code=status.HTTP_201_CREATED,
+        response_model=QuarantinedUploadResponse,
+        status_code=status.HTTP_202_ACCEPTED,
     )
-    async def upload_document(
+    def upload_document(
         project_id: str,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
-        logical_key: Annotated[str, Form(min_length=1)],
-        title: Annotated[str, Form(min_length=1)],
-        document_type: Annotated[str, Form(min_length=1)],
-        revision_label: Annotated[str, Form(min_length=1)],
-        reason: Annotated[str, Form(min_length=1)],
+        logical_key: Annotated[str, Form(min_length=1, max_length=300)],
+        title: Annotated[str, Form(min_length=1, max_length=1000)],
+        document_type: Annotated[str, Form(min_length=1, max_length=100)],
+        revision_label: Annotated[str, Form(min_length=1, max_length=100)],
+        reason: Annotated[str, Form(min_length=1, max_length=2000)],
         upload: Annotated[UploadFile, File()],
         critical: Annotated[bool, Form()] = False,
         make_candidate_current: Annotated[bool, Form()] = True,
-    ) -> DocumentUploadResponse:
-        content = await upload.read(resolved_settings.max_upload_bytes + 1)
-        if len(content) > resolved_settings.max_upload_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Upload exceeds configured size limit",
-            )
+    ) -> QuarantinedUploadResponse:
+        try:
+            upload.file.seek(0)
+            with session.begin():
+                result = quarantine_service(session).receive(
+                    actor=actor,
+                    project_id=project_id,
+                    logical_key=logical_key,
+                    title=title,
+                    document_type=document_type,
+                    critical=critical,
+                    revision_label=revision_label,
+                    filename=upload.filename or "unnamed",
+                    media_type=upload.content_type or "application/octet-stream",
+                    stream=upload.file,
+                    request_id=request.state.request_id,
+                    reason=reason,
+                    make_candidate_current=make_candidate_current,
+                )
+        except ValueError as error:
+            if "exceeds configured limit" in str(error):
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Upload exceeds configured size limit",
+                ) from error
+            raise
+        return QuarantinedUploadResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/document-uploads/{upload_id}",
+        response_model=QuarantinedUploadResponse,
+    )
+    def get_document_upload(
+        project_id: str,
+        upload_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuarantinedUploadResponse:
+        result = quarantine_service(session).get(
+            actor=actor,
+            project_id=project_id,
+            upload_id=upload_id,
+        )
+        return QuarantinedUploadResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/document-uploads/{upload_id}/scan-results",
+        response_model=QuarantinedUploadResponse,
+    )
+    def record_document_scan_result(
+        project_id: str,
+        upload_id: str,
+        payload: RecordMalwareScanResultRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuarantinedUploadResponse:
         with session.begin():
-            result = service(session).upload_document_revision(
+            result = quarantine_service(session).record_scan_result(
                 actor=actor,
                 project_id=project_id,
-                logical_key=logical_key,
-                title=title,
-                document_type=document_type,
-                critical=critical,
-                revision_label=revision_label,
-                filename=upload.filename or "unnamed",
-                media_type=upload.content_type or "application/octet-stream",
-                content=content,
+                upload_id=upload_id,
+                result=payload.result,
                 request_id=request.state.request_id,
-                reason=reason,
-                make_candidate_current=make_candidate_current,
+                reason=payload.reason,
             )
-        return DocumentUploadResponse.model_validate(result.model_dump())
+        return QuarantinedUploadResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/document-set/confirm",
