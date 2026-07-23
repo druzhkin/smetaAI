@@ -1,0 +1,58 @@
+# Methodology governance
+
+Financial and technical thresholds are controlled business content, not
+software defaults.
+
+The methodology owner must version and approve:
+
+- mandatory document types and critical project-passport fields;
+- quantity tolerances, rounding, sign rules, balance rules, and historical
+  benchmark versions;
+- WBS/typology/dependency scope-completeness rules;
+- critical nomenclature attributes and equivalence rules;
+- approved normative bases, methods, regions, periods, and coefficients;
+- price commercial basis, triangulation, expiry, reliability, and RFQ rules;
+- approval triggers and all monetary/share thresholds;
+- risk method, correlations, reserve treatment, and scenario definitions;
+- calculation rounding/tax/currency policy and independent tolerance;
+- actual-vs-forecast reason taxonomy and calibration eligibility.
+
+The application currently binds the following governed content directly into
+stage gates or calculation lineage:
+
+- `document_requirements`, `passport_requirements`, `quantity_policy`, and
+  `scope_rules`;
+- `nomenclature_catalog`, `equivalence_rules`, `price_policy`, and
+  `approval_thresholds`;
+- `contract_risk_rules`, `risk_model`, `calculation_policy`,
+  `scenario_policy`, and `production_qualification`;
+- a qualified normative adapter version plus a validated project-specific
+  normative result whenever a normative component is used.
+
+Policy payloads are schemas, not suggestion text. For example, price source
+classes, normalization parameters, spread rules, and selection method are read
+from the project-bound approved `price_policy`; risk rounding and the reserve
+component mapping come from the approved `risk_model`. Missing required fields
+block the operation instead of invoking a software default.
+
+Scenario overrides are also controlled content. The API selects a named
+definition from the bound approved `scenario_policy`; it does not accept
+arbitrary override values from the caller. Each scenario starts from a fixed,
+integrity-checked snapshot and is independently recalculated.
+
+Controlled versions are created in `DRAFT`, approved by another authorised
+person, and explicitly bound to a project. A later version does not silently
+change an existing calculation snapshot.
+
+Approval thresholds are organisation-owned values. The application may
+evaluate a configured threshold, but it must not create a monetary threshold,
+unchecked-cost share, high-value definition, or material-profit-impact
+definition on behalf of the methodology owner.
+
+`production_qualification` is a special controlled version. Its evidence must
+link to the readiness register and may state `all_gates_complete=true` only
+after formal process-owner approval. The payload must contain every mandatory
+quality gate under `gates`; each gate must be `PASSED` and include a SHA-256
+`evidence_hash`, `owner_id`, independent `approved_by`, `approved_at`, and
+`environment`. A boolean without this complete evidence map is ignored by the
+release engine.

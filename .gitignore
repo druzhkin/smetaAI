@@ -1,0 +1,29 @@
+.env
+.venv*/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+*.py[cod]
+*.db
+*.sqlite*
+tmp/
+var/
+.idea/
+.vscode/
+
+# Root-level tender and research source files may contain confidential
+# commercial information. Import them through the governed intake workflow;
+# never add them to the source repository by accident.
+/*.pdf
+/*.docx
+/*.xlsx
+/*.xls
+/*.zip
+/*.7z
+/*.rar
