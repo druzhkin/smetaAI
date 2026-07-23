@@ -129,3 +129,9 @@ streaming isolation for large untrusted documents.
 - Docker installation uses the lock file; `pip-audit` found no known
   third-party vulnerabilities in the resolved environment on 2026-07-23
   (the local proprietary package is naturally not present on PyPI).
+- Approved releases can be exported only as deterministic content-addressed
+  packages whose mandatory section hashes are covered by an Ed25519 signature.
+  Production readiness now requires a valid signing key configuration;
+  artifact rows retain key ID/public-key fingerprint and are immutable in
+  PostgreSQL. External authenticity still depends on an independently trusted
+  public-key registry.

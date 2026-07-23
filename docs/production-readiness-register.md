@@ -5,7 +5,7 @@ release even when repository tests pass.
 
 | Gate | Current evidence | Status | Required owner/evidence |
 |---|---|---|---|
-| Full end-to-end controlled calculation | intake through passport, BoQ/quantity, scope, nomenclature/pricing/RFQ, contract, risk, calculation, controlled scenario execution, independent snapshot/release, actual comparison and calibration approval are application-connected; qualified external extraction/normative/market adapters, detailed logistics/finance, scenario business qualification, and export remain open | **PARTIAL** |
+| Full end-to-end controlled calculation | intake through passport, BoQ/quantity, scope, nomenclature/pricing/RFQ, contract, risk, calculation, controlled scenario execution, independent snapshot/release, signed audit export, actual comparison and calibration approval are application-connected; qualified external extraction/normative/market adapters, detailed logistics/finance, scenario business qualification, and external delivery remain open | **PARTIAL** |
 | Reproducibility | canonical Decimal inputs, version binding, content hashes, immutable snapshot | CORE IMPLEMENTED |
 | Independent machine validation | separate recalculation path and mismatch/double-count tests | CORE IMPLEMENTED |
 | Expert/four-eyes controls | version-bound tasks cover critical changes, analogues, price spread, contract impacts, reserves and calibration; organisation policy qualification absent | **PARTIAL** |
@@ -22,7 +22,7 @@ release even when repository tests pass.
 | Detailed logistics/mobilisation | generic governed cost components exist; routing, mobilisation schedule, site constraints and operational estimation service are not implemented | **OPEN** |
 | Detailed contract finance | governed terms and cost impacts exist; cash-flow, retention, guarantee, credit and indexation calculation service is not implemented | **OPEN** |
 | Operational scenario modelling | approved-policy scenarios execute from fixed snapshots, persist results, and independently recalculate; portfolio comparison UI and business qualification remain absent | **PARTIAL** |
-| Export packages | outbox/export schema exists; signed estimate/audit export formats and delivery connectors are not implemented | **OPEN** |
+| Export packages | released fixed snapshots produce deterministic content-addressed Ed25519-signed JSON packages with lineage, versions, approvals, workflow, release decision and verified audit chain; external delivery adapters, approved public-key distribution/trust registry and business qualification are absent | **PARTIAL** |
 | Load test | no representative document corpus/workload/SLO approved | **OPEN** |
 | Malware scanning/sandbox | not connected; untrusted parsers remain in API process | **OPEN** |
 | Security review | code review completed; residual findings remain below | **OPEN** |

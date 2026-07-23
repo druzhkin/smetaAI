@@ -26,6 +26,7 @@ from tenderguard.application.boq import BoqService
 from tenderguard.application.calculations import CalculationService
 from tenderguard.application.contracts import ContractService
 from tenderguard.application.evidence import EvidenceService
+from tenderguard.application.exports import ExportIntegrityError, ExportPackageService
 from tenderguard.application.governance import GovernanceService
 from tenderguard.application.lineage import LineageService
 from tenderguard.application.passport import PassportService
@@ -40,6 +41,7 @@ from tenderguard.application.risks import RiskService
 from tenderguard.application.scenarios import ScenarioService
 from tenderguard.config import Settings, get_settings
 from tenderguard.domain.enums import ActorRole
+from tenderguard.domain.exports import load_signing_material
 from tenderguard.domain.release import evaluate_bid_release
 from tenderguard.infrastructure.auth import Actor, Authenticator
 from tenderguard.infrastructure.database import (
@@ -80,8 +82,11 @@ from .schemas import (
     DecideApprovalRequest,
     DocumentUploadResponse,
     EvaluateItemPriceRequest,
+    ExportArtifactResponse,
+    ExportVerificationResponse,
     FinalizeAnalogueRequest,
     FinalizeContractCostImpactRequest,
+    GenerateExportRequest,
     NomenclatureMatchResponse,
     NormalizedPriceResponse,
     NormalizePriceRequest,
@@ -278,6 +283,13 @@ def create_app(
             object_store=resolved_store,
         )
 
+    def export_service(session: Session) -> ExportPackageService:
+        return ExportPackageService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
     @application.exception_handler(ProjectNotFoundError)
     async def project_not_found(_: Request, error: ProjectNotFoundError) -> JSONResponse:
         return JSONResponse(
@@ -294,6 +306,13 @@ def create_app(
 
     @application.exception_handler(OptimisticLockError)
     async def optimistic_lock(_: Request, error: OptimisticLockError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(error)},
+        )
+
+    @application.exception_handler(ExportIntegrityError)
+    async def export_integrity_error(_: Request, error: ExportIntegrityError) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": str(error)},
@@ -346,7 +365,23 @@ def create_app(
         normative_engine_qualified = service(session).normative_engine_qualified()
         if not normative_engine_qualified:
             notes.append("bid release remains blocked: normative engine is not qualified")
-        ready = bool(database_ok and store_ok and auth_configured)
+        export_signing_configured = False
+        if resolved_settings.export_signing_configured:
+            assert resolved_settings.export_signing_key_id is not None
+            assert resolved_settings.export_signing_private_key_b64 is not None
+            try:
+                load_signing_material(
+                    key_id=resolved_settings.export_signing_key_id,
+                    private_key_b64=(
+                        resolved_settings.export_signing_private_key_b64.get_secret_value()
+                    ),
+                )
+                export_signing_configured = True
+            except ValueError:
+                notes.append("Ed25519 export signing key configuration is invalid")
+        else:
+            notes.append("Ed25519 export signing key is not configured")
+        ready = bool(database_ok and store_ok and auth_configured and export_signing_configured)
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadinessResponse(
@@ -355,6 +390,7 @@ def create_app(
             object_store=store_ok,
             authentication_configured=bool(auth_configured),
             normative_engine_qualified=normative_engine_qualified,
+            export_signing_configured=export_signing_configured,
             notes=tuple(notes),
         )
 
@@ -1334,6 +1370,86 @@ def create_app(
                 reason=payload.reason,
             )
         return ScenarioExecutionResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/exports",
+        response_model=ExportArtifactResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def generate_export(
+        project_id: str,
+        payload: GenerateExportRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ExportArtifactResponse:
+        with session.begin():
+            artifact = export_service(session).generate(
+                actor=actor,
+                project_id=project_id,
+                snapshot_id=payload.snapshot_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ExportArtifactResponse.model_validate(artifact.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/exports/{artifact_id}",
+        response_model=ExportArtifactResponse,
+    )
+    def get_export(
+        project_id: str,
+        artifact_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ExportArtifactResponse:
+        artifact = export_service(session).get(
+            actor=actor,
+            project_id=project_id,
+            artifact_id=artifact_id,
+        )
+        return ExportArtifactResponse.model_validate(artifact.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/exports/{artifact_id}/verify",
+        response_model=ExportVerificationResponse,
+    )
+    def verify_export(
+        project_id: str,
+        artifact_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ExportVerificationResponse:
+        verification = export_service(session).verify(
+            actor=actor,
+            project_id=project_id,
+            artifact_id=artifact_id,
+        )
+        return ExportVerificationResponse.model_validate(verification.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/exports/{artifact_id}/content",
+        response_class=Response,
+    )
+    def download_export(
+        project_id: str,
+        artifact_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> Response:
+        artifact, content = export_service(session).content(
+            actor=actor,
+            project_id=project_id,
+            artifact_id=artifact_id,
+        )
+        return Response(
+            content=content,
+            media_type=artifact.media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+                "ETag": f'"{artifact.object_hash}"',
+            },
+        )
 
     @application.get(
         "/v1/projects/{project_id}/snapshots/{snapshot_id}/lineage",

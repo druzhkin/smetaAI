@@ -29,7 +29,7 @@ Status values:
 | 19 independent verification | validation | separate recalculation, mismatch and snapshot controls (`APPLICATION_SLICE`) |
 | 20 expert approval | workflow | version-bound task planning, evidence-required decisions and four-eyes checks (`APPLICATION_SLICE`); organisation policy qualification remains open |
 | 21 audit | audit | hash-chain events, immutable snapshots and snapshot-to-document lineage read model (`APPLICATION_SLICE`); WORM (`QUALIFICATION`) |
-| 22 export/integration | integration | outbox/export contracts and schema (`SCHEMA`), enterprise connectors (`PORT`) |
+| 22 export/integration | integration | deterministic Ed25519-signed estimate/audit package, immutable metadata, verified download and transactional delivery event (`APPLICATION_CORE`); enterprise delivery connectors and external trust registry (`PORT`, `QUALIFICATION`) |
 | 23-24 actuals and calibration | actuals | revisioned verified facts, fixed-snapshot comparison, mandatory variance reasons and methodology-owner calibration approval (`APPLICATION_CORE`); factual feed (`PORT`) |
 
 ## Verification contours
@@ -40,7 +40,7 @@ review-task-backed conflict resolution, passport,
 BoQ/quantity, scope attestations, nomenclature/analogue decisions, governed
 pricing/RFQ, contract terms and cost impacts, risk/register reserve,
 calculation, independent validation, controlled scenario execution, expert
-approval, lineage, audit, release,
+approval, lineage, audit, release, signed release export,
 actuals, and calibration approval. Integration tests exercise positive and
 negative paths through these workflows.
 

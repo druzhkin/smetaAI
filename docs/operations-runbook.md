@@ -20,8 +20,8 @@ No critical change may be approved by its author.
 
 - `GET /health/live` returns HTTP 200 while the process can serve requests.
 - `GET /health/ready` returns HTTP 200 only when the database, object store,
-  and authentication configuration are ready. It returns HTTP 503 with a
-  structured diagnostic body otherwise.
+  authentication configuration, and valid Ed25519 export signing key are
+  ready. It returns HTTP 503 with a structured diagnostic body otherwise.
 - Normative-engine qualification is reported by readiness but remains a
   separate bid-release hard stop; an operational API process is not, by that
   fact alone, authorised to issue a bid.
@@ -54,6 +54,24 @@ The factual observation must be verified, the variance must be classified
 against a fixed snapshot input, and a different methodology owner must approve
 the resulting calibration example before it is admitted to a training or
 benchmark dataset.
+
+## Signed release export
+
+Before calculation, bind an approved `export_template` declaring
+`tenderguard.signed-estimate-audit/v1` and `TENDERGUARD_SIGNED_JSON`. Release
+will block if this governed version is absent.
+
+After an allowed internal/bid release, an approver or infrastructure
+administrator may generate the package for the exact released snapshot.
+Generation is idempotent for the snapshot, release decision, template, and
+format. Deliver only the artifact returned by the verified content endpoint;
+it rechecks the content-addressed object, manifest hashes, Ed25519 signature,
+source snapshot, release decision, and packaged audit chain.
+
+Publish the signing key ID and SHA-256 public-key fingerprint through an
+organisation-approved channel independent of the package and application
+database. Do not treat the public key embedded in a package as its own trust
+anchor. Preserve prior public keys for the full artifact-retention period.
 
 ## Incident priorities
 
@@ -105,5 +123,8 @@ snapshots are never edited.
 - Rotate OIDC/JWKS according to IdP procedure.
 - Audit HMAC rotation requires a key ID and externally anchored final hash for
   the old chain; this is an open implementation item.
+- Ed25519 export-key rotation uses a new key ID. Existing artifact rows retain
+  their exact public key and fingerprint, but the organisation must maintain
+  the independently trusted historical public-key registry.
 - Rotate database/S3 credentials through a secrets manager and test access
   before revocation.

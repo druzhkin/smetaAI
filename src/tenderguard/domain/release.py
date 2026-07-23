@@ -54,6 +54,7 @@ class ReleaseContext(DomainModel):
             "logistics_model",
             "finance_model",
             "scenario_policy",
+            "export_template",
         }
     )
     snapshot: CalculationSnapshot | None = None

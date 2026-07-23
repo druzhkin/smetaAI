@@ -9,9 +9,9 @@ This claim is not yet established for production. The repository implements
 and integration-tests a broad transactional enforcement core, including the
 governed BoQ, quantity, scope, nomenclature, pricing, contract, risk,
 calculation, independent validation, approval, release, lineage, actuals, and
-calibration workflows. External adapters, several detailed costing workflows,
-enterprise integrations, and all operational qualification evidence remain
-open.
+calibration workflows, plus signed estimate/audit export packages. External
+adapters, several detailed costing workflows, enterprise integrations, and
+all operational qualification evidence remain open.
 
 ## Defence in depth
 
@@ -27,6 +27,7 @@ open.
 | Calculation | exact planned-component coverage and deterministic primary build-up | no release on missing, duplicate, or unplanned components |
 | Independent validation | separate recalculation from atomic inputs | arithmetic mismatch hard stop |
 | Scenario | approved definitions over a fixed base snapshot plus independent recalculation | reject unknown or unsupported overrides |
+| Export | fixed released snapshot, mandatory content hashes, Ed25519 signature, immutable artifact metadata | refuse generation or verification |
 | Contract | revisioned evidence-backed obligations tied to approved cost impacts | unresolved contract risk hard stop |
 | Risk | verified register and version-bound deterministic reserve | missing or stale reserve hard stop |
 | Approval | configurable tasks and four-eyes rule | approval hard stop |
@@ -73,8 +74,10 @@ and creates a new verified derived observation with recursive lineage.
 - Model behaviour can change; exact model/prompt/rule versions and regression
   results must be approved and snapshotted.
 - The implemented generic calculation categories do not yet constitute a
-  complete logistics/mobilisation planner, contract cash-flow engine, or
-  operational scenario workflow.
+  complete logistics/mobilisation planner or contract cash-flow engine.
+- A package-carried public key proves internal consistency but not external
+  organisational identity by itself; independent consumers must trust the key
+  ID/fingerprint through an approved out-of-band registry.
 - Untrusted parsing still occurs without a qualified malware quarantine and
   isolated worker boundary; this is a production blocker.
 

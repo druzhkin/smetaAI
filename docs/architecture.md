@@ -62,7 +62,8 @@ Nothing crosses a boundary merely because a model reports high confidence.
 - `audit`: append-only hash-chained events and immutable snapshots.
 - `actuals`: forecast-to-actual comparisons, reason taxonomy, and approved
   calibration examples; predictions are never recycled as facts.
-- `integration`: transactional outbox, imports, exports, and connector health.
+- `integration`: deterministic signed snapshot/audit packages, transactional
+  outbox, external delivery adapters, imports, and connector health.
 
 ## Deployment
 
@@ -77,7 +78,9 @@ Production deployment requires:
 - OIDC with MFA enforced by the identity provider;
 - central logs, metrics, traces, security audit export, alerting, and time
   synchronization;
-- secrets from a secrets manager, never environment files in production;
+- audit and Ed25519 export-signing keys from a secrets manager, never
+  environment files committed to source control, plus an independently
+  published historical public-key registry;
 - tested backup restoration and documented RPO/RTO.
 
 ## Data invariants
@@ -103,6 +106,10 @@ Production deployment requires:
 - Release rereads and hashes the snapshot object, recomputes its input/output
   and snapshot hashes, and compares its document-set and controlled-version
   set with the project's current bindings.
+- A release export is generated only for an allowed release decision and the
+  exact fixed snapshot/template version. Its Ed25519-signed manifest covers
+  every mandatory content section by SHA-256; the immutable artifact row and
+  content-addressed object retain key ID and public-key fingerprint.
 - Price decisions and risk calculations preserve their contributing evidence
   graph. The lineage resolver walks recursively to immutable document
   revisions and locators and rejects cycles or missing nodes.

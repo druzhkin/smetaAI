@@ -787,11 +787,41 @@ class ExportArtifactRow(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
     snapshot_id: Mapped[str] = mapped_column(ForeignKey("calculation_snapshots.id"), nullable=False)
-    adapter_qualification_id: Mapped[str] = mapped_column(
-        ForeignKey("adapter_qualifications.id"), nullable=False
+    adapter_qualification_id: Mapped[str | None] = mapped_column(
+        ForeignKey("adapter_qualifications.id")
     )
+    release_decision_id: Mapped[str] = mapped_column(
+        ForeignKey("release_decisions.id"), nullable=False
+    )
+    template_version_id: Mapped[str] = mapped_column(
+        ForeignKey("controlled_versions.id"), nullable=False
+    )
+    package_schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
     format: Mapped[str] = mapped_column(String(80), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(200), nullable=False)
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
     object_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     object_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    signature_algorithm: Mapped[str] = mapped_column(String(50), nullable=False)
+    signature: Mapped[str] = mapped_column(String(200), nullable=False)
+    signing_key_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    signing_public_key_b64: Mapped[str] = mapped_column(String(100), nullable=False)
+    public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_signed_export_artifact_basis",
+            "snapshot_id",
+            "release_decision_id",
+            "template_version_id",
+            "format",
+            unique=True,
+            sqlite_where=text("signature_algorithm = 'Ed25519'"),
+            postgresql_where=text("signature_algorithm = 'Ed25519'"),
+        ),
+    )

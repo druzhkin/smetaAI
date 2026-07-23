@@ -14,6 +14,8 @@ Resolved during the audit:
   resolution path;
 - controlled scenario definitions now execute against fixed snapshots and
   receive an independent recalculation.
+- approved releases can produce deterministic Ed25519-signed estimate/audit
+  packages whose manifest covers every mandatory content section.
 
 Open product blockers:
 
@@ -21,7 +23,7 @@ Open product blockers:
   connectors are supplied;
 - detailed logistics/mobilisation planning and contract cash-flow calculation
   remain generic cost components rather than operational planning services;
-- no signed estimate/audit export package;
+- no external export delivery adapter or approved public-key trust registry;
 - no representative historical qualification corpus, accuracy metrics, blind
   comparison, or parallel-operation evidence.
 
@@ -35,6 +37,9 @@ Resolved during the audit:
   controlled-version binding, and the calculation run linked by the snapshot;
 - readiness returns HTTP 503 when a mandatory runtime dependency or
   authentication configuration is unavailable;
+- native export generation is idempotent and verification detects package,
+  manifest, signature, source-snapshot, release-decision, and audit-chain
+  divergence;
 - SQLite and PostgreSQL migration cycles pass upgrade, downgrade, re-upgrade,
   and metadata-drift checks;
 - the runtime image now contains Alembic configuration and migrations.

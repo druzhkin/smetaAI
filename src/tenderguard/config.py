@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     oidc_jwks_url: str | None = None
     allow_insecure_dev_auth: bool = False
     audit_signing_key: SecretStr = SecretStr(DEVELOPMENT_AUDIT_SIGNING_KEY)
+    export_signing_key_id: str | None = None
+    export_signing_private_key_b64: SecretStr | None = None
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "testserver"]
 
     s3_endpoint_url: str | None = None
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
                 problems.append("audit signing key is shorter than 32 bytes")
             if self.audit_signing_key.get_secret_value() == DEVELOPMENT_AUDIT_SIGNING_KEY:
                 problems.append("development audit signing key is still configured")
+            if not self.export_signing_key_id or not self.export_signing_private_key_b64:
+                problems.append("Ed25519 export signing key configuration is incomplete")
             if not self.trusted_hosts or "*" in self.trusted_hosts:
                 problems.append("trusted hosts are empty or contain a wildcard")
             if self.object_store_backend != "s3":
@@ -77,6 +81,10 @@ class Settings(BaseSettings):
     @property
     def normative_adapter_configured(self) -> bool:
         return bool(self.normative_adapter and self.normative_adapter_qualification_id)
+
+    @property
+    def export_signing_configured(self) -> bool:
+        return bool(self.export_signing_key_id and self.export_signing_private_key_b64)
 
 
 @lru_cache

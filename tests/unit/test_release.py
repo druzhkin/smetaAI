@@ -67,6 +67,7 @@ def good_context() -> ReleaseContext:
         "logistics_model",
         "finance_model",
         "scenario_policy",
+        "export_template",
     )
     return ReleaseContext(
         current_document_set_confirmed=True,

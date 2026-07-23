@@ -25,7 +25,7 @@ stage gates or calculation lineage:
 - `nomenclature_catalog`, `equivalence_rules`, `price_policy`, and
   `approval_thresholds`;
 - `contract_risk_rules`, `risk_model`, `calculation_policy`,
-  `scenario_policy`, and `production_qualification`;
+  `scenario_policy`, `export_template`, and `production_qualification`;
 - a qualified normative adapter version plus a validated project-specific
   normative result whenever a normative component is used.
 
@@ -39,6 +39,12 @@ Scenario overrides are also controlled content. The API selects a named
 definition from the bound approved `scenario_policy`; it does not accept
 arbitrary override values from the caller. Each scenario starts from a fixed,
 integrity-checked snapshot and is independently recalculated.
+
+The bound `export_template` must declare the mandatory signed-package schema
+and format. It cannot remove the calculation snapshot, recursive lineage,
+controlled versions, approvals, workflow, release decision, or audit chain.
+Changing the template binding makes an earlier calculation snapshot stale for
+new release/export purposes.
 
 Controlled versions are created in `DRAFT`, approved by another authorised
 person, and explicitly bound to a project. A later version does not silently

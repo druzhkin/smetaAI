@@ -41,7 +41,8 @@ plus isolated workers and external adapters:
 - outbox-driven workers for OCR, visual extraction, connectors, and exports.
 
 See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
-and [requirements traceability](docs/requirements-traceability.md).
+[requirements traceability](docs/requirements-traceability.md), and the
+[signed export package specification](docs/signed-export-package.md).
 
 ## Implemented application core
 
@@ -64,6 +65,9 @@ The repository currently connects and integration-tests:
   current document set and controlled-version bindings;
 - approved-policy scenario calculation from a fixed snapshot, including a
   separate independent recalculation for each scenario;
+- deterministic Ed25519-signed estimate/audit export packages containing the
+  fixed snapshot, recursive lineage, controlled versions, approvals, workflow,
+  release decision, and verified project audit chain;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -98,8 +102,9 @@ enterprise integrations, historical validation set, operating procedures,
 backup/disaster-recovery evidence, trained users, and named process owners.
 
 Detailed logistics/mobilisation planning, contract cash-flow modelling,
-signed export packages, enterprise connector workflows, and a complete
-operator read/search UI also remain to be completed. A successful local test run cannot
+external export delivery/connectors, and a complete operator read/search UI
+remain to be completed. External verification also requires an approved
+out-of-band signing-key registry. A successful local test run cannot
 substitute for the required historical, blind-comparison, parallel-operation,
 security, load, and recovery evidence.
 

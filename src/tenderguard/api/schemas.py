@@ -36,6 +36,10 @@ from tenderguard.application.evidence import (
     ObservationDraft,
     ReconciliationOutcome,
 )
+from tenderguard.application.exports import (
+    ExportArtifactView,
+    ExportVerificationResult,
+)
 from tenderguard.application.lineage import SnapshotLineage
 from tenderguard.application.passport import (
     PassportFactDraft,
@@ -404,10 +408,24 @@ class ScenarioExecutionResponse(ScenarioExecutionResult):
     pass
 
 
+class GenerateExportRequest(ApiModel):
+    snapshot_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ExportArtifactResponse(ExportArtifactView):
+    pass
+
+
+class ExportVerificationResponse(ExportVerificationResult):
+    pass
+
+
 class ReadinessResponse(ApiModel):
     ready: bool
     database: bool
     object_store: bool
     authentication_configured: bool
     normative_engine_qualified: bool
+    export_signing_configured: bool
     notes: tuple[str, ...]
