@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  confirmDocumentSet,
   createProject,
   decideWorkItem,
   uploadDocument,
@@ -142,5 +143,40 @@ describe("controlled mutations", () => {
     expect(body.get("make_candidate_current")).toBe("true");
     expect(body.get("upload")).toBeInstanceOf(File);
     expect((body.get("upload") as File).name).toBe("terms.txt");
+  });
+
+  it("binds document-set confirmation to the exact candidate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "project-1",
+          current_document_set_revision_id: "document-set-1",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await confirmDocumentSet(context, {
+      projectId: "project-1",
+      documentSetId: "document-set-1",
+      reason: "Independently reconciled the revision register",
+      idempotencyKey: "document-set-operation-1",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/v1/projects/project-1/document-set/confirm");
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer test-token",
+      "Idempotency-Key": "document-set-operation-1",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      candidate_document_set_revision_id: "document-set-1",
+      reason: "Independently reconciled the revision register",
+    });
   });
 });

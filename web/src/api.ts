@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   ApprovalDecisionResult,
+  DocumentSetView,
   ApprovalState,
   ProjectPortfolioPage,
   ProjectRecordPage,
@@ -335,6 +336,42 @@ export function getDocumentUpload(
     `/projects/${encodeURIComponent(projectId)}/document-uploads/${encodeURIComponent(uploadId)}`,
     undefined,
     signal,
+  );
+}
+
+export function getDocumentSet(
+  context: RequestContext,
+  projectId: string,
+  documentSetId: string,
+  signal?: AbortSignal,
+): Promise<DocumentSetView> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/document-sets/${encodeURIComponent(documentSetId)}`,
+    undefined,
+    signal,
+  );
+}
+
+export function confirmDocumentSet(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    documentSetId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ProjectView> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/document-set/confirm`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        candidate_document_set_revision_id: input.documentSetId,
+        reason: input.reason,
+      },
+    },
   );
 }
 

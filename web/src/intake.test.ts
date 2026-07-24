@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { validateDocumentUploadDraft, validateProjectDraft } from "./intake";
+import {
+  validateDocumentSetConfirmationDraft,
+  validateDocumentUploadDraft,
+  validateProjectDraft,
+} from "./intake";
 
 describe("intake validation", () => {
   it("rejects blank or ambiguous project codes", () => {
@@ -37,5 +41,22 @@ describe("intake validation", () => {
     };
     expect(validateDocumentUploadDraft(draft, 4)).toContain("лимит");
     expect(validateDocumentUploadDraft(draft, 5)).toBeNull();
+  });
+
+  it("requires exact project confirmation for a document set", () => {
+    const draft = {
+      reason: "Reviewed every revision against the received register",
+      projectCode: "TG-002",
+      acknowledged: true,
+    };
+    expect(validateDocumentSetConfirmationDraft(draft, "TG-001")).toContain(
+      "точный шифр",
+    );
+    expect(
+      validateDocumentSetConfirmationDraft(
+        { ...draft, projectCode: "TG-001" },
+        "TG-001",
+      ),
+    ).toBeNull();
   });
 });

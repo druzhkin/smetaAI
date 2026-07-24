@@ -119,6 +119,7 @@ from .schemas import (
     CreateControlledVersionRequest,
     CreateProjectRequest,
     DecideApprovalRequest,
+    DocumentSetResponse,
     EvaluateItemPriceRequest,
     ExportArtifactResponse,
     ExportVerificationResponse,
@@ -1303,6 +1304,23 @@ def create_app(
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
+
+    @application.get(
+        "/v1/projects/{project_id}/document-sets/{document_set_id}",
+        response_model=DocumentSetResponse,
+    )
+    def get_document_set(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        document_set_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> DocumentSetResponse:
+        result = service(session).document_set_view(
+            actor=actor,
+            project_id=project_id,
+            document_set_id=document_set_id,
+        )
+        return DocumentSetResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/transitions",

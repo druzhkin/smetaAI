@@ -15,6 +15,12 @@ export interface DocumentUploadDraft {
   acknowledged: boolean;
 }
 
+export interface DocumentSetConfirmationDraft {
+  reason: string;
+  projectCode: string;
+  acknowledged: boolean;
+}
+
 export function validateProjectDraft(draft: ProjectDraft): string | null {
   const code = draft.code.trim();
   if (!code || !draft.name.trim() || !draft.reason.trim()) {
@@ -68,6 +74,25 @@ export function validateDocumentUploadDraft(
   }
   if (!draft.acknowledged) {
     return "Подтвердите редакцию, критичность и назначение файла";
+  }
+  return null;
+}
+
+export function validateDocumentSetConfirmationDraft(
+  draft: DocumentSetConfirmationDraft,
+  expectedProjectCode: string,
+): string | null {
+  if (!draft.reason.trim()) {
+    return "Укажите основание независимой проверки комплекта документов";
+  }
+  if (draft.reason.trim().length > 2000) {
+    return "Основание проверки превышает 2000 символов";
+  }
+  if (draft.projectCode !== expectedProjectCode) {
+    return "Введите точный шифр проекта для подтверждения действия";
+  }
+  if (!draft.acknowledged) {
+    return "Подтвердите сверку состава, редакций и хеша манифеста";
   }
   return null;
 }

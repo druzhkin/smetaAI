@@ -44,6 +44,7 @@ from tenderguard.infrastructure.orm import (
     CostInputRow,
     DocumentRevisionRow,
     DocumentRow,
+    DocumentSetRevisionRow,
     ExportArtifactRow,
     ManualChangeRow,
     NomenclatureMatchRow,
@@ -783,6 +784,46 @@ class ProjectReadService:
             )
             for revision, document in self.session.execute(revision_statement.limit(limit)).all()
         ]
+        document_sets = select(DocumentSetRevisionRow).where(
+            DocumentSetRevisionRow.project_id == project_id
+        )
+        if current_only:
+            document_sets = document_sets.where(DocumentSetRevisionRow.status == "CONFIRMED")
+        if query:
+            pattern = f"%{self._escape_like(query)}%"
+            document_sets = document_sets.where(
+                or_(
+                    DocumentSetRevisionRow.id.ilike(pattern, escape="\\"),
+                    DocumentSetRevisionRow.manifest_hash.ilike(pattern, escape="\\"),
+                    DocumentSetRevisionRow.created_by.ilike(pattern, escape="\\"),
+                )
+            )
+        document_sets = self._before(
+            document_sets,
+            DocumentSetRevisionRow.created_at,
+            DocumentSetRevisionRow.id,
+            cursor,
+        ).order_by(DocumentSetRevisionRow.created_at.desc(), DocumentSetRevisionRow.id.desc())
+        records.extend(
+            ProjectRecord(
+                id=row.id,
+                section=ProjectRecordSection.DOCUMENTS,
+                kind="DOCUMENT_SET_REVISION",
+                title="Document set candidate",
+                subtitle=f"{len(row.revision_ids)} revision(s)",
+                status=row.status,
+                current=row.status == "CONFIRMED",
+                occurred_at=row.created_at,
+                attributes={
+                    "manifest_hash": row.manifest_hash,
+                    "revision_ids": row.revision_ids,
+                    "created_by": row.created_by,
+                    "confirmed_by": row.confirmed_by,
+                    "confirmed_at": row.confirmed_at,
+                },
+            )
+            for row in self.session.scalars(document_sets.limit(limit))
+        )
         upload_statement = select(QuarantinedUploadRow).where(
             QuarantinedUploadRow.project_id == project_id
         )

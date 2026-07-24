@@ -116,6 +116,18 @@ class ProjectMembershipView(ApplicationModel):
     created_at: datetime
 
 
+class DocumentSetView(ApplicationModel):
+    id: str
+    project_id: str
+    manifest_hash: str
+    revision_ids: tuple[str, ...]
+    status: str
+    created_by: str
+    created_at: datetime
+    confirmed_by: str | None
+    confirmed_at: datetime | None
+
+
 @dataclass(frozen=True)
 class SystemProjectAccess:
     qualification_id: str
@@ -802,6 +814,8 @@ class ProjectService:
         request_id: str,
         reason: str,
     ) -> ProjectView:
+        candidate_id = self._required_text(candidate_id, "candidate_id", 64)
+        reason = self._required_text(reason, "reason", 2000)
         project = self.get_project(
             actor=actor,
             project_id=project_id,
@@ -820,6 +834,10 @@ class ProjectService:
             raise LookupError(candidate_id)
         if candidate.status != "DRAFT":
             raise ValueError("Only a DRAFT document-set candidate can be confirmed")
+        if candidate.created_by == actor.actor_id:
+            raise ValueError(
+                "Document-set confirmation requires an actor different from the submitter"
+            )
         latest_revision_ids = self._current_revision_ids(project.id)
         if candidate.revision_ids != latest_revision_ids:
             raise ValueError("Document-set candidate is stale")
@@ -848,6 +866,35 @@ class ProjectService:
             },
         )
         return self._view(project)
+
+    def document_set_view(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        document_set_id: str,
+    ) -> DocumentSetView:
+        document_set_id = self._required_text(document_set_id, "document_set_id", 64)
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+                ActorRole.APPROVER,
+                ActorRole.AUDITOR,
+            ),
+        )
+        row = self.session.scalar(
+            select(DocumentSetRevisionRow).where(
+                DocumentSetRevisionRow.id == document_set_id,
+                DocumentSetRevisionRow.project_id == project.id,
+            )
+        )
+        if row is None:
+            raise LookupError(document_set_id)
+        return self._document_set_view(row)
 
     def transition(
         self,
@@ -2049,4 +2096,21 @@ class ProjectService:
             state=ApprovalState(project.state),
             row_version=project.row_version,
             current_document_set_revision_id=project.current_document_set_revision_id,
+        )
+
+    @staticmethod
+    def _document_set_view(row: DocumentSetRevisionRow) -> DocumentSetView:
+        created_at = ensure_utc(row.created_at)
+        if created_at is None:
+            raise RuntimeError("Document-set creation timestamp is missing")
+        return DocumentSetView(
+            id=row.id,
+            project_id=row.project_id,
+            manifest_hash=row.manifest_hash,
+            revision_ids=tuple(row.revision_ids),
+            status=row.status,
+            created_by=row.created_by,
+            created_at=created_at,
+            confirmed_by=row.confirmed_by,
+            confirmed_at=ensure_utc(row.confirmed_at),
         )

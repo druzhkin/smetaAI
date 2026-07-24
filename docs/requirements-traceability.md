@@ -17,7 +17,7 @@ Status values:
 
 | Scope | Target module | Delivery evidence |
 |---|---|---|
-| 1-3 intake, versions, graph | intake, document graph | controlled project registration and quarantine-upload UI, streamed quarantine, qualified scan state machine, leased outbox retry/dead-letter/replay, short-transaction worker-only bounded manifest/revision processing and revision confirmation (`APPLICATION_SLICE`); external scanner/scheduler/sandbox (`PORT`/`OPERATIONS`); graph rules (`DOMAIN_CORE`) |
+| 1-3 intake, versions, graph | intake, document graph | controlled project registration and quarantine-upload UI, streamed quarantine, qualified scan state machine, leased outbox retry/dead-letter/replay, short-transaction worker-only bounded manifest/revision processing, exact-manifest read contract, and stale-safe four-eyes revision confirmation UI (`APPLICATION_SLICE`); external scanner/scheduler/sandbox (`PORT`/`OPERATIONS`); graph rules (`DOMAIN_CORE`) |
 | 4 extraction | evidence + worker adapters | qualified immutable observations and independent reconciliation (`APPLICATION_SLICE`), OCR/visual providers (`PORT`) |
 | 5 passport | project passport | revisioned provenance-backed facts, verification and stage blockers (`APPLICATION_CORE`) |
 | 6-8 BoQ, completeness, nomenclature | BoQ, scope, nomenclature | BoQ/quantity revisions, exact cost-component plan, scope attestations, deterministic attribute matching and governed analogues (`APPLICATION_CORE`) |

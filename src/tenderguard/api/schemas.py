@@ -72,7 +72,11 @@ from tenderguard.application.pricing import (
     PriceQuoteDraft,
     PriceQuoteView,
 )
-from tenderguard.application.projects import ProjectMembershipView, ProjectView
+from tenderguard.application.projects import (
+    DocumentSetView,
+    ProjectMembershipView,
+    ProjectView,
+)
 from tenderguard.application.risks import (
     RiskCalculationView,
     RiskItemDraft,
@@ -166,6 +170,10 @@ class TransitionRequest(ApiModel):
 class ConfirmDocumentSetRequest(ApiModel):
     candidate_document_set_revision_id: str = Field(min_length=1)
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class DocumentSetResponse(DocumentSetView):
+    pass
 
 
 class ReleaseRequest(ApiModel):

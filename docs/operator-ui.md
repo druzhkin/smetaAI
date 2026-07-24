@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes three controlled mutation families:
+The current interface includes four controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -27,6 +27,11 @@ The current interface includes three controlled mutation families:
   current-candidate intent, reason, acknowledgement, and a stable idempotency
   key. The receipt exposes the byte count, SHA-256, scan/processing state and
   resulting revision only if one is actually created;
+- a reviewer or approver other than the candidate creator may confirm the
+  exact document-set manifest and revision list. The server locks and
+  revalidates the candidate, rejects stale or non-draft candidates, records
+  the independent actor, and leaves document completeness and downstream
+  verification gates unresolved;
 - an assigned expert may record an approval, rejection, or
   changes-requested decision for an existing approval task. The operation
   requires the exact task timestamp, a reason, project-scoped evidence
@@ -34,8 +39,9 @@ The current interface includes three controlled mutation families:
   additionally requires explicit project-code confirmation in the browser.
 
 The backend remains authoritative and records every accepted mutation in the
-audit chain. An unsupported file, invalid logical key, stale task, missing
-role, or unacknowledged command fails closed.
+audit chain. An unsupported file, invalid logical key, stale task, stale
+document-set candidate, self-confirmation, missing role, or unacknowledged
+command fails closed.
 
 Extraction correction, conflict resolution, BoQ and price maintenance,
 calculation execution, workflow transition, and bid release are not yet

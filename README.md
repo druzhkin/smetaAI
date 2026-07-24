@@ -109,6 +109,9 @@ The repository currently connects and integration-tests:
   idempotency keys, server-aligned byte limits, strict identifier validation,
   explicit operator attestations, separate quarantine receipts, and status
   polling that never represents an unscanned upload as evidence;
+- independent document-set confirmation that exposes the exact manifest and
+  revision identifiers, rejects self-confirmation and stale candidates, and
+  does not confuse version selection with document completeness;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 

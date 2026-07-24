@@ -51,6 +51,18 @@ export interface ProjectView {
   current_document_set_revision_id: string | null;
 }
 
+export interface DocumentSetView {
+  id: string;
+  project_id: string;
+  manifest_hash: string;
+  revision_ids: string[];
+  status: string;
+  created_by: string;
+  created_at: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+}
+
 export interface ProjectAccess {
   access_level: "MEMBER" | "OWNER";
   roles: ActorRole[];

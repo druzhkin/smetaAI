@@ -560,6 +560,37 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             upload=uploaded.json(),
         )
         candidate_id = uploaded_payload["candidate_document_set_revision_id"]
+        candidate = client.get(
+            f"/v1/projects/{project['id']}/document-sets/{candidate_id}",
+            headers=owner_b,
+        )
+        assert candidate.status_code == 200, candidate.text
+        assert candidate.json()["status"] == "DRAFT"
+        assert candidate.json()["created_by"] == "operator-1"
+        assert candidate.json()["revision_ids"] == [uploaded_payload["document_revision_id"]]
+        document_records = client.get(
+            f"/v1/projects/{project['id']}/records",
+            headers=owner_b,
+            params={"section": "DOCUMENTS", "limit": 100},
+        )
+        assert document_records.status_code == 200, document_records.text
+        candidate_record = next(
+            item
+            for item in document_records.json()["items"]
+            if item["kind"] == "DOCUMENT_SET_REVISION" and item["id"] == candidate_id
+        )
+        assert candidate_record["status"] == "DRAFT"
+        assert candidate_record["attributes"]["manifest_hash"] == candidate.json()["manifest_hash"]
+        same_actor_confirmation = client.post(
+            f"/v1/projects/{project['id']}/document-set/confirm",
+            headers=operator,
+            json={
+                "candidate_document_set_revision_id": candidate_id,
+                "reason": "The submitting actor must not self-confirm the current set",
+            },
+        )
+        assert same_actor_confirmation.status_code == 422
+        assert "different from the submitter" in same_actor_confirmation.json()["detail"]
         confirmed = client.post(
             f"/v1/projects/{project['id']}/document-set/confirm",
             headers=owner_b,
@@ -569,6 +600,12 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
         )
         assert confirmed.status_code == 200
+        confirmed_candidate = client.get(
+            f"/v1/projects/{project['id']}/document-sets/{candidate_id}",
+            headers=owner_b,
+        ).json()
+        assert confirmed_candidate["status"] == "CONFIRMED"
+        assert confirmed_candidate["confirmed_by"] == "owner-b"
 
         def approve_version(
             kind: str,

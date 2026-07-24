@@ -4,6 +4,7 @@ import {
   formatDateTime,
   formatMoney,
 } from "../format";
+import type { ReactNode } from "react";
 import { taskLabels } from "../labels";
 import type { ProjectRecord } from "../types";
 import { EmptyState } from "./Feedback";
@@ -20,6 +21,8 @@ const attributeLabels: Record<string, string> = {
   created_by: "Создал",
   decided_by: "Решение принял",
   document_set_revision_id: "Комплект документов",
+  manifest_hash: "Хеш манифеста",
+  revision_ids: "Редакции комплекта",
   engine_version: "Версия движка",
   event_hash: "Хеш события",
   factors: "Коэффициенты",
@@ -58,7 +61,13 @@ function recordTitle(record: ProjectRecord): string {
   return record.title;
 }
 
-function RecordCard({ record }: { record: ProjectRecord }) {
+function RecordCard({
+  record,
+  action,
+}: {
+  record: ProjectRecord;
+  action?: ReactNode;
+}) {
   const attributes = Object.entries(record.attributes).filter(
     ([, value]) => value !== null && value !== undefined && value !== "",
   );
@@ -109,6 +118,10 @@ function RecordCard({ record }: { record: ProjectRecord }) {
           </dl>
         )}
 
+        {action !== undefined && (
+          <div className="record-card__actions">{action}</div>
+        )}
+
         <footer className="record-card__footer">
           <code title={record.id}>{compactId(record.id)}</code>
           {record.links.length > 0 && (
@@ -129,7 +142,13 @@ function RecordCard({ record }: { record: ProjectRecord }) {
   );
 }
 
-export function RecordList({ records }: { records: ProjectRecord[] }) {
+export function RecordList({
+  records,
+  renderAction,
+}: {
+  records: ProjectRecord[];
+  renderAction?: (record: ProjectRecord) => ReactNode;
+}) {
   if (records.length === 0) {
     return (
       <EmptyState
@@ -141,7 +160,11 @@ export function RecordList({ records }: { records: ProjectRecord[] }) {
   return (
     <div className="record-list">
       {records.map((record) => (
-        <RecordCard key={`${record.kind}:${record.id}`} record={record} />
+        <RecordCard
+          key={`${record.kind}:${record.id}`}
+          record={record}
+          action={renderAction?.(record)}
+        />
       ))}
     </div>
   );

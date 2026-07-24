@@ -30,6 +30,7 @@ type AuthenticationStatus =
 interface AuthContextValue {
   status: AuthenticationStatus;
   mode: RuntimeConfig["authentication_mode"];
+  actorId: string | null;
   displayName: string | null;
   roles: ActorRole[];
   error: string | null;
@@ -271,6 +272,10 @@ export function AuthProvider({
         user?.profile.preferred_username ??
         user?.profile.sub ??
         null);
+  const actorId =
+    config.authentication_mode === "DEVELOPMENT"
+      ? (developmentIdentity?.actorId ?? null)
+      : (user?.profile.sub ?? null);
   const roles =
     config.authentication_mode === "DEVELOPMENT"
       ? (developmentIdentity?.roles ?? [])
@@ -282,6 +287,7 @@ export function AuthProvider({
     () => ({
       status,
       mode: config.authentication_mode,
+      actorId,
       displayName,
       roles,
       error,
@@ -295,6 +301,7 @@ export function AuthProvider({
     [
       status,
       config.authentication_mode,
+      actorId,
       displayName,
       roles,
       error,

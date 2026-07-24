@@ -165,7 +165,29 @@ export function RecordsPage({
             />
           )}
           {!recordsQuery.isPending && !recordsQuery.isError && (
-            <RecordList records={records} />
+            <RecordList
+              records={records}
+              renderAction={(record) => {
+                if (
+                  section !== "DOCUMENTS" ||
+                  record.kind !== "DOCUMENT_SET_REVISION" ||
+                  record.status !== "DRAFT" ||
+                  (!auth.roles.includes("REVIEWER") &&
+                    !auth.roles.includes("APPROVER"))
+                ) {
+                  return undefined;
+                }
+                return (
+                  <Link
+                    className="button button--secondary"
+                    to={`/projects/${encodeURIComponent(projectId)}/document-sets/${encodeURIComponent(record.id)}/confirm`}
+                  >
+                    <Icon name="check" size={15} />
+                    Проверить комплект
+                  </Link>
+                );
+              }}
+            />
           )}
 
           {recordsQuery.hasNextPage && (
