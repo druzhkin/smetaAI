@@ -9,6 +9,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -53,9 +54,10 @@ from tenderguard.application.projects import (
 from tenderguard.application.quarantine import QuarantineService
 from tenderguard.application.risks import RiskService
 from tenderguard.application.scenarios import ScenarioService
+from tenderguard.application.workbench import ProjectReadService, ProjectRecordSection
 from tenderguard.config import Settings, get_settings
 from tenderguard.domain.common import utc_now
-from tenderguard.domain.enums import ActorRole
+from tenderguard.domain.enums import ActorRole, ApprovalState
 from tenderguard.domain.exports import load_signing_material
 from tenderguard.domain.integration import (
     load_integration_signing_material,
@@ -136,6 +138,9 @@ from .schemas import (
     PriceDecisionResponse,
     PriceQuoteResponse,
     ProjectMembershipResponse,
+    ProjectPortfolioResponse,
+    ProjectRecordPageResponse,
+    ProjectWorkbenchResponse,
     ProposeAnalogueRequest,
     ProposeCommercialCostModelRequest,
     ProposeContractCostImpactRequest,
@@ -177,6 +182,7 @@ from .schemas import (
     VerifyContractTermRequest,
     VerifyPassportFactRequest,
     VerifyRiskItemRequest,
+    WorkItemPageResponse,
 )
 from .security import RequestSizeLimitMiddleware, SecurityHeadersMiddleware
 
@@ -267,6 +273,13 @@ def create_app(
 
     def service(session: Session) -> ProjectService:
         return ProjectService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def read_service(session: Session) -> ProjectReadService:
+        return ProjectReadService(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
@@ -909,6 +922,46 @@ def create_app(
         )
         return IntegrationInboxMessageResponse.model_validate(result.model_dump())
 
+    @application.get(
+        "/v1/projects",
+        response_model=ProjectPortfolioResponse,
+    )
+    def list_projects(
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        query: Annotated[str | None, Query(max_length=200)] = None,
+        states: Annotated[list[ApprovalState] | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Query(max_length=1000)] = None,
+    ) -> ProjectPortfolioResponse:
+        result = read_service(session).list_projects(
+            actor=actor,
+            query=query,
+            states=frozenset(states or ()),
+            limit=limit,
+            cursor=cursor,
+        )
+        return ProjectPortfolioResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/work-items",
+        response_model=WorkItemPageResponse,
+    )
+    def list_work_items(
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        statuses: Annotated[list[str] | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Query(max_length=1000)] = None,
+    ) -> WorkItemPageResponse:
+        result = read_service(session).list_work_items(
+            actor=actor,
+            statuses=frozenset(statuses or ("PENDING",)),
+            limit=limit,
+            cursor=cursor,
+        )
+        return WorkItemPageResponse.model_validate(result.model_dump())
+
     @application.post(
         "/v1/projects",
         response_model=ProjectView,
@@ -936,6 +989,48 @@ def create_app(
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectView:
         return service(session).project_view(actor=actor, project_id=project_id)
+
+    @application.get(
+        "/v1/projects/{project_id}/workbench",
+        response_model=ProjectWorkbenchResponse,
+    )
+    def get_project_workbench(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProjectWorkbenchResponse:
+        result = read_service(session).workbench(
+            actor=actor,
+            project_id=project_id,
+        )
+        return ProjectWorkbenchResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/records",
+        response_model=ProjectRecordPageResponse,
+    )
+    def list_project_records(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        section: Annotated[ProjectRecordSection, Query()],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Query(max_length=1000)] = None,
+        current_only: bool = False,
+        query: Annotated[str | None, Query(max_length=200)] = None,
+        statuses: Annotated[list[str] | None, Query()] = None,
+    ) -> ProjectRecordPageResponse:
+        result = read_service(session).records(
+            actor=actor,
+            project_id=project_id,
+            section=section,
+            limit=limit,
+            cursor=cursor,
+            current_only=current_only,
+            query=query,
+            statuses=frozenset(statuses or ()),
+        )
+        return ProjectRecordPageResponse.model_validate(result.model_dump())
 
     @application.get(
         "/v1/projects/{project_id}/members",

@@ -82,6 +82,12 @@ from tenderguard.application.scenarios import (
     ScenarioExecutionCommand,
     ScenarioExecutionResult,
 )
+from tenderguard.application.workbench import (
+    ProjectPortfolioPage,
+    ProjectRecordPage,
+    ProjectWorkbench,
+    WorkItemPage,
+)
 from tenderguard.domain.approvals import ApprovalSubject
 from tenderguard.domain.calculation import AtomicCostInput, CalculationPolicy
 from tenderguard.domain.commercial_costs import CommercialCostModelInput
@@ -441,6 +447,22 @@ class IntegrationInboxMessageResponse(IntegrationInboxMessageView):
 
 class ReplayOutboxResponse(ApiModel):
     replay_outbox_event_id: str
+
+
+class ProjectPortfolioResponse(ProjectPortfolioPage):
+    pass
+
+
+class WorkItemPageResponse(WorkItemPage):
+    pass
+
+
+class ProjectWorkbenchResponse(ProjectWorkbench):
+    pass
+
+
+class ProjectRecordPageResponse(ProjectRecordPage):
+    pass
 
 
 class SubmitRiskItemRequest(ApiModel):
