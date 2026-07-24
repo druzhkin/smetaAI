@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -83,8 +84,29 @@ class QuarantinedUploadRow(Base, TimestampMixin):
     result_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     failure_code: Mapped[str | None] = mapped_column(String(100))
     failure_detail: Mapped[str | None] = mapped_column(Text)
+    processing_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processing_worker_id: Mapped[str | None] = mapped_column(String(128))
+    processing_lease_token: Mapped[str | None] = mapped_column(String(64))
+    processing_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
+        CheckConstraint(
+            "("
+            "status = 'PROCESSING' AND processing_worker_id IS NOT NULL "
+            "AND processing_lease_token IS NOT NULL "
+            "AND processing_lease_expires_at IS NOT NULL "
+            "AND processing_deadline_at IS NOT NULL"
+            ") OR ("
+            "status <> 'PROCESSING' AND processing_worker_id IS NULL "
+            "AND processing_lease_token IS NULL "
+            "AND processing_lease_expires_at IS NULL "
+            "AND processing_deadline_at IS NULL"
+            ")",
+            name="ck_quarantined_upload_processing_lease",
+        ),
         Index(
             "uq_active_quarantined_upload_per_logical",
             "project_id",
@@ -92,11 +114,11 @@ class QuarantinedUploadRow(Base, TimestampMixin):
             unique=True,
             sqlite_where=text(
                 "status IN ('QUARANTINED', 'CLEAN', 'SCAN_FAILED', "
-                "'PROCESSING', 'PROCESSING_FAILED')"
+                "'PROCESSING', 'PROCESSING_FAILED', 'PROCESSING_DEAD_LETTERED')"
             ),
             postgresql_where=text(
                 "status IN ('QUARANTINED', 'CLEAN', 'SCAN_FAILED', "
-                "'PROCESSING', 'PROCESSING_FAILED')"
+                "'PROCESSING', 'PROCESSING_FAILED', 'PROCESSING_DEAD_LETTERED')"
             ),
         ),
     )
@@ -614,7 +636,35 @@ class OutboxEventRow(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+    locked_by: Mapped[str | None] = mapped_column(String(128))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "("
+            "locked_by IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL"
+            ") OR ("
+            "locked_by IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL"
+            ")",
+            name="ck_outbox_lease_complete",
+        ),
+        CheckConstraint(
+            "published_at IS NULL OR dead_lettered_at IS NULL",
+            name="ck_outbox_single_terminal_state",
+        ),
+        Index(
+            "ix_outbox_delivery_ready",
+            "topic",
+            "published_at",
+            "dead_lettered_at",
+            "available_at",
+            "lease_expires_at",
+        ),
+    )
 
 
 class ActualRecordRow(Base):

@@ -18,6 +18,7 @@ class QuarantineStatus(StrEnum):
     PROCESSING = "PROCESSING"
     PROCESSED = "PROCESSED"
     PROCESSING_FAILED = "PROCESSING_FAILED"
+    PROCESSING_DEAD_LETTERED = "PROCESSING_DEAD_LETTERED"
 
 
 class MalwareVerdict(StrEnum):
@@ -53,5 +54,8 @@ class QuarantinedUploadView(DomainModel):
     candidate_document_set_revision_id: str | None = None
     manifest: IntakeManifest | None = None
     failure_code: str | None = None
+    processing_attempts: int = Field(ge=0)
+    processing_lease_expires_at: datetime | None = None
+    processing_dead_lettered_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

@@ -29,9 +29,9 @@ Nothing crosses a boundary merely because a model reports high confidence.
 
 - `identity`: OIDC validation, roles, project access, segregation of duties.
 - `intake`: separately stored streamed quarantine, qualification-bound malware
-  results, worker-only bounded archive expansion, manifest, file health, Excel
-  visibility/formula checks, document revision, and referenced-document
-  discovery.
+  results, leased outbox delivery, bounded retry/dead-letter/replay, worker-only
+  bounded archive expansion, manifest, file health, Excel visibility/formula
+  checks, document revision, and referenced-document discovery.
 - `evidence`: source locations, extraction runs, independent observations,
   conflicts, mandatory conflict-review tasks, manual corrections, and
   verification status.
@@ -80,7 +80,9 @@ Production deployment requires:
   the API image;
 - distinct quarantine and evidence buckets; parser workers run with network,
   CPU, memory, process, time, and temporary-disk limits;
-- a transactional outbox and idempotent consumers;
+- a transactional outbox and idempotent consumers; document-intake delivery
+  uses `FOR UPDATE SKIP LOCKED`, expiring ownership tokens, bounded exponential
+  retry, immutable terminal events, and explicit audited replay;
 - OIDC with MFA enforced by the identity provider;
 - central logs, metrics, traces, security audit export, alerting, and time
   synchronization;
@@ -96,6 +98,12 @@ Production deployment requires:
 - Original observations are immutable. Corrections create new observations.
 - An original upload cannot enter the evidence zone or reach a parser before
   an exact qualified malware result is `CLEAN`; scan-result rows are immutable.
+- A parser may finalize only with the exact current processing lease. Parsing
+  and object promotion occur outside database transactions; claim, failure,
+  and finalize use separate short transactions.
+- Exhausted document processing enters `PROCESSING_DEAD_LETTERED`, leaves the
+  input blocker unresolved, and requires an audited administrator replay that
+  creates a new outbox event rather than editing terminal delivery evidence.
 - Every current value points to evidence or an approved assumption.
 - Current passport, quantity, contract, risk, actual, nomenclature, and price
   records supersede prior revisions; upstream changes never overwrite history.

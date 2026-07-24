@@ -11,8 +11,9 @@ triggers.
 
 It is **not ready for production**. The application now enforces streamed
 separate quarantine, qualification-bound exact-hash malware results, and a
-worker-only bounded parser entry point. A real malware provider, disposable
-runtime sandbox, network/resource policy, job orchestrator, and their
+worker-only bounded parser entry point with leased outbox delivery. A real
+malware provider, production scheduler, disposable runtime sandbox,
+network/resource policy, and their
 qualification evidence are external controls and remain production blockers.
 
 ## High severity
@@ -20,14 +21,15 @@ qualification evidence are external controls and remain production blockers.
 ### SEC-001 - Operational malware scanner and parser sandbox are not deployed
 
 - Rule ID: FASTAPI-UPLOAD-001 / defence-in-depth input boundary
-- Location: `src/tenderguard/application/quarantine.py:184`,
-  `src/tenderguard/application/document_processing.py:45`,
-  `src/tenderguard/cli.py:77`
+- Location: `src/tenderguard/application/quarantine.py:193`,
+  `src/tenderguard/application/document_processing.py:88`,
+  `src/tenderguard/application/document_jobs.py:49`,
+  `src/tenderguard/cli.py:123`
 - Evidence: the API can only quarantine; a `SYSTEM` result must reproduce the
   report/object hashes and an active configured `MALWARE_SCAN` qualification;
-  parsing is reachable through the worker service/CLI after `CLEAN`. The
-  repository does not deploy the scanner product, worker orchestrator,
-  container network policy, or resource limits.
+  parsing is reachable through leased, bounded-retry outbox delivery after
+  `CLEAN`. The repository does not deploy the scanner product, production
+  scheduler, container network policy, or resource limits.
 - Impact: if operators run the worker without the mandated disposable sandbox,
   a malicious clean-missed file could exploit a parser vulnerability under
   worker credentials.
@@ -35,15 +37,16 @@ qualification evidence are external controls and remain production blockers.
   network-denied disposable job with read-only image and CPU/memory/time/disk
   limits, restrict credentials, and capture qualification/load/abuse evidence.
 - Mitigation: separate stores, exact-hash promotion, immutable scan evidence,
-  a parser-free API image, parser qualification, strict allowlist, patched
+  a parser-free API image, parser qualification, expiring ownership tokens,
+  persisted deadlines, dead-letter/replay audit, strict allowlist, patched
   worker libraries, and bounded spooling materially reduce exposure but cannot
-  prove the runtime boundary.
+  prove the runtime boundary or preempt every native parser.
 - Status: **PARTIALLY REMEDIATED - production blocker**.
 
 ### SEC-002 - Application-level whole-file materialisation
 
 - Rule ID: FASTAPI-RES-001 / FASTAPI-UPLOAD-001
-- Location: `src/tenderguard/api/main.py:538`,
+- Location: `src/tenderguard/api/main.py:539`,
   `src/tenderguard/infrastructure/object_store.py:48`,
   `src/tenderguard/infrastructure/intake.py:567`
 - Evidence: the API copies the `UploadFile` spool into quarantine with a hard
@@ -61,7 +64,7 @@ qualification evidence are external controls and remain production blockers.
 ### SEC-003 - Authorisation is organisation-wide, not project-ACL based
 
 - Rule ID: FASTAPI-AUTHZ-001
-- Location: `src/tenderguard/application/projects.py:172`
+- Location: `src/tenderguard/application/projects.py:196`
 - Evidence: object access checks organisation ID and role, but no project
   membership or information-barrier table is evaluated.
 - Impact: an authorised estimator/reviewer in the same organisation can access
@@ -154,3 +157,8 @@ qualification evidence are external controls and remain production blockers.
   members through bounded disk-spilling spools, and requires an active
   document-processor qualification. Docker builds a parser-free `api` target
   and a distinct parser-equipped `document-worker` target.
+- Clean uploads are dispatched through expiring outbox and upload leases.
+  Parsing runs without an open database transaction; success requires the same
+  ownership token before the persisted deadline. Retry is bounded, exhausted
+  work retains its input blocker in a dead-letter state, and administrator
+  replay creates a new event instead of editing terminal PostgreSQL evidence.

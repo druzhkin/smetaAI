@@ -1,6 +1,7 @@
 # Internal audit — 2026-07-23
 
 This is a repository audit, not production acceptance evidence.
+Durable document-job findings were re-audited on 2026-07-24.
 
 ## Product audit
 
@@ -48,8 +49,10 @@ Open reliability risks:
 
 - mutating POST operations do not yet implement a persisted idempotency-key
   ledger;
-- outbox tables and connector contracts exist, but no production dispatcher,
-  retry/dead-letter operations, or replay qualification exists;
+- document intake now has leased outbox dispatch, bounded retry/dead-letter,
+  timeout checks, and audited administrator replay; other connector topics
+  still have no production dispatcher, and the external scheduler/sandbox
+  remains unqualified;
 - no load, soak, failover, backup-restore, or disaster-recovery result exists;
 - distributed locking and deadline behaviour under tender-day concurrency
   have not been qualified.
@@ -65,6 +68,9 @@ Resolved during the audit:
   size-limited quarantine streaming and bounded worker-local spooling;
 - untrusted parser calls were removed from the API path; exact-hash malware
   results and the worker parser both require active configured qualifications.
+- document parsing no longer holds a database transaction; stale leases are
+  reclaimable, terminal outbox events are immutable in PostgreSQL, and an
+  exhausted upload retains its blocker until a new audited replay succeeds.
 
 Open security blockers remain tracked in
 `security_best_practices_report.md`: deployment/qualification of the real

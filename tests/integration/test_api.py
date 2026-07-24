@@ -125,22 +125,21 @@ def _scan_and_process_upload(
     )
     assert scan.status_code == 200, scan.text
     assert scan.json()["status"] == "CLEAN"
-    with create_session_factory(engine).begin() as session:
-        result = DocumentProcessingService(
-            session=session,
-            settings=settings,
-            evidence_store=LocalObjectStore(settings.local_object_store_path),
-            quarantine_store=LocalObjectStore(settings.local_quarantine_store_path),
-        ).process(
-            actor=Actor(
-                actor_id="document-worker",
-                organization_id="org-1",
-                roles=frozenset({ActorRole.SYSTEM}),
-            ),
-            upload_id=str(upload["upload_id"]),
-            request_id=f"worker-{upload['upload_id']}",
-            reason="Execute in the test worker boundary",
-        )
+    result = DocumentProcessingService(
+        session_factory=create_session_factory(engine),
+        settings=settings,
+        evidence_store=LocalObjectStore(settings.local_object_store_path),
+        quarantine_store=LocalObjectStore(settings.local_quarantine_store_path),
+    ).process(
+        actor=Actor(
+            actor_id="document-worker",
+            organization_id="org-1",
+            roles=frozenset({ActorRole.SYSTEM}),
+        ),
+        upload_id=str(upload["upload_id"]),
+        request_id=f"worker-{upload['upload_id']}",
+        reason="Execute in the test worker boundary",
+    )
     payload = result.model_dump(mode="json")
     payload["document_id"] = payload["processed_document_id"]
     payload["document_revision_id"] = payload["processed_document_revision_id"]
@@ -423,12 +422,9 @@ def test_quarantine_fails_closed_before_scan_and_rejects_forged_or_infected_resu
         assert infected.json()["status"] == "REJECTED"
         assert infected.json()["failure_code"] == "MALWARE_DETECTED"
 
-        with (
-            create_session_factory(engine).begin() as session,
-            pytest.raises(ValueError, match="Only a qualified CLEAN"),
-        ):
+        with pytest.raises(ValueError, match="Only a qualified CLEAN"):
             DocumentProcessingService(
-                session=session,
+                session_factory=create_session_factory(engine),
                 settings=settings,
                 evidence_store=evidence_store,
                 quarantine_store=quarantine_store,

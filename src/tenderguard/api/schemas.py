@@ -108,6 +108,10 @@ class RecordMalwareScanResultRequest(ApiModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class RequeueDocumentProcessingRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class ReleaseGateResponse(ApiModel):
     decision: GateDecision
 

@@ -118,6 +118,7 @@ from .schemas import (
     ReleaseAttemptResponse,
     ReleaseGateResponse,
     ReleaseRequest,
+    RequeueDocumentProcessingRequest,
     ResolveConflictRequest,
     RiskCalculationResponse,
     RiskItemResponse,
@@ -611,6 +612,28 @@ def create_app(
                 project_id=project_id,
                 upload_id=upload_id,
                 result=payload.result,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return QuarantinedUploadResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/document-uploads/{upload_id}/requeue-processing",
+        response_model=QuarantinedUploadResponse,
+    )
+    def requeue_document_processing(
+        project_id: str,
+        upload_id: str,
+        payload: RequeueDocumentProcessingRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuarantinedUploadResponse:
+        with session.begin():
+            result = quarantine_service(session).requeue_processing(
+                actor=actor,
+                project_id=project_id,
+                upload_id=upload_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )

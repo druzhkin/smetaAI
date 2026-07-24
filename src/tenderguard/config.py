@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     document_processor_adapter: str | None = None
     document_processor_qualification_id: str | None = None
     document_worker_actor_id: str | None = None
+    document_job_lease_seconds: int = Field(default=900, ge=30, le=86_400)
+    document_job_timeout_seconds: int = Field(default=840, ge=1, le=86_399)
+    document_job_max_attempts: int = Field(default=3, ge=1, le=100)
+    document_job_retry_base_seconds: int = Field(default=30, ge=1, le=86_400)
+    document_job_retry_max_seconds: int = Field(default=900, ge=1, le=604_800)
 
     @model_validator(mode="after")
     def production_is_fail_closed(self) -> Settings:
@@ -94,6 +99,10 @@ class Settings(BaseSettings):
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         if self.allow_insecure_dev_auth and self.app_env not in {"development", "test"}:
             raise ValueError("Insecure authentication is allowed only in development/test")
+        if self.document_job_timeout_seconds >= self.document_job_lease_seconds:
+            raise ValueError("Document job timeout must be shorter than its lease")
+        if self.document_job_retry_max_seconds < self.document_job_retry_base_seconds:
+            raise ValueError("Document job retry maximum must be at least the base delay")
         return self
 
     @property

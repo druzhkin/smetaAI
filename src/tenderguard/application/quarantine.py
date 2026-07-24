@@ -25,6 +25,7 @@ from tenderguard.infrastructure.orm import (
     DocumentRevisionRow,
     DocumentRow,
     MalwareScanResultRow,
+    OutboxEventRow,
     QuarantinedUploadRow,
     VerificationFindingRow,
 )
@@ -80,6 +81,7 @@ class QuarantineService:
             QuarantineStatus.SCAN_FAILED.value,
             QuarantineStatus.PROCESSING.value,
             QuarantineStatus.PROCESSING_FAILED.value,
+            QuarantineStatus.PROCESSING_DEAD_LETTERED.value,
         }
         active_upload = self.session.scalar(
             select(QuarantinedUploadRow).where(
@@ -155,6 +157,13 @@ class QuarantineService:
             result_payload=None,
             failure_code=None,
             failure_detail=None,
+            processing_attempts=0,
+            processing_worker_id=None,
+            processing_lease_token=None,
+            processing_lease_expires_at=None,
+            processing_deadline_at=None,
+            processing_started_at=None,
+            processing_dead_lettered_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -327,6 +336,106 @@ class QuarantineService:
         self.session.flush()
         return self._view(upload)
 
+    def requeue_processing(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        upload_id: str,
+        request_id: str,
+        reason: str,
+    ) -> QuarantinedUploadView:
+        actor.require_any(ActorRole.ADMIN)
+        self._required_text(reason, "reason", 2000)
+        project_service = self._project_service()
+        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        upload = self.session.scalar(
+            select(QuarantinedUploadRow)
+            .where(
+                QuarantinedUploadRow.id == upload_id,
+                QuarantinedUploadRow.project_id == project_id,
+                QuarantinedUploadRow.organization_id == actor.organization_id,
+            )
+            .with_for_update()
+        )
+        if upload is None:
+            raise LookupError(upload_id)
+        if upload.status != QuarantineStatus.PROCESSING_DEAD_LETTERED.value:
+            raise ValueError("Only a dead-lettered document upload can be requeued")
+        clean_scan = self.session.scalar(
+            select(MalwareScanResultRow)
+            .where(
+                MalwareScanResultRow.quarantined_upload_id == upload.id,
+                MalwareScanResultRow.verdict == MalwareVerdict.CLEAN.value,
+                MalwareScanResultRow.scanned_object_hash == upload.object_hash,
+            )
+            .order_by(MalwareScanResultRow.recorded_at.desc())
+            .limit(1)
+        )
+        if clean_scan is None:
+            raise ValueError("Dead-lettered upload has no exact CLEAN scan evidence")
+        prior_dead_letter = self.session.scalar(
+            select(OutboxEventRow)
+            .where(
+                OutboxEventRow.topic == "document.upload.scan-clean",
+                OutboxEventRow.aggregate_id == upload.id,
+                OutboxEventRow.dead_lettered_at.is_not(None),
+            )
+            .order_by(OutboxEventRow.created_at.desc(), OutboxEventRow.id.desc())
+            .limit(1)
+        )
+        if prior_dead_letter is None:
+            raise RuntimeError("Dead-lettered upload has no terminal outbox evidence")
+        now = utc_now()
+        prior_attempts = upload.processing_attempts
+        prior_failure_code = upload.failure_code
+        upload.status = QuarantineStatus.CLEAN.value
+        upload.processing_attempts = 0
+        upload.processing_dead_lettered_at = None
+        upload.failure_code = None
+        upload.failure_detail = None
+        upload.updated_at = now
+        event_payload = {
+            "upload_id": upload.id,
+            "object_hash": upload.object_hash,
+            "clean_scan_result_id": clean_scan.id,
+            "prior_outbox_event_id": prior_dead_letter.id,
+            "prior_processing_attempts": prior_attempts,
+            "prior_failure_code": prior_failure_code,
+            "from_status": QuarantineStatus.PROCESSING_DEAD_LETTERED.value,
+            "to_status": QuarantineStatus.CLEAN.value,
+        }
+        project_service.record_event(
+            aggregate_type="quarantined_upload",
+            aggregate_id=upload.id,
+            event_type="document_processing_requeued",
+            actor=actor,
+            request_id=request_id,
+            reason=reason,
+            payload=event_payload,
+        )
+        project_service.record_event(
+            aggregate_type="project",
+            aggregate_id=upload.project_id,
+            event_type="document_processing_requeued",
+            actor=actor,
+            request_id=request_id,
+            reason=reason,
+            payload=event_payload,
+        )
+        project_service.enqueue_event(
+            topic="document.upload.scan-clean",
+            aggregate_id=upload.id,
+            payload={
+                "project_id": upload.project_id,
+                "upload_id": upload.id,
+                "object_hash": upload.object_hash,
+                "requeued_from_outbox_event_id": prior_dead_letter.id,
+            },
+        )
+        self.session.flush()
+        return self._view(upload)
+
     def _validate_scan_result(
         self,
         *,
@@ -422,6 +531,9 @@ class QuarantineService:
             candidate_document_set_revision_id=(upload.candidate_document_set_revision_id),
             manifest=result_payload.get("manifest"),
             failure_code=upload.failure_code,
+            processing_attempts=upload.processing_attempts,
+            processing_lease_expires_at=upload.processing_lease_expires_at,
+            processing_dead_lettered_at=upload.processing_dead_lettered_at,
             created_at=upload.created_at,
             updated_at=upload.updated_at,
         )

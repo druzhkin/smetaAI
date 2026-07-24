@@ -46,6 +46,30 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "qualified isolated document processor binding" in message
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        (
+            {"document_job_lease_seconds": 30, "document_job_timeout_seconds": 30},
+            "timeout must be shorter",
+        ),
+        (
+            {
+                "document_job_retry_base_seconds": 60,
+                "document_job_retry_max_seconds": 30,
+            },
+            "retry maximum",
+        ),
+    ],
+)
+def test_document_job_timing_configuration_fails_closed(
+    overrides: dict[str, int],
+    expected: str,
+) -> None:
+    with pytest.raises(ValidationError, match=expected):
+        Settings(**overrides)
+
+
 def test_production_docs_are_disabled_and_security_headers_are_present(
     tmp_path: Path,
 ) -> None:

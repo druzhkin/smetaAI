@@ -23,7 +23,7 @@ ENV PATH="/app/.venv/bin:${PATH}"
 
 USER tenderguard
 
-CMD ["tenderguard", "--help"]
+CMD ["tenderguard", "dispatch-document-intake", "--max-events", "1"]
 
 FROM source AS api
 

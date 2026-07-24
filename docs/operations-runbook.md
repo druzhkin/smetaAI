@@ -35,15 +35,38 @@ document revision until the upload status becomes `PROCESSED`.
 
 1. The scanner integration reads the quarantine object by its server-side
    identity and submits an exact-hash result as a `SYSTEM` identity.
-2. For `CLEAN`, dispatch
-   `tenderguard process-quarantined-upload --upload-id <id>` only into the
-   approved disposable worker profile built from Docker target
-   `document-worker`. Do not run this command in an API container.
-3. Poll the upload status endpoint. `REJECTED`, `SCAN_FAILED`, and
-   `PROCESSING_FAILED` are not successful intake.
-4. For an infected file, obtain a clean replacement from an authorised source.
+2. A `CLEAN` scan transaction creates `document.upload.scan-clean` in the
+   outbox. Run
+   `tenderguard dispatch-document-intake --max-events <bounded-count>` only in
+   the approved disposable profile built from Docker target
+   `document-worker`. The target defaults to one delivery per container.
+   `process-quarantined-upload --upload-id <id>` uses the same outbox claim
+   protocol for incident-specific execution; it is not a bypass.
+3. Each delivery obtains an expiring outbox lease and then a separate upload
+   lease. Object promotion and parsing run after the claim transaction commits.
+   Finalization succeeds only for the same lease token and before the persisted
+   deadline.
+4. Poll the upload status endpoint. `REJECTED`, `SCAN_FAILED`,
+   `PROCESSING_FAILED`, and `PROCESSING_DEAD_LETTERED` are not successful
+   intake. Failed deliveries use bounded exponential backoff; an expired lease
+   is reclaimable by another worker.
+5. On `PROCESSING_DEAD_LETTERED`, fix and evidence the scanner/processor/runtime
+   incident. An `ADMIN` may then call
+   `POST .../document-uploads/{id}/requeue-processing` with a specific reason.
+   Replay creates a new outbox event and preserves the old terminal event; it
+   does not change the malware verdict or register a document.
+6. For an infected file, obtain a clean replacement from an authorised source.
    Do not override the verdict. A replacement resolves the old blocker only
    when it is itself scanned and processed.
+
+Alert on stale leases, retry growth, any dead-letter, worker non-zero exit, and
+age of the oldest pending `document.upload.scan-clean` event. Do not edit
+`attempts`, lease columns, terminal timestamps, or upload status directly.
+
+Before applying the durable-job migration, stop document workers and verify
+that no upload is `PROCESSING`. The migration deliberately refuses an active
+job instead of fabricating or discarding its ownership state. A downgrade is
+also refused after lease/dead-letter history exists.
 
 Use separate object-store buckets and credentials for quarantine and evidence.
 The worker must have no unrestricted network egress and must be constrained by

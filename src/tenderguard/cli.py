@@ -7,9 +7,7 @@ from uuid import uuid4
 from sqlalchemy import text
 
 from tenderguard.config import get_settings
-from tenderguard.domain.enums import ActorRole
-from tenderguard.domain.quarantine import QuarantineStatus
-from tenderguard.infrastructure.auth import Actor
+from tenderguard.domain.jobs import DispatchDisposition
 from tenderguard.infrastructure.database import (
     CURRENT_SCHEMA_REVISION,
     create_database_engine,
@@ -19,7 +17,6 @@ from tenderguard.infrastructure.object_store import (
     build_object_store,
     build_quarantine_store,
 )
-from tenderguard.infrastructure.orm import QuarantinedUploadRow
 
 
 def doctor() -> int:
@@ -76,7 +73,7 @@ def doctor() -> int:
 
 def process_quarantined_upload(upload_id: str) -> int:
     try:
-        from tenderguard.application.document_processing import DocumentProcessingService
+        from tenderguard.application.document_jobs import DocumentIntakeDispatcher
     except ModuleNotFoundError as error:
         if error.name not in {"PIL", "openpyxl", "pypdf"}:
             raise
@@ -108,34 +105,91 @@ def process_quarantined_upload(upload_id: str) -> int:
     evidence_store = build_object_store(settings)
     quarantine_store = build_quarantine_store(settings)
     try:
-        with factory.begin() as session:
-            upload = session.get(QuarantinedUploadRow, upload_id)
-            if upload is None:
-                print(
-                    json.dumps(
-                        {"status": "NOT_FOUND", "upload_id": upload_id},
-                        sort_keys=True,
-                    )
-                )
-                return 2
-            actor = Actor(
-                actor_id=settings.document_worker_actor_id,
-                organization_id=upload.organization_id,
-                roles=frozenset({ActorRole.SYSTEM}),
+        result = DocumentIntakeDispatcher(
+            session_factory=factory,
+            settings=settings,
+            evidence_store=evidence_store,
+            quarantine_store=quarantine_store,
+        ).dispatch_next(
+            worker_id=f"document-worker-instance-{uuid4()}",
+            upload_id=upload_id,
+        )
+        print(result.model_dump_json(indent=2))
+        return 0 if result.disposition is DispatchDisposition.PROCESSED else 2
+    finally:
+        engine.dispose()
+
+
+def dispatch_document_intake(max_events: int) -> int:
+    try:
+        from tenderguard.application.document_jobs import DocumentIntakeDispatcher
+    except ModuleNotFoundError as error:
+        if error.name not in {"PIL", "openpyxl", "pypdf"}:
+            raise
+        print(
+            json.dumps(
+                {
+                    "status": "BLOCKED",
+                    "detail": (
+                        "document-worker parser dependencies are not installed; "
+                        "use the document-worker image"
+                    ),
+                },
+                sort_keys=True,
             )
-            result = DocumentProcessingService(
-                session=session,
-                settings=settings,
-                evidence_store=evidence_store,
-                quarantine_store=quarantine_store,
-            ).process(
-                actor=actor,
-                upload_id=upload_id,
-                request_id=f"worker-{uuid4()}",
-                reason="Qualified isolated document-intake worker execution",
+        )
+        return 2
+    if max_events < 1 or max_events > 10_000:
+        print(
+            json.dumps(
+                {"status": "BLOCKED", "detail": "max-events must be between 1 and 10000"},
+                sort_keys=True,
             )
-            print(result.model_dump_json(indent=2))
-            return 0 if result.status is QuarantineStatus.PROCESSED else 2
+        )
+        return 2
+    settings = get_settings()
+    if not settings.document_worker_actor_id:
+        print(
+            json.dumps(
+                {"status": "BLOCKED", "detail": "document worker actor is not configured"},
+                sort_keys=True,
+            )
+        )
+        return 2
+    engine = create_database_engine(settings)
+    factory = create_session_factory(engine)
+    dispatcher = DocumentIntakeDispatcher(
+        session_factory=factory,
+        settings=settings,
+        evidence_store=build_object_store(settings),
+        quarantine_store=build_quarantine_store(settings),
+    )
+    worker_instance_id = f"document-worker-instance-{uuid4()}"
+    counts = {item.value: 0 for item in DispatchDisposition}
+    exit_code = 0
+    try:
+        for _ in range(max_events):
+            result = dispatcher.dispatch_next(
+                worker_id=worker_instance_id,
+            )
+            counts[result.disposition.value] += 1
+            if result.disposition is DispatchDisposition.IDLE:
+                break
+            if result.disposition in {
+                DispatchDisposition.RETRY_SCHEDULED,
+                DispatchDisposition.DEAD_LETTERED,
+            }:
+                exit_code = 2
+        print(
+            json.dumps(
+                {
+                    "status": "COMPLETED" if exit_code == 0 else "ATTENTION_REQUIRED",
+                    "counts": counts,
+                },
+                sort_keys=True,
+            )
+        )
+        return exit_code
     finally:
         engine.dispose()
 
@@ -149,11 +203,18 @@ def main() -> None:
         help="Process one CLEAN upload in the isolated document worker runtime",
     )
     process_parser.add_argument("--upload-id", required=True)
+    dispatch_parser = subcommands.add_parser(
+        "dispatch-document-intake",
+        help="Claim and deliver pending clean-upload outbox events",
+    )
+    dispatch_parser.add_argument("--max-events", type=int, default=1)
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         raise SystemExit(doctor())
     if arguments.command == "process-quarantined-upload":
         raise SystemExit(process_quarantined_upload(arguments.upload_id))
+    if arguments.command == "dispatch-document-intake":
+        raise SystemExit(dispatch_document_intake(arguments.max_events))
 
 
 if __name__ == "__main__":

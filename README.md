@@ -55,7 +55,9 @@ The repository currently connects and integration-tests:
 - document intake, revision-set confirmation, qualified extraction evidence,
   reconciliation, review-task-backed conflict resolution, and source lineage;
 - streamed, separately stored quarantine uploads, qualification-bound malware
-  results, and a worker-only bounded document/archive parser entry point;
+  results, durable outbox leases/retries/dead letters, controlled replay, and a
+  worker-only bounded document/archive parser entry point with short database
+  transactions;
 - fail-closed invalidation of derived data when a newer current document
   revision appears;
 - revisioned project-passport facts, BoQ lines, quantity verification, planned
@@ -83,7 +85,7 @@ or its external operational environment has been delivered.
 ## Local development
 
 ```powershell
-uv sync --extra dev --no-editable
+uv sync --extra dev --no-editable --reinstall-package tenderguard
 docker compose up -d postgres minio
 uv run alembic upgrade head
 uv run uvicorn tenderguard.api.main:app --reload
@@ -91,7 +93,9 @@ uv run pytest
 ```
 
 On Windows, `--no-editable` also avoids a Python 3.11 `.pth` locale problem
-when the checkout path contains Cyrillic characters.
+when the checkout path contains Cyrillic characters. Keep
+`--reinstall-package tenderguard` after source changes so tests do not import a
+stale non-editable wheel.
 
 Development authentication is disabled by default. Set
 `ALLOW_INSECURE_DEV_AUTH=true` only on an isolated workstation; production
@@ -102,7 +106,8 @@ startup rejects it.
 This repository contains a substantial fail-closed application core, but it is
 not the complete target system and is not proof of production acceptance. Live
 bid release remains blocked until the organisation supplies and qualifies the
-malware scanner and isolated worker runtime, normative engine, OCR/visual
+malware scanner and production scheduler/isolated worker runtime, normative
+engine, OCR/visual
 extraction and market/RFQ adapters, approved
 methodology and financial thresholds, production identity and infrastructure,
 enterprise integrations, historical validation set, operating procedures,
