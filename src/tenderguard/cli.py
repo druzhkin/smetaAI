@@ -31,6 +31,7 @@ def doctor() -> int:
         "object_store_worm": False,
         "quarantine_store": False,
         "audit_anchor_valid": False,
+        "idempotency_enforced": settings.require_idempotency_keys,
         "oidc_configured": bool(
             settings.allow_insecure_dev_auth
             or (settings.oidc_issuer and settings.oidc_audience and settings.oidc_jwks_url)
@@ -98,6 +99,7 @@ def doctor() -> int:
                 "object_store_worm",
                 "quarantine_store",
                 "audit_anchor_valid",
+                "idempotency_enforced",
                 "oidc_configured",
                 "normative_engine_qualified",
             )

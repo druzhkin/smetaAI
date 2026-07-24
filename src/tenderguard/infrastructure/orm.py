@@ -715,10 +715,58 @@ class AuditAnchorReceiptRow(Base):
     __table_args__ = (Index("ix_audit_anchor_receipts_anchored_at", "anchored_at"),)
 
 
+class IdempotencyRecordRow(Base):
+    __tablename__ = "idempotency_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_method: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    initial_request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_media_type: Mapped[str | None] = mapped_column(String(200))
+    response_payload: Mapped[Any | None] = mapped_column(JSON(none_as_null=True))
+    response_has_body: Mapped[bool | None] = mapped_column(Boolean)
+    response_headers: Mapped[dict[str, str] | None] = mapped_column(JSON(none_as_null=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "actor_id",
+            "idempotency_key",
+            name="uq_idempotency_actor_key",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'COMPLETED')",
+            name="ck_idempotency_status",
+        ),
+        CheckConstraint(
+            "("
+            "status = 'PENDING' AND response_status IS NULL "
+            "AND response_has_body IS NULL AND response_headers IS NULL "
+            "AND completed_at IS NULL"
+            ") OR ("
+            "status = 'COMPLETED' AND response_status IS NOT NULL "
+            "AND response_has_body IS NOT NULL AND response_headers IS NOT NULL "
+            "AND completed_at IS NOT NULL"
+            ")",
+            name="ck_idempotency_completion",
+        ),
+        Index("ix_idempotency_created_at", "created_at"),
+    )
+
+
 class OutboxEventRow(Base):
     __tablename__ = "outbox_events"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deduplication_key: Mapped[str] = mapped_column(String(200), nullable=False)
     topic: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     aggregate_id: Mapped[str] = mapped_column(String(128), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -734,6 +782,10 @@ class OutboxEventRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
+        UniqueConstraint(
+            "deduplication_key",
+            name="uq_outbox_deduplication_key",
+        ),
         CheckConstraint(
             "("
             "locked_by IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL"

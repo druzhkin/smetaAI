@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
     max_parser_spool_memory_bytes: int = Field(default=8 * 1024 * 1024, gt=0)
     max_scan_report_bytes: int = Field(default=1024 * 1024, gt=0)
+    max_api_request_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
     max_archive_depth: int = Field(default=3, ge=0, le=10)
     max_archive_files: int = Field(default=10_000, gt=0)
     max_archive_unpacked_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     audit_anchor_public_key_b64: str | None = None
     audit_anchor_max_age_seconds: int | None = Field(default=None, ge=60)
     audit_operator_organization_id: str | None = None
+    require_idempotency_keys: bool = False
     export_signing_key_id: str | None = None
     export_signing_private_key_b64: SecretStr | None = None
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "testserver"]
@@ -117,6 +119,8 @@ class Settings(BaseSettings):
                 problems.append("external audit anchor configuration is incomplete")
             if not self.audit_operator_organization_id:
                 problems.append("audit operator organization is not configured")
+            if not self.require_idempotency_keys:
+                problems.append("persisted idempotency keys are not required")
             if not self.export_signing_key_id or not self.export_signing_private_key_b64:
                 problems.append("Ed25519 export signing key configuration is incomplete")
             if not self.trusted_hosts or "*" in self.trusted_hosts:

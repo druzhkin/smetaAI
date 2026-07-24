@@ -82,6 +82,8 @@ The repository currently connects and integration-tests:
 - versioned audit HMAC keys, fail-closed legacy migration, content-addressed
   global checkpoints, four-eyes external Ed25519 receipts, and readiness that
   re-verifies current history plus the live evidence-bucket WORM policy;
+- persisted actor-scoped idempotency for every mutating API operation and a
+  deduplicated transactional `audit.event.recorded` outbox stream;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -135,3 +137,5 @@ The untrusted-file boundary is specified in the
 [quarantined intake contract](docs/quarantined-intake.md).
 Audit checkpoint, anchoring, WORM, and key-rotation controls are specified in
 [the audit-integrity runbook](docs/audit-integrity.md).
+Mutation retry and outbox delivery semantics are specified in
+[the reliable-mutations contract](docs/reliable-mutations.md).

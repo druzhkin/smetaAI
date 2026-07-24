@@ -30,6 +30,7 @@ all operational qualification evidence remain open.
 | Scenario | approved definitions over a fixed base snapshot plus independent recalculation | reject unknown or unsupported overrides |
 | Export | fixed released snapshot, mandatory content hashes, Ed25519 signature, immutable artifact metadata | refuse generation or verification |
 | Audit integrity | per-key hash chains, WORM checkpoint, independent Ed25519 receipt, full current-history verification | readiness 503; investigate tampering or stale anchor |
+| Mutation delivery | persisted request fingerprint/response plus unique transactional outbox deduplication key | replay exact result or reject conflicting key; at-least-once consumer deduplication |
 | Contract | revisioned evidence-backed obligations tied to approved cost impacts | unresolved contract risk hard stop |
 | Risk | verified register and version-bound deterministic reserve | missing or stale reserve hard stop |
 | Approval | configurable tasks and four-eyes rule | approval hard stop |

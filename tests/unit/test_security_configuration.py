@@ -67,6 +67,7 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "development audit signing key" in message
     assert "external audit anchor configuration" in message
     assert "object-lock retention policy" in message
+    assert "persisted idempotency keys" in message
     assert "Ed25519 export signing key" in message
     assert "PostgreSQL is required" in message
     assert "qualified malware scanner binding" in message
@@ -125,6 +126,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         audit_anchor_public_key_b64=anchor_public_key_b64,
         audit_anchor_max_age_seconds=3600,
         audit_operator_organization_id="org-1",
+        require_idempotency_keys=True,
         export_signing_key_id="test-export-key-1",
         export_signing_private_key_b64="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         s3_required_object_lock_mode="GOVERNANCE",
@@ -280,6 +282,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         assert ready.json()["quarantine_store"] is True
         assert ready.json()["object_store_worm"] is True
         assert ready.json()["audit_anchor_valid"] is True
+        assert ready.json()["idempotency_enforced"] is True
         assert ready.json()["normative_engine_qualified"] is True
         assert ready.json()["malware_scanner_qualified"] is True
         assert ready.json()["document_processor_qualified"] is True
@@ -370,4 +373,30 @@ def test_scan_result_route_has_a_smaller_declared_body_limit(tmp_path: Path) -> 
             headers={"Content-Length": str(128 + 64 * 1024 + 1)},
             content=b"{}",
         )
+        assert response.status_code == 413
+
+
+def test_chunked_api_body_is_bounded_without_content_length(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        max_api_request_bytes=32,
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+        quarantine_store=LocalObjectStore(tmp_path / "quarantine"),
+    )
+    with TestClient(app) as client:
+        request = client.build_request(
+            "POST",
+            "/v1/projects",
+            headers={"Content-Type": "application/json"},
+            content=(chunk for chunk in (b"{" + b"x" * 20, b"x" * 20 + b"}")),
+        )
+        assert "content-length" not in request.headers
+        response = client.send(request)
         assert response.status_code == 413

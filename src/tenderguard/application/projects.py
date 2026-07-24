@@ -1971,6 +1971,21 @@ class ProjectService:
         # Multiple audit events may be emitted in one transaction. Flush so
         # the next sequence lookup observes the pending event.
         self.session.flush()
+        self._outbox(
+            topic="audit.event.recorded",
+            aggregate_id=event.aggregate_id,
+            deduplication_key=f"audit-event:{event.event_id}",
+            payload={
+                "organization_id": actor.organization_id,
+                "audit_event_id": event.event_id,
+                "aggregate_type": event.aggregate_type,
+                "aggregate_id": event.aggregate_id,
+                "sequence": event.sequence,
+                "event_type": event.event_type,
+                "event_hash": event.event_hash,
+                "occurred_at": event.occurred_at,
+            },
+        )
         return event
 
     @staticmethod
@@ -1994,14 +2009,23 @@ class ProjectService:
             signature=row.signature,
         )
 
-    def _outbox(self, *, topic: str, aggregate_id: str, payload: dict[str, Any]) -> None:
+    def _outbox(
+        self,
+        *,
+        topic: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        deduplication_key: str | None = None,
+    ) -> None:
         now = utc_now()
+        event_id = f"outbox-{uuid4()}"
         self.session.add(
             OutboxEventRow(
-                id=f"outbox-{uuid4()}",
+                id=event_id,
+                deduplication_key=deduplication_key or f"outbox-event:{event_id}",
                 topic=topic,
                 aggregate_id=aggregate_id,
-                payload=payload,
+                payload=canonical_data(payload),
                 attempts=0,
                 available_at=now,
                 created_at=now,

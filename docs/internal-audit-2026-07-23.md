@@ -38,6 +38,9 @@ Resolved during the audit:
   controlled-version binding, and the calculation run linked by the snapshot;
 - readiness returns HTTP 503 when a mandatory runtime dependency or
   authentication configuration is unavailable;
+- mutating APIs atomically persist their actor-scoped idempotency ledger,
+  business writes, audit events, universal deduplicated outbox messages, and
+  replay response; JSON/multipart retries and rollback are negatively tested;
 - native export generation is idempotent and verification detects package,
   manifest, signature, source-snapshot, release-decision, and audit-chain
   divergence;
@@ -47,12 +50,11 @@ Resolved during the audit:
 
 Open reliability risks:
 
-- mutating POST operations do not yet implement a persisted idempotency-key
-  ledger;
 - document intake now has leased outbox dispatch, bounded retry/dead-letter,
-  timeout checks, and audited administrator replay; other connector topics
-  still have no production dispatcher, and the external scheduler/sandbox
-  remains unqualified;
+  timeout checks, and audited administrator replay; all audit events now enter
+  a deduplicated transactional outbox, but other topics still have no
+  production dispatcher/inbox, and the external scheduler/sandbox remains
+  unqualified;
 - no load, soak, failover, backup-restore, or disaster-recovery result exists;
 - distributed locking and deadline behaviour under tender-day concurrency
   have not been qualified.

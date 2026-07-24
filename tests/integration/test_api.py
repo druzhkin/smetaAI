@@ -260,22 +260,36 @@ def test_corrupt_archive_moves_draft_project_to_documents_incomplete(
             headers=headers,
             json={"code": "T-2", "name": "Broken input", "reason": "Register"},
         ).json()
+        upload_headers = {
+            **headers,
+            "Idempotency-Key": "corrupt-archive-upload-0001",
+        }
+        upload_form = {
+            "logical_key": "tender-package",
+            "title": "Tender package",
+            "document_type": "TENDER_PACKAGE",
+            "revision_label": "1",
+            "reason": "Initial upload",
+            "critical": "true",
+        }
         response = client.post(
             f"/v1/projects/{project['id']}/documents",
-            headers=headers,
-            data={
-                "logical_key": "tender-package",
-                "title": "Tender package",
-                "document_type": "TENDER_PACKAGE",
-                "revision_label": "1",
-                "reason": "Initial upload",
-                "critical": "true",
-            },
+            headers=upload_headers,
+            data=upload_form,
             files={"upload": ("package.zip", b"not-a-valid-zip", "application/zip")},
         )
         assert response.status_code == 202
         payload = response.json()
         assert payload["status"] == "QUARANTINED"
+        replay = client.post(
+            f"/v1/projects/{project['id']}/documents",
+            headers=upload_headers,
+            data=upload_form,
+            files={"upload": ("package.zip", b"not-a-valid-zip", "application/zip")},
+        )
+        assert replay.status_code == 202
+        assert replay.json() == payload
+        assert replay.headers["Idempotency-Replayed"] == "true"
         processed = _scan_and_process_upload(
             client=client,
             engine=engine,

@@ -477,6 +477,7 @@ class ReadinessResponse(ApiModel):
     object_store_worm: bool
     quarantine_store: bool
     authentication_configured: bool
+    idempotency_enforced: bool
     audit_anchor_valid: bool
     normative_engine_qualified: bool
     malware_scanner_qualified: bool

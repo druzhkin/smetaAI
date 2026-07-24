@@ -29,7 +29,7 @@ Status values:
 | 19 independent verification | validation | separate recalculation, mismatch and snapshot controls (`APPLICATION_SLICE`) |
 | 20 expert approval | workflow | version-bound task planning, evidence-required decisions and four-eyes checks (`APPLICATION_SLICE`); organisation policy qualification remains open |
 | 21 audit | audit | versioned-key hash chains, verified legacy migration, immutable global checkpoints, four-eyes Ed25519 external receipts, full current-history verification, snapshot-to-document lineage, and live object-lock readiness enforcement (`APPLICATION_CORE`); production anchor provider, WORM evidence and drills (`QUALIFICATION`) |
-| 22 export/integration | integration | deterministic Ed25519-signed estimate/audit package, immutable metadata, verified download and transactional delivery event (`APPLICATION_CORE`); enterprise delivery connectors and external trust registry (`PORT`, `QUALIFICATION`) |
+| 22 export/integration | integration | deterministic Ed25519-signed estimate/audit package, persisted mutation idempotency, immutable metadata, verified download, unique consumer deduplication keys and universal transactional audit-event outbox (`APPLICATION_CORE`); enterprise delivery dispatchers/inboxes and external trust registry (`PORT`, `QUALIFICATION`) |
 | 23-24 actuals and calibration | actuals | revisioned verified facts, fixed-snapshot comparison, mandatory variance reasons and methodology-owner calibration approval (`APPLICATION_CORE`); factual feed (`PORT`) |
 
 ## Verification contours

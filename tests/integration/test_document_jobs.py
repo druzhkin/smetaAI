@@ -194,6 +194,7 @@ def test_outbox_lease_reclaim_rejects_stale_owner_and_dead_letters(
         session.add(
             OutboxEventRow(
                 id="outbox-test",
+                deduplication_key="test-outbox-event",
                 topic="document.upload.scan-clean",
                 aggregate_id="upload-test",
                 payload={"upload_id": "upload-test", "project_id": "project-test"},

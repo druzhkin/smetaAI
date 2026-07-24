@@ -111,14 +111,16 @@ qualification evidence are external controls and remain production blockers.
 
 - Rule ID: FASTAPI-RES-001
 - Location: `src/tenderguard/api/security.py:8`
-- Evidence: the application checks declared body size but has no distributed
-  request/actor quota, and chunked-body enforcement is delegated to ingress.
+- Evidence: the application checks declared and actually streamed body size,
+  including chunked JSON and multipart requests, but has no distributed
+  request/actor quota.
 - Impact: authenticated or unauthenticated request floods can consume workers,
   OIDC/JWKS calls, multipart parsing, and database connections.
-- Fix: configure ingress body limits, timeouts, connection limits, per-actor and
-  per-organisation rate limits, and upload concurrency quotas; verify with load
-  and abuse tests.
-- Status: **OPEN**.
+- Fix: configure independent ingress body limits, timeouts, connection limits,
+  per-actor and per-organisation distributed rate limits, and upload
+  concurrency quotas; verify with load and abuse tests.
+- Status: **APPLICATION BODY LIMIT REMEDIATED; distributed/edge controls
+  OPEN**.
 
 ## Remediated during review
 
@@ -127,7 +129,8 @@ qualification evidence are external controls and remain production blockers.
 - The development audit signing key is rejected in staging/production.
 - JWT signature, algorithm allowlist, issuer, audience, expiry, issued-at, and
   subject are validated.
-- Security response headers and request Content-Length limits are installed.
+- Security response headers and declared/streamed request-size limits are
+  installed.
 - Unknown, corrupt, unsafe image, protected, and embedded-object inputs produce
   blocking findings.
 - Atomic calculation inputs now resolve their claimed evidence in the database

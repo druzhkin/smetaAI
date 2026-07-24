@@ -32,6 +32,12 @@ from tenderguard.application.contracts import ContractService
 from tenderguard.application.evidence import EvidenceService
 from tenderguard.application.exports import ExportIntegrityError, ExportPackageService
 from tenderguard.application.governance import GovernanceService
+from tenderguard.application.idempotency import (
+    IdempotentAPIRoute,
+    mutation_transaction,
+    request_scoped_actor,
+    request_scoped_session,
+)
 from tenderguard.application.lineage import LineageService
 from tenderguard.application.passport import PassportService
 from tenderguard.application.pricing import PricingService
@@ -195,12 +201,14 @@ def create_app(
     application.add_middleware(
         RequestSizeLimitMiddleware,
         max_bytes=resolved_settings.max_upload_bytes + 1024 * 1024,
+        max_non_multipart_bytes=resolved_settings.max_api_request_bytes,
         path_suffix_limits={
             "/scan-results": resolved_settings.max_scan_report_bytes + 64 * 1024,
         },
     )
     application.add_middleware(SecurityHeadersMiddleware)
     application.add_middleware(RequestLoggingMiddleware)
+    application.router.route_class = IdempotentAPIRoute
     application.state.settings = resolved_settings
     application.state.engine = resolved_engine
     application.state.session_factory = session_factory
@@ -208,7 +216,11 @@ def create_app(
     application.state.quarantine_store = resolved_quarantine_store
     application.state.authenticator = authenticator
 
-    def get_session() -> Iterator[Session]:
+    def get_session(request: Request) -> Iterator[Session]:
+        shared_session = request_scoped_session(request)
+        if shared_session is not None:
+            yield shared_session
+            return
         session = session_factory()
         try:
             yield session
@@ -216,11 +228,15 @@ def create_app(
             session.close()
 
     def get_actor(
+        request: Request,
         authorization: Annotated[str | None, Header()] = None,
         x_dev_actor: Annotated[str | None, Header()] = None,
         x_dev_organization: Annotated[str | None, Header()] = None,
         x_dev_roles: Annotated[str | None, Header()] = None,
     ) -> Actor:
+        shared_actor = request_scoped_actor(request)
+        if shared_actor is not None:
+            return shared_actor
         return authenticator.authenticate(
             authorization=authorization,
             dev_actor=x_dev_actor,
@@ -436,6 +452,9 @@ def create_app(
         )
         if not auth_configured:
             notes.append("OIDC is not configured")
+        idempotency_enforced = resolved_settings.require_idempotency_keys
+        if not idempotency_enforced:
+            notes.append("persisted idempotency keys are not enforced")
         normative_engine_qualified = False
         if schema_current:
             try:
@@ -532,6 +551,7 @@ def create_app(
             and store_worm_ok
             and quarantine_store_ok
             and auth_configured
+            and idempotency_enforced
             and normative_engine_qualified
             and audit_anchor_valid
             and malware_scanner_qualified
@@ -548,6 +568,7 @@ def create_app(
             object_store_worm=store_worm_ok,
             quarantine_store=quarantine_store_ok,
             authentication_configured=bool(auth_configured),
+            idempotency_enforced=idempotency_enforced,
             audit_anchor_valid=audit_anchor_valid,
             normative_engine_qualified=normative_engine_qualified,
             malware_scanner_qualified=malware_scanner_qualified,
@@ -567,7 +588,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> AuditCheckpointResponse:
-        with session.begin():
+        with mutation_transaction(session):
             checkpoint = audit_integrity_service(session).create_checkpoint(
                 actor=actor,
                 request_id=request.state.request_id,
@@ -587,7 +608,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> AuditAnchorReceiptResponse:
-        with session.begin():
+        with mutation_transaction(session):
             receipt = audit_integrity_service(session).register_receipt(
                 actor=actor,
                 checkpoint_id=checkpoint_id,
@@ -622,7 +643,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectView:
-        with session.begin():
+        with mutation_transaction(session):
             return service(session).create_project(
                 actor=actor,
                 code=payload.code,
@@ -664,7 +685,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectMembershipView:
-        with session.begin():
+        with mutation_transaction(session):
             return service(session).grant_project_membership(
                 actor=actor,
                 project_id=project_id,
@@ -687,7 +708,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectMembershipView:
-        with session.begin():
+        with mutation_transaction(session):
             return service(session).revoke_project_membership(
                 actor=actor,
                 project_id=project_id,
@@ -717,7 +738,7 @@ def create_app(
     ) -> QuarantinedUploadResponse:
         try:
             upload.file.seek(0)
-            with session.begin():
+            with mutation_transaction(session):
                 result = quarantine_service(session).receive(
                     actor=actor,
                     project_id=project_id,
@@ -771,7 +792,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> QuarantinedUploadResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = quarantine_service(session).record_scan_result(
                 actor=actor,
                 project_id=project_id,
@@ -794,7 +815,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> QuarantinedUploadResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = quarantine_service(session).requeue_processing(
                 actor=actor,
                 project_id=project_id,
@@ -815,7 +836,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectView:
-        with session.begin():
+        with mutation_transaction(session):
             return service(session).confirm_document_set(
                 actor=actor,
                 project_id=project_id,
@@ -835,7 +856,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectView:
-        with session.begin():
+        with mutation_transaction(session):
             return service(session).transition(
                 actor=actor,
                 project_id=project_id,
@@ -874,7 +895,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ReleaseAttemptResponse:
-        with session.begin():
+        with mutation_transaction(session):
             project, decision = service(session).attempt_bid_release(
                 actor=actor,
                 project_id=project_id,
@@ -895,7 +916,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ReleaseAttemptResponse:
-        with session.begin():
+        with mutation_transaction(session):
             project, decision = service(session).attempt_internal_release(
                 actor=actor,
                 project_id=project_id,
@@ -916,7 +937,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ControlledVersionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             version = governance_service(session).create_version(
                 actor=actor,
                 kind=payload.kind,
@@ -938,7 +959,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ControlledVersionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             version = governance_service(session).approve_version(
                 actor=actor,
                 version_id=version_id,
@@ -958,7 +979,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> AdapterQualificationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             qualification = governance_service(session).activate_adapter_qualification(
                 actor=actor,
                 version_id=version_id,
@@ -988,7 +1009,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> None:
-        with session.begin():
+        with mutation_transaction(session):
             governance_service(session).bind_to_project(
                 actor=actor,
                 project_id=project_id,
@@ -1010,7 +1031,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ObservationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             observation = evidence_service(session).record_observation(
                 actor=actor,
                 project_id=project_id,
@@ -1031,7 +1052,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ReconciliationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             outcome = evidence_service(session).reconcile(
                 actor=actor,
                 project_id=project_id,
@@ -1054,7 +1075,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ConflictResolutionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = evidence_service(session).resolve_conflict(
                 actor=actor,
                 project_id=project_id,
@@ -1076,7 +1097,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> PassportFactResponse:
-        with session.begin():
+        with mutation_transaction(session):
             fact = passport_service(session).submit_fact(
                 actor=actor,
                 project_id=project_id,
@@ -1098,7 +1119,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> PassportFactVerificationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             fact, validation = passport_service(session).verify_fact(
                 actor=actor,
                 project_id=project_id,
@@ -1119,7 +1140,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> PassportValidationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             validation = passport_service(session).validate_current(
                 actor=actor,
                 project_id=project_id,
@@ -1140,7 +1161,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> BoqLineResponse:
-        with session.begin():
+        with mutation_transaction(session):
             line = boq_service(session).create_line(
                 actor=actor,
                 project_id=project_id,
@@ -1162,7 +1183,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> BoqLineResponse:
-        with session.begin():
+        with mutation_transaction(session):
             line = boq_service(session).verify_line(
                 actor=actor,
                 project_id=project_id,
@@ -1185,7 +1206,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> QuantityExecutionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = boq_service(session).record_quantity(
                 actor=actor,
                 project_id=project_id,
@@ -1207,7 +1228,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ScopeRunResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = boq_service(session).run_scope_completeness(
                 actor=actor,
                 project_id=project_id,
@@ -1229,7 +1250,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> NomenclatureMatchResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = pricing_service(session).assess_nomenclature(
                 actor=actor,
                 project_id=project_id,
@@ -1252,7 +1273,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> NomenclatureMatchResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = pricing_service(session).propose_analogue(
                 actor=actor,
                 project_id=project_id,
@@ -1275,7 +1296,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> NomenclatureMatchResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = pricing_service(session).finalize_analogue(
                 actor=actor,
                 project_id=project_id,
@@ -1297,7 +1318,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> PriceQuoteResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = pricing_service(session).record_quote(
                 actor=actor,
                 project_id=project_id,
@@ -1319,7 +1340,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> NormalizedPriceResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = pricing_service(session).normalize_price(
                 actor=actor,
                 project_id=project_id,
@@ -1341,7 +1362,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> PriceDecisionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = pricing_service(session).evaluate_item_price(
                 actor=actor,
                 project_id=project_id,
@@ -1364,7 +1385,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ContractTermResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = contract_service(session).submit_term(
                 actor=actor,
                 project_id=project_id,
@@ -1386,7 +1407,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ContractTermValidationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             term, validation = contract_service(session).verify_term(
                 actor=actor,
                 project_id=project_id,
@@ -1409,7 +1430,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ContractTermResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = contract_service(session).propose_cost_impact(
                 actor=actor,
                 project_id=project_id,
@@ -1432,7 +1453,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ContractTermValidationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             term, validation = contract_service(session).finalize_cost_impact(
                 actor=actor,
                 project_id=project_id,
@@ -1453,7 +1474,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ContractValidationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = contract_service(session).validate_current(
                 actor=actor,
                 project_id=project_id,
@@ -1474,7 +1495,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> RiskItemResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = risk_service(session).submit_risk(
                 actor=actor,
                 project_id=project_id,
@@ -1496,7 +1517,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> RiskItemResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = risk_service(session).verify_risk(
                 actor=actor,
                 project_id=project_id,
@@ -1518,7 +1539,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> RiskCalculationResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = risk_service(session).calculate_reserve(
                 actor=actor,
                 project_id=project_id,
@@ -1539,7 +1560,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ActualRecordResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = actuals_service(session).record_actual(
                 actor=actor,
                 project_id=project_id,
@@ -1561,7 +1582,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ActualRecordResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = actuals_service(session).verify_actual(
                 actor=actor,
                 project_id=project_id,
@@ -1583,7 +1604,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ActualComparisonResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = actuals_service(session).compare_to_forecast(
                 actor=actor,
                 project_id=project_id,
@@ -1606,7 +1627,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> CalibrationApprovalResponse:
-        with session.begin():
+        with mutation_transaction(session):
             example = actuals_service(session).approve_calibration_example(
                 actor=actor,
                 project_id=project_id,
@@ -1627,7 +1648,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ApprovalPlanResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = approval_service(session).plan(
                 actor=actor,
                 project_id=project_id,
@@ -1649,7 +1670,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ApprovalDecisionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             decision = approval_service(session).decide(
                 actor=actor,
                 project_id=project_id,
@@ -1671,7 +1692,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> CalculationExecutionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = CalculationService(
                 session=session,
                 settings=resolved_settings,
@@ -1699,7 +1720,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ScenarioExecutionResponse:
-        with session.begin():
+        with mutation_transaction(session):
             result = scenario_service(session).execute(
                 actor=actor,
                 project_id=project_id,
@@ -1721,7 +1742,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ExportArtifactResponse:
-        with session.begin():
+        with mutation_transaction(session):
             artifact = export_service(session).generate(
                 actor=actor,
                 project_id=project_id,

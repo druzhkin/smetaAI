@@ -303,6 +303,7 @@ class ExportPackageService:
         self.session.add(
             OutboxEventRow(
                 id=f"outbox-{uuid4()}",
+                deduplication_key=f"export-artifact:{artifact.id}",
                 topic="export.package.generated",
                 aggregate_id=artifact.id,
                 payload={

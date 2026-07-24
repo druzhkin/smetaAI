@@ -56,8 +56,8 @@ the last recorded owner but cannot repair an IdP-disabled sole owner.
   authentication is configured, the normative engine, malware scanner, and
   document processor are qualified, the worker actor is configured, the
   Ed25519 export signing key is valid, and a fresh external audit receipt
-  validates against the complete current audit history. It returns HTTP 503
-  otherwise.
+  validates against the complete current audit history, and persisted
+  idempotency is mandatory for mutations. It returns HTTP 503 otherwise.
 - Operational readiness remains distinct from bid authority. Project-specific
   document, evidence, calculation, approval, snapshot, and release hard stops
   are re-evaluated separately. Staging/production release also rechecks
@@ -137,6 +137,19 @@ The factual observation must be verified, the variance must be classified
 against a fixed snapshot input, and a different methodology owner must approve
 the resulting calibration example before it is admitted to a training or
 benchmark dataset.
+
+## Mutation retries and outbox delivery
+
+All production mutation clients must send a stable `Idempotency-Key` for the
+logical action and reuse it only when retrying that exact method/path/body. A
+`409` means the key was reused for different content or an operation is still
+in progress; do not generate a new key blindly when the first outcome is
+unknown. Verify the original request and ledger.
+
+Outbox delivery is at least once. Consumers must deduplicate on the supplied
+`deduplication_key`, not on timing or payload similarity. Do not edit event
+payloads, keys, attempts, leases, or terminal timestamps directly. The
+complete contract is in `docs/reliable-mutations.md`.
 
 ## Signed release export
 

@@ -85,6 +85,10 @@ Production deployment requires:
 - a transactional outbox and idempotent consumers; document-intake delivery
   uses `FOR UPDATE SKIP LOCKED`, expiring ownership tokens, bounded exponential
   retry, immutable terminal events, and explicit audited replay;
+- mutating APIs use a persisted actor/organisation-scoped idempotency ledger;
+  reservation, business state, audit, universal outbox event, and saved
+  response commit atomically; all audit events publish a unique downstream
+  deduplication key;
 - OIDC with MFA enforced by the identity provider;
 - governed project-owner recovery, periodic membership recertification, and
   monitored break-glass access; PostgreSQL RLS where an independent database

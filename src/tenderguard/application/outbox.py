@@ -76,6 +76,7 @@ class OutboxDeliveryService:
         self.session.flush()
         return OutboxClaim(
             event_id=row.id,
+            deduplication_key=row.deduplication_key,
             topic=row.topic,
             aggregate_id=row.aggregate_id,
             payload=row.payload,
