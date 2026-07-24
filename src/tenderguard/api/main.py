@@ -39,6 +39,7 @@ from tenderguard.application.idempotency import (
     request_scoped_actor,
     request_scoped_session,
 )
+from tenderguard.application.integrations import IntegrationInboxService
 from tenderguard.application.lineage import LineageService
 from tenderguard.application.passport import PassportService
 from tenderguard.application.pricing import PricingService
@@ -56,6 +57,10 @@ from tenderguard.config import Settings, get_settings
 from tenderguard.domain.common import utc_now
 from tenderguard.domain.enums import ActorRole
 from tenderguard.domain.exports import load_signing_material
+from tenderguard.domain.integration import (
+    load_integration_signing_material,
+    validate_integration_public_key,
+)
 from tenderguard.domain.release import evaluate_bid_release
 from tenderguard.infrastructure.auth import Actor, Authenticator
 from tenderguard.infrastructure.database import (
@@ -72,6 +77,7 @@ from tenderguard.infrastructure.orm import AdapterQualificationRow
 from tenderguard.observability import RequestLoggingMiddleware, configure_logging
 
 from .schemas import (
+    AcknowledgeIntegrationInboxRequest,
     ActivateAdapterQualificationRequest,
     ActualComparisonResponse,
     ActualRecordResponse,
@@ -92,6 +98,7 @@ from .schemas import (
     CalculationExecutionRequest,
     CalculationExecutionResponse,
     CalibrationApprovalResponse,
+    ClaimIntegrationInboxRequest,
     CommercialCostModelResponse,
     CommercialCostProposalResponse,
     CompareActualRequest,
@@ -114,6 +121,11 @@ from .schemas import (
     FinalizeContractCostImpactRequest,
     GenerateExportRequest,
     GrantProjectMembershipRequest,
+    IntegrationInboxClaimResponse,
+    IntegrationInboxMessageResponse,
+    IntegrationInboxProcessingResponse,
+    IntegrationInboxReceiptResponse,
+    IntegrationInboxSettlementResponse,
     NomenclatureMatchResponse,
     NormalizedPriceResponse,
     NormalizePriceRequest,
@@ -130,6 +142,7 @@ from .schemas import (
     QuantityExecutionResponse,
     QuarantinedUploadResponse,
     ReadinessResponse,
+    ReceiveIntegrationMessageRequest,
     ReconcileObservationsRequest,
     ReconciliationResponse,
     RecordActualRequest,
@@ -138,9 +151,12 @@ from .schemas import (
     RecordPriceQuoteRequest,
     RecordQuantityRequest,
     RegisterAuditAnchorReceiptRequest,
+    RejectIntegrationInboxRequest,
     ReleaseAttemptResponse,
     ReleaseGateResponse,
     ReleaseRequest,
+    ReplayIntegrationMessageRequest,
+    ReplayOutboxResponse,
     RequeueDocumentProcessingRequest,
     ResolveConflictRequest,
     RevokeProjectMembershipRequest,
@@ -322,6 +338,13 @@ def create_app(
 
     def commercial_cost_service(session: Session) -> CommercialCostService:
         return CommercialCostService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def integration_inbox_service(session: Session) -> IntegrationInboxService:
+        return IntegrationInboxService(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
@@ -556,6 +579,100 @@ def create_app(
                 notes.append("Ed25519 export signing key configuration is invalid")
         else:
             notes.append("Ed25519 export signing key is not configured")
+        integration_signing_configured = False
+        if (
+            resolved_settings.integration_signing_configured
+            and resolved_settings.integration_receiver_id
+        ):
+            assert resolved_settings.integration_signing_key_id is not None
+            assert resolved_settings.integration_signing_private_key_b64 is not None
+            try:
+                load_integration_signing_material(
+                    key_id=resolved_settings.integration_signing_key_id,
+                    private_key_b64=(
+                        resolved_settings.integration_signing_private_key_b64.get_secret_value()
+                    ),
+                )
+                integration_signing_configured = True
+            except ValueError:
+                notes.append("Ed25519 integration signing key configuration is invalid")
+        else:
+            notes.append(
+                "Ed25519 integration signing key or receipt receiver identity is not configured"
+            )
+        integration_connectors_qualified = False
+        if schema_current and resolved_settings.integration_operator_organization_id:
+            try:
+                qualifications = tuple(
+                    session.scalars(
+                        select(AdapterQualificationRow).where(
+                            AdapterQualificationRow.status == "APPROVED",
+                            (
+                                (AdapterQualificationRow.valid_until.is_(None))
+                                | (AdapterQualificationRow.valid_until >= now.date())
+                            ),
+                        )
+                    )
+                )
+                outbound = False
+                inbound = False
+                handler = False
+                for qualification in qualifications:
+                    if (
+                        qualification.payload.get("organization_id")
+                        != resolved_settings.integration_operator_organization_id
+                    ):
+                        continue
+                    methods = qualification.payload.get("supported_methods")
+                    if not isinstance(methods, list):
+                        continue
+                    inbound_topics = qualification.payload.get("inbound_topics")
+                    outbound_topics = qualification.payload.get("outbound_topics")
+                    has_service_actor = _readiness_string(
+                        qualification.payload.get("service_actor_id"),
+                        128,
+                    )
+                    if "INTEGRATION_OUTBOUND_DELIVERY" in methods:
+                        receipt_key = qualification.payload.get("receipt_public_key_b64")
+                        if (
+                            _readiness_topics(outbound_topics)
+                            and _readiness_string(
+                                qualification.payload.get("receipt_signing_key_id"),
+                                200,
+                            )
+                            and isinstance(receipt_key, str)
+                            and _readiness_string(
+                                qualification.payload.get("receiver_id"),
+                                200,
+                            )
+                            and has_service_actor
+                        ):
+                            validate_integration_public_key(receipt_key)
+                            outbound = True
+                    if "INTEGRATION_INBOUND_SOURCE" in methods:
+                        inbound_key = qualification.payload.get("inbound_signing_public_key_b64")
+                        if (
+                            _readiness_topics(inbound_topics)
+                            and _readiness_string(
+                                qualification.payload.get("inbound_signing_key_id"),
+                                200,
+                            )
+                            and isinstance(inbound_key, str)
+                            and has_service_actor
+                        ):
+                            validate_integration_public_key(inbound_key)
+                            inbound = True
+                    if (
+                        "INTEGRATION_INBOX_HANDLER" in methods
+                        and _readiness_topics(inbound_topics)
+                        and has_service_actor
+                    ):
+                        handler = True
+                integration_connectors_qualified = outbound and inbound and handler
+            except Exception:
+                notes.append("integration connector qualification check failed")
+        if not integration_connectors_qualified:
+            notes.append("qualified integration delivery/source/handler set is unavailable")
         ready = bool(
             database_ok
             and schema_current
@@ -569,6 +686,8 @@ def create_app(
             and malware_scanner_qualified
             and document_processor_qualified
             and export_signing_configured
+            and integration_signing_configured
+            and integration_connectors_qualified
         )
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -586,6 +705,8 @@ def create_app(
             malware_scanner_qualified=malware_scanner_qualified,
             document_processor_qualified=document_processor_qualified,
             export_signing_configured=export_signing_configured,
+            integration_signing_configured=integration_signing_configured,
+            integration_connectors_qualified=integration_connectors_qualified,
             notes=tuple(notes),
         )
 
@@ -643,6 +764,150 @@ def create_app(
         integrity_service = audit_integrity_service(session)
         integrity_service.require_operator(actor)
         return AuditAnchorStatusResponse.model_validate(integrity_service.anchor_status())
+
+    @application.post(
+        "/v1/integrations/inbox",
+        response_model=IntegrationInboxReceiptResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def receive_integration_message(
+        payload: ReceiveIntegrationMessageRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> IntegrationInboxReceiptResponse:
+        with mutation_transaction(session):
+            result = integration_inbox_service(session).receive(
+                actor=actor,
+                source_qualification_id=payload.source_qualification_id,
+                envelope=payload.envelope,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return IntegrationInboxReceiptResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/integrations/inbox/claims",
+        response_model=IntegrationInboxClaimResponse,
+    )
+    def claim_integration_message(
+        payload: ClaimIntegrationInboxRequest,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> IntegrationInboxClaimResponse:
+        with mutation_transaction(session):
+            claim = integration_inbox_service(session).claim_next(
+                actor=actor,
+                handler_qualification_id=payload.handler_qualification_id,
+                topics=payload.topics,
+                worker_id=payload.worker_id,
+            )
+        return IntegrationInboxClaimResponse(claim=claim)
+
+    @application.post(
+        "/v1/integrations/inbox/processings/{processing_id}/acknowledge",
+        response_model=IntegrationInboxSettlementResponse,
+    )
+    def acknowledge_integration_message(
+        processing_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: AcknowledgeIntegrationInboxRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> IntegrationInboxSettlementResponse:
+        if payload.claim.processing_id != processing_id:
+            raise ValueError("Inbox claim does not match the processing path")
+        with mutation_transaction(session):
+            result = integration_inbox_service(session).acknowledge(
+                actor=actor,
+                claim=payload.claim,
+                result_reference=payload.result_reference,
+                result_hash=payload.result_hash,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return IntegrationInboxSettlementResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/integrations/inbox/processings/{processing_id}/reject",
+        response_model=IntegrationInboxSettlementResponse,
+    )
+    def reject_integration_message(
+        processing_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: RejectIntegrationInboxRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> IntegrationInboxSettlementResponse:
+        if payload.claim.processing_id != processing_id:
+            raise ValueError("Inbox claim does not match the processing path")
+        with mutation_transaction(session):
+            result = integration_inbox_service(session).reject(
+                actor=actor,
+                claim=payload.claim,
+                error_code=payload.error_code,
+                force_dead_letter=payload.force_dead_letter,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return IntegrationInboxSettlementResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/integrations/inbox/processings/{processing_id}/replay",
+        response_model=IntegrationInboxProcessingResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def replay_integration_message(
+        processing_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: ReplayIntegrationMessageRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> IntegrationInboxProcessingResponse:
+        with mutation_transaction(session):
+            result = integration_inbox_service(session).replay_dead_letter(
+                actor=actor,
+                processing_id=processing_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return IntegrationInboxProcessingResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/integrations/outbox/{outbox_event_id}/replay",
+        response_model=ReplayOutboxResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def replay_integration_outbox_event(
+        outbox_event_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: ReplayIntegrationMessageRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ReplayOutboxResponse:
+        with mutation_transaction(session):
+            replay_event_id = integration_inbox_service(session).replay_outbox_dead_letter(
+                actor=actor,
+                outbox_event_id=outbox_event_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ReplayOutboxResponse(replay_outbox_event_id=replay_event_id)
+
+    @application.get(
+        "/v1/integrations/inbox/{message_id}",
+        response_model=IntegrationInboxMessageResponse,
+    )
+    def get_integration_message(
+        message_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> IntegrationInboxMessageResponse:
+        result = integration_inbox_service(session).get(
+            actor=actor,
+            message_id=message_id,
+        )
+        return IntegrationInboxMessageResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects",
@@ -1901,6 +2166,33 @@ def create_app(
         return SnapshotLineageResponse.model_validate(lineage.model_dump())
 
     return application
+
+
+def _readiness_string(value: object, max_length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and len(value) <= max_length
+    )
+
+
+def _readiness_topics(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and len(value) == len(set(value))
+        and all(
+            isinstance(item, str)
+            and _readiness_string(item, 200)
+            and (item[0].islower() or item[0].isdigit())
+            and all(
+                character.islower() or character.isdigit() or character in "._-"
+                for character in item
+            )
+            for item in value
+        )
+    )
 
 
 app = create_app()

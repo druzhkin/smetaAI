@@ -195,6 +195,7 @@ def test_outbox_lease_reclaim_rejects_stale_owner_and_dead_letters(
             OutboxEventRow(
                 id="outbox-test",
                 deduplication_key="test-outbox-event",
+                delivery_deduplication_key="test-outbox-event",
                 topic="document.upload.scan-clean",
                 aggregate_id="upload-test",
                 payload={"upload_id": "upload-test", "project_id": "project-test"},
@@ -228,6 +229,11 @@ def test_outbox_lease_reclaim_rejects_stale_owner_and_dead_letters(
         row = session.get(OutboxEventRow, "outbox-test")
         assert row is not None
         row.lease_expires_at = utc_now() - timedelta(seconds=1)
+    with (
+        factory.begin() as session,
+        pytest.raises(OutboxLeaseLostError, match="another worker"),
+    ):
+        OutboxDeliveryService(session=session, settings=settings).acknowledge(first)
     with factory.begin() as session:
         second = OutboxDeliveryService(session=session, settings=settings).claim_next(
             topics={"document.upload.scan-clean"},

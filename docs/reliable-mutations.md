@@ -69,8 +69,13 @@ limits independently.
 
 ## Remaining operational work
 
-The durable event contract and document dispatcher exist. Production
-connectors still need qualified topic-specific dispatchers, downstream inbox
-tables/idempotent consumers, credentials, scheduler deployment, monitoring,
-dead-letter ownership, and replay drills. Repository success does not prove
-those external side effects.
+The generic signed connector dispatcher and durable inbox now preserve
+qualified adapter identity, exact payload hashes, stable external
+deduplication, signed receipts, immutable delivery attempts, lease/retry/dead
+letter state, and generation-based controlled replay. The full contract is in
+`docs/integration-delivery.md`.
+
+Production still needs organization-specific connector bindings, credentials,
+scheduler deployment, business handlers, monitoring, dead-letter ownership,
+and replay drills. Repository success does not prove those external side
+effects or make accepted inbound values verified.

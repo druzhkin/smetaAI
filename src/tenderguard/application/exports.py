@@ -304,9 +304,11 @@ class ExportPackageService:
             OutboxEventRow(
                 id=f"outbox-{uuid4()}",
                 deduplication_key=f"export-artifact:{artifact.id}",
+                delivery_deduplication_key=f"export-artifact:{artifact.id}",
                 topic="export.package.generated",
                 aggregate_id=artifact.id,
                 payload={
+                    "organization_id": project.organization_id,
                     "project_id": project.id,
                     "artifact_id": artifact.id,
                     "snapshot_id": snapshot.id,

@@ -2019,10 +2019,12 @@ class ProjectService:
     ) -> None:
         now = utc_now()
         event_id = f"outbox-{uuid4()}"
+        event_deduplication_key = deduplication_key or f"outbox-event:{event_id}"
         self.session.add(
             OutboxEventRow(
                 id=event_id,
-                deduplication_key=deduplication_key or f"outbox-event:{event_id}",
+                deduplication_key=event_deduplication_key,
+                delivery_deduplication_key=event_deduplication_key,
                 topic=topic,
                 aggregate_id=aggregate_id,
                 payload=canonical_data(payload),

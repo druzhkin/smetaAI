@@ -69,6 +69,9 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "object-lock retention policy" in message
     assert "persisted idempotency keys" in message
     assert "Ed25519 export signing key" in message
+    assert "Ed25519 integration signing key" in message
+    assert "integration receipt receiver ID" in message
+    assert "integration operator organization" in message
     assert "PostgreSQL is required" in message
     assert "qualified malware scanner binding" in message
     assert "qualified isolated document processor binding" in message
@@ -88,9 +91,27 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
             },
             "retry maximum",
         ),
+        (
+            {"integration_job_lease_seconds": 30, "integration_job_timeout_seconds": 30},
+            "Integration job timeout must be shorter",
+        ),
+        (
+            {
+                "integration_job_timeout_seconds": 30,
+                "integration_http_timeout_seconds": 31,
+            },
+            "Integration HTTP timeout",
+        ),
+        (
+            {
+                "integration_job_retry_base_seconds": 60,
+                "integration_job_retry_max_seconds": 30,
+            },
+            "retry maximum",
+        ),
     ],
 )
-def test_document_job_timing_configuration_fails_closed(
+def test_job_timing_configuration_fails_closed(
     overrides: dict[str, int],
     expected: str,
 ) -> None:
@@ -129,6 +150,10 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         require_idempotency_keys=True,
         export_signing_key_id="test-export-key-1",
         export_signing_private_key_b64="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        integration_signing_key_id="test-integration-key-1",
+        integration_signing_private_key_b64="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        integration_receiver_id="tenderguard-production",
+        integration_operator_organization_id="org-1",
         s3_required_object_lock_mode="GOVERNANCE",
         s3_minimum_retention_days=365,
         normative_adapter="production-normative-engine",
@@ -191,6 +216,32 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
                         "organization_id": "org-1",
                         "supported_methods": ["DOCUMENT_INTAKE"],
                         "service_actor_id": "document-worker",
+                    },
+                    approved_by="owner-2",
+                    approved_at=now,
+                ),
+                AdapterQualificationRow(
+                    id="qualification-integration-production",
+                    adapter_name="production-integration-gateway",
+                    adapter_version="1",
+                    status="APPROVED",
+                    valid_until=None,
+                    test_evidence_hash="d" * 64,
+                    payload={
+                        "organization_id": "org-1",
+                        "supported_methods": [
+                            "INTEGRATION_OUTBOUND_DELIVERY",
+                            "INTEGRATION_INBOUND_SOURCE",
+                            "INTEGRATION_INBOX_HANDLER",
+                        ],
+                        "service_actor_id": "integration-worker",
+                        "outbound_topics": ["audit.event.recorded"],
+                        "inbound_topics": ["price.quote.received"],
+                        "receipt_signing_key_id": "remote-receipt-key-1",
+                        "receipt_public_key_b64": anchor_public_key_b64,
+                        "receiver_id": "enterprise-integration-ledger",
+                        "inbound_signing_key_id": "remote-source-key-1",
+                        "inbound_signing_public_key_b64": anchor_public_key_b64,
                     },
                     approved_by="owner-2",
                     approved_at=now,
@@ -287,6 +338,20 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         assert ready.json()["malware_scanner_qualified"] is True
         assert ready.json()["document_processor_qualified"] is True
         assert ready.json()["export_signing_configured"] is True
+        assert ready.json()["integration_signing_configured"] is True
+        assert ready.json()["integration_connectors_qualified"] is True
+        with sessions.begin() as session:
+            integration_qualification = session.get(
+                AdapterQualificationRow,
+                "qualification-integration-production",
+            )
+            assert integration_qualification is not None
+            changed_payload = dict(integration_qualification.payload)
+            changed_payload.pop("service_actor_id")
+            integration_qualification.payload = changed_payload
+        not_ready = client.get("/health/ready")
+        assert not_ready.status_code == 503
+        assert not_ready.json()["integration_connectors_qualified"] is False
 
 
 def test_readiness_returns_503_when_authentication_is_not_configured(

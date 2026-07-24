@@ -31,7 +31,7 @@ all operational qualification evidence remain open.
 | Scenario | approved definitions over a fixed base snapshot plus independent recalculation | reject unknown or unsupported overrides |
 | Export | fixed released snapshot, mandatory content hashes, Ed25519 signature, immutable artifact metadata | refuse generation or verification |
 | Audit integrity | per-key hash chains, WORM checkpoint, independent Ed25519 receipt, full current-history verification | readiness 503; investigate tampering or stale anchor |
-| Mutation delivery | persisted request fingerprint/response plus unique transactional outbox deduplication key | replay exact result or reject conflicting key; at-least-once consumer deduplication |
+| Mutation and integration delivery | persisted request fingerprint/response; transactional outbox; stable external delivery identity; qualification-bound Ed25519 envelope and exact signed receipt; immutable inbound message plus separate processing generation | replay exact HTTP result or reject conflicting key; retry/dead-letter without rewriting evidence; imported business value remains unverified |
 | Contract | revisioned evidence-backed obligations tied to approved cost impacts | unresolved contract risk hard stop |
 | Risk | verified register and version-bound deterministic reserve | missing or stale reserve hard stop |
 | Approval | configurable tasks and four-eyes rule | approval hard stop |
@@ -85,8 +85,9 @@ and creates a new verified derived observation with recursive lineage.
   availability and validity are mandatory price attributes.
 - Model behaviour can change; exact model/prompt/rule versions and regression
   results must be approved and snapshotted.
-- The implemented generic calculation categories do not yet constitute a
-  complete logistics/mobilisation planner or contract cash-flow engine.
+- The typed logistics/mobilisation and contract-finance engines cannot prove
+  real route, rate, treasury, indexation, or FX inputs; those feeds and their
+  business qualification remain external production blockers.
 - A package-carried public key proves internal consistency but not external
   organisational identity by itself; independent consumers must trust the key
   ID/fingerprint through an approved out-of-band registry.
@@ -95,6 +96,11 @@ and creates a new verified derived observation with recursive lineage.
   malware provider, production scheduler, or runtime sandbox/network policy is
   deployed by this repository; production remains blocked until operational
   evidence proves that boundary.
+- Signed generic integration transport does not establish the identity or
+  correctness of a real ERP/DMS/BI mapping by itself. Production still depends
+  on protected keys, endpoint allowlists/mTLS, qualified service identities,
+  contract tests, monitoring, replay drills, and the downstream domain
+  verification workflow.
 
 ## Required production evidence
 

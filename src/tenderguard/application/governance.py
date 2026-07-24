@@ -11,6 +11,7 @@ from tenderguard.application.projects import ProjectService
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import ActorRole, VersionStatus
+from tenderguard.domain.integration import validate_integration_public_key
 from tenderguard.domain.models import ControlledVersion
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.object_store import ObjectStore
@@ -242,6 +243,10 @@ class GovernanceService:
         supported_methods = payload.get("supported_methods")
         if not isinstance(supported_methods, list) or not supported_methods:
             raise ValueError("Adapter qualification must declare supported methods")
+        connector_payload = self._validated_connector_payload(
+            payload=payload,
+            supported_methods=supported_methods,
+        )
         valid_until_raw = payload.get("valid_until")
         valid_until = date.fromisoformat(valid_until_raw) if valid_until_raw else None
         if valid_until is not None and valid_until < utc_now().date():
@@ -267,6 +272,7 @@ class GovernanceService:
                 "independence_domain": payload["independence_domain"],
                 "organization_id": actor.organization_id,
                 "service_actor_id": service_actor_id,
+                **connector_payload,
             },
             approved_by=version.approved_by,
             approved_at=version.approved_at or utc_now(),
@@ -292,6 +298,86 @@ class GovernanceService:
             },
         )
         return qualification
+
+    @staticmethod
+    def _validated_connector_payload(
+        *,
+        payload: dict[str, Any],
+        supported_methods: list[Any],
+    ) -> dict[str, Any]:
+        connector_payload: dict[str, Any] = {}
+        outbound = "INTEGRATION_OUTBOUND_DELIVERY" in supported_methods
+        inbound = "INTEGRATION_INBOUND_SOURCE" in supported_methods
+        handler = "INTEGRATION_INBOX_HANDLER" in supported_methods
+        if outbound:
+            connector_payload["outbound_topics"] = GovernanceService._connector_topics(
+                payload,
+                "outbound_topics",
+            )
+            for field in (
+                "receipt_signing_key_id",
+                "receipt_public_key_b64",
+                "receiver_id",
+            ):
+                connector_payload[field] = GovernanceService._connector_string(
+                    payload,
+                    field,
+                    200,
+                )
+            validate_integration_public_key(str(connector_payload["receipt_public_key_b64"]))
+        if inbound or handler:
+            connector_payload["inbound_topics"] = GovernanceService._connector_topics(
+                payload,
+                "inbound_topics",
+            )
+        if inbound:
+            for field in (
+                "inbound_signing_key_id",
+                "inbound_signing_public_key_b64",
+            ):
+                connector_payload[field] = GovernanceService._connector_string(
+                    payload,
+                    field,
+                    200,
+                )
+            validate_integration_public_key(
+                str(connector_payload["inbound_signing_public_key_b64"])
+            )
+        return connector_payload
+
+    @staticmethod
+    def _connector_topics(payload: dict[str, Any], field: str) -> list[str]:
+        raw = payload.get(field)
+        if (
+            not isinstance(raw, list)
+            or not raw
+            or not all(
+                isinstance(item, str)
+                and item
+                and item == item.strip()
+                and len(item) <= 200
+                and (item[0].islower() or item[0].isdigit())
+                and all(
+                    character.islower() or character.isdigit() or character in "._-"
+                    for character in item
+                )
+                for item in raw
+            )
+            or len(raw) != len(set(raw))
+        ):
+            raise ValueError(f"Adapter qualification {field} is invalid")
+        return raw
+
+    @staticmethod
+    def _connector_string(
+        payload: dict[str, Any],
+        field: str,
+        max_length: int,
+    ) -> str:
+        raw = payload.get(field)
+        if not isinstance(raw, str) or not raw or raw != raw.strip() or len(raw) > max_length:
+            raise ValueError(f"Adapter qualification {field} is invalid")
+        return raw
 
     @staticmethod
     def _require_owner(actor: Actor, kind: str) -> None:

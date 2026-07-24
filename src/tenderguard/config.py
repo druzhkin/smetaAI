@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     require_idempotency_keys: bool = False
     export_signing_key_id: str | None = None
     export_signing_private_key_b64: SecretStr | None = None
+    integration_signing_key_id: str | None = None
+    integration_signing_private_key_b64: SecretStr | None = None
+    integration_receiver_id: str | None = None
+    integration_operator_organization_id: str | None = None
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "testserver"]
 
     s3_endpoint_url: str | None = None
@@ -71,6 +75,24 @@ class Settings(BaseSettings):
     document_job_max_attempts: int = Field(default=3, ge=1, le=100)
     document_job_retry_base_seconds: int = Field(default=30, ge=1, le=86_400)
     document_job_retry_max_seconds: int = Field(default=900, ge=1, le=604_800)
+    integration_job_lease_seconds: int = Field(default=300, ge=30, le=86_400)
+    integration_job_timeout_seconds: int = Field(default=240, ge=1, le=86_399)
+    integration_job_max_attempts: int = Field(default=5, ge=1, le=100)
+    integration_job_retry_base_seconds: int = Field(default=30, ge=1, le=86_400)
+    integration_job_retry_max_seconds: int = Field(default=3600, ge=1, le=604_800)
+    integration_max_event_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
+    integration_max_response_bytes: int = Field(default=128 * 1024, gt=0)
+    integration_http_timeout_seconds: int = Field(default=60, ge=1, le=600)
+    integration_inbound_max_message_age_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        le=2_592_000,
+    )
+    integration_inbound_max_future_skew_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86_400,
+    )
 
     @model_validator(mode="after")
     def production_is_fail_closed(self) -> Settings:
@@ -89,6 +111,12 @@ class Settings(BaseSettings):
             ("audit anchor provider ID", self.audit_anchor_provider_id, 200),
             ("audit anchor provider key ID", self.audit_anchor_provider_key_id, 200),
             ("audit operator organization ID", self.audit_operator_organization_id, 64),
+            (
+                "integration operator organization ID",
+                self.integration_operator_organization_id,
+                64,
+            ),
+            ("integration receiver ID", self.integration_receiver_id, 200),
         ):
             if value is not None and (
                 not value.strip() or value != value.strip() or len(value) > max_length
@@ -123,6 +151,12 @@ class Settings(BaseSettings):
                 problems.append("persisted idempotency keys are not required")
             if not self.export_signing_key_id or not self.export_signing_private_key_b64:
                 problems.append("Ed25519 export signing key configuration is incomplete")
+            if not self.integration_signing_configured:
+                problems.append("Ed25519 integration signing key configuration is incomplete")
+            if not self.integration_receiver_id:
+                problems.append("integration receipt receiver ID is not configured")
+            if not self.integration_operator_organization_id:
+                problems.append("integration operator organization is not configured")
             if not self.trusted_hosts or "*" in self.trusted_hosts:
                 problems.append("trusted hosts are empty or contain a wildcard")
             if self.object_store_backend != "s3":
@@ -156,6 +190,12 @@ class Settings(BaseSettings):
             raise ValueError("Document job timeout must be shorter than its lease")
         if self.document_job_retry_max_seconds < self.document_job_retry_base_seconds:
             raise ValueError("Document job retry maximum must be at least the base delay")
+        if self.integration_job_timeout_seconds >= self.integration_job_lease_seconds:
+            raise ValueError("Integration job timeout must be shorter than its lease")
+        if self.integration_http_timeout_seconds > self.integration_job_timeout_seconds:
+            raise ValueError("Integration HTTP timeout must not exceed the job timeout")
+        if self.integration_job_retry_max_seconds < self.integration_job_retry_base_seconds:
+            raise ValueError("Integration job retry maximum must be at least the base delay")
         return self
 
     @property
@@ -165,6 +205,10 @@ class Settings(BaseSettings):
     @property
     def export_signing_configured(self) -> bool:
         return bool(self.export_signing_key_id and self.export_signing_private_key_b64)
+
+    @property
+    def integration_signing_configured(self) -> bool:
+        return bool(self.integration_signing_key_id and self.integration_signing_private_key_b64)
 
     @property
     def audit_verification_keyring(self) -> dict[str, bytes]:

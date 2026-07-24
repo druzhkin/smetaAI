@@ -767,6 +767,7 @@ class OutboxEventRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     deduplication_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    delivery_deduplication_key: Mapped[str] = mapped_column(String(200), nullable=False)
     topic: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     aggregate_id: Mapped[str] = mapped_column(String(128), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -803,6 +804,212 @@ class OutboxEventRow(Base):
             "topic",
             "published_at",
             "dead_lettered_at",
+            "available_at",
+            "lease_expires_at",
+        ),
+    )
+
+
+class ConnectorDeliveryAttemptRow(Base):
+    __tablename__ = "connector_delivery_attempts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    outbox_event_id: Mapped[str] = mapped_column(
+        ForeignKey("outbox_events.id"),
+        nullable=False,
+        index=True,
+    )
+    connector_qualification_id: Mapped[str] = mapped_column(
+        ForeignKey("adapter_qualifications.id"),
+        nullable=False,
+        index=True,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    envelope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    receipt_hash: Mapped[str | None] = mapped_column(String(64))
+    external_message_id: Mapped[str | None] = mapped_column(String(200))
+    error_code: Mapped[str | None] = mapped_column(String(200))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "outbox_event_id",
+            "attempt_number",
+            name="uq_connector_delivery_attempt",
+        ),
+        CheckConstraint(
+            "status IN ('ACCEPTED', 'DUPLICATE', 'RETRYABLE_FAILURE', 'PERMANENT_FAILURE')",
+            name="ck_connector_delivery_attempt_status",
+        ),
+        CheckConstraint(
+            "("
+            "status IN ('ACCEPTED', 'DUPLICATE') AND receipt_hash IS NOT NULL "
+            "AND external_message_id IS NOT NULL AND error_code IS NULL"
+            ") OR ("
+            "status IN ('RETRYABLE_FAILURE', 'PERMANENT_FAILURE') "
+            "AND error_code IS NOT NULL AND receipt_hash IS NULL "
+            "AND external_message_id IS NULL"
+            ")",
+            name="ck_connector_delivery_attempt_result",
+        ),
+        CheckConstraint(
+            "attempt_number >= 1 AND completed_at >= started_at",
+            name="ck_connector_delivery_attempt_timing",
+        ),
+        Index(
+            "ix_connector_delivery_attempt_completed",
+            "connector_qualification_id",
+            "completed_at",
+        ),
+    )
+
+
+class OutboxReplayRow(Base):
+    __tablename__ = "outbox_replays"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_outbox_event_id: Mapped[str] = mapped_column(
+        ForeignKey("outbox_events.id"),
+        nullable=False,
+        unique=True,
+    )
+    replay_outbox_event_id: Mapped[str] = mapped_column(
+        ForeignKey("outbox_events.id"),
+        nullable=False,
+        unique=True,
+    )
+    delivery_deduplication_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    replayed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    replayed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IntegrationInboxMessageRow(Base):
+    __tablename__ = "integration_inbox_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_qualification_id: Mapped[str] = mapped_column(
+        ForeignKey("adapter_qualifications.id"),
+        nullable=False,
+        index=True,
+    )
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    delivery_deduplication_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    topic: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    aggregate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    core_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    envelope: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    receipt: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    qualification_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_qualification_id",
+            "source_message_id",
+            name="uq_inbox_source_message",
+        ),
+        UniqueConstraint(
+            "source_qualification_id",
+            "delivery_deduplication_key",
+            name="uq_inbox_source_deduplication",
+        ),
+        Index(
+            "ix_inbox_organization_received",
+            "organization_id",
+            "received_at",
+        ),
+    )
+
+
+class IntegrationInboxProcessingRow(Base):
+    __tablename__ = "integration_inbox_processings"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("integration_inbox_messages.id"),
+        nullable=False,
+        index=True,
+    )
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    locked_by: Mapped[str | None] = mapped_column(String(128))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(200))
+    handler_qualification_id: Mapped[str | None] = mapped_column(
+        ForeignKey("adapter_qualifications.id")
+    )
+    result_reference: Mapped[str | None] = mapped_column(String(500))
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "generation",
+            name="uq_inbox_processing_generation",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'CONSUMED', 'DEAD_LETTERED')",
+            name="ck_inbox_processing_status",
+        ),
+        CheckConstraint(
+            "generation >= 1 AND ("
+            "(attempts = 0 AND last_attempt_at IS NULL "
+            "AND handler_qualification_id IS NULL) OR "
+            "(attempts >= 1 AND last_attempt_at IS NOT NULL "
+            "AND handler_qualification_id IS NOT NULL)"
+            ")",
+            name="ck_inbox_processing_counters",
+        ),
+        CheckConstraint(
+            "("
+            "locked_by IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL"
+            ") OR ("
+            "locked_by IS NOT NULL AND lease_token IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL"
+            ")",
+            name="ck_inbox_processing_lease_complete",
+        ),
+        CheckConstraint(
+            "("
+            "status = 'PENDING' AND consumed_at IS NULL AND dead_lettered_at IS NULL "
+            "AND result_reference IS NULL AND result_hash IS NULL"
+            ") OR ("
+            "status = 'CONSUMED' AND consumed_at IS NOT NULL "
+            "AND dead_lettered_at IS NULL AND result_reference IS NOT NULL "
+            "AND result_hash IS NOT NULL AND handler_qualification_id IS NOT NULL "
+            "AND locked_by IS NULL"
+            ") OR ("
+            "status = 'DEAD_LETTERED' AND dead_lettered_at IS NOT NULL "
+            "AND consumed_at IS NULL AND result_reference IS NULL "
+            "AND result_hash IS NULL AND locked_by IS NULL"
+            ")",
+            name="ck_inbox_processing_terminal_state",
+        ),
+        Index(
+            "uq_inbox_processing_pending_message",
+            "message_id",
+            unique=True,
+            sqlite_where=text("status = 'PENDING'"),
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        Index(
+            "ix_inbox_processing_ready",
+            "status",
             "available_at",
             "lease_expires_at",
         ),

@@ -66,8 +66,11 @@ Nothing crosses a boundary merely because a model reports high confidence.
 - `audit`: append-only hash-chained events and immutable snapshots.
 - `actuals`: forecast-to-actual comparisons, reason taxonomy, and approved
   calibration examples; predictions are never recycled as facts.
-- `integration`: deterministic signed snapshot/audit packages, transactional
-  outbox, external delivery adapters, imports, and connector health.
+- `integration`: deterministic signed snapshot/audit packages; a transactional
+  outbox with stable external delivery identity; qualification-bound Ed25519
+  event/receipt envelopes; immutable delivery attempts and inbound messages;
+  leased processing generations, collision-safe deduplication, dead letters,
+  controlled replay, external adapters, and connector health.
 
 ## Deployment
 
@@ -85,6 +88,11 @@ Production deployment requires:
 - a transactional outbox and idempotent consumers; document-intake delivery
   uses `FOR UPDATE SKIP LOCKED`, expiring ownership tokens, bounded exponential
   retry, immutable terminal events, and explicit audited replay;
+- isolated integration workers that validate active organization/topic/key
+  qualifications, commit claims before network I/O, require an exact signed
+  remote receipt, and settle in a new short transaction; inbound transport
+  acceptance creates immutable evidence and an unverified processing task,
+  never verified business data;
 - mutating APIs use a persisted actor/organisation-scoped idempotency ledger;
   reservation, business state, audit, universal outbox event, and saved
   response commit atomically; all audit events publish a unique downstream
@@ -102,6 +110,9 @@ Production deployment requires:
 - audit and Ed25519 export-signing keys from a secrets manager, never
   environment files committed to source control, plus an independently
   published historical public-key registry;
+- integration signing keys, remote receipt/source trust keys, mTLS material,
+  endpoint allowlists, and service identities under independent rotation and
+  qualification procedures;
 - tested backup restoration and documented RPO/RTO.
 
 ## Data invariants
@@ -124,6 +135,12 @@ Production deployment requires:
 - Exhausted document processing enters `PROCESSING_DEAD_LETTERED`, leaves the
   input blocker unresolved, and requires an audited administrator replay that
   creates a new outbox event rather than editing terminal delivery evidence.
+- External delivery acknowledges an outbox event only after an exact
+  qualification-bound signed receipt. Retries preserve the external delivery
+  key; replay creates new internal evidence without changing terminal history.
+- Inbound signature/transport acceptance never implies technical, commercial,
+  normative, or factual verification. Domain verification remains a separate
+  evidence and approval workflow.
 - Every current value points to evidence or an approved assumption.
 - Current passport, quantity, contract, risk, actual, nomenclature, and price
   records supersede prior revisions; upstream changes never overwrite history.

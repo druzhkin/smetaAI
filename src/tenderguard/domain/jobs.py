@@ -20,9 +20,11 @@ class DispatchDisposition(StrEnum):
 class OutboxClaim(DomainModel):
     event_id: str
     deduplication_key: str
+    delivery_deduplication_key: str
     topic: str
     aggregate_id: str
     payload: dict[str, Any]
+    occurred_at: datetime
     delivery_attempt: int = Field(ge=1)
     worker_id: str
     lease_token: str

@@ -7,6 +7,10 @@ from typing import BinaryIO, Protocol
 from pydantic import Field
 
 from tenderguard.domain.enums import EvidenceMethod, PriceEvidenceClass
+from tenderguard.domain.integration import (
+    SignedIntegrationEnvelope,
+    SignedIntegrationReceipt,
+)
 from tenderguard.domain.models import DomainModel, Observation, PriceQuote
 from tenderguard.domain.quarantine import MalwareScanResult
 
@@ -186,3 +190,18 @@ class SnapshotExporter(Protocol):
     qualification: AdapterQualification
 
     def export(self, request: ExportRequest) -> ExportArtifact: ...
+
+
+class IntegrationConnector(Protocol):
+    qualification: AdapterQualification
+
+    def deliver(self, envelope: SignedIntegrationEnvelope) -> SignedIntegrationReceipt: ...
+
+    def health(self) -> ConnectorHealth: ...
+
+
+class ConnectorDeliveryError(RuntimeError):
+    def __init__(self, *, error_code: str, retryable: bool) -> None:
+        self.error_code = error_code
+        self.retryable = retryable
+        super().__init__(error_code)

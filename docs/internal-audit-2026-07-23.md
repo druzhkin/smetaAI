@@ -17,14 +17,19 @@ Resolved during the audit:
   receive an independent recalculation.
 - approved releases can produce deterministic Ed25519-signed estimate/audit
   packages whose manifest covers every mandatory content section.
+- generic external delivery now requires qualification-bound Ed25519
+  envelopes and exact signed receipts; immutable attempts, a durable signed
+  inbox, leased processing generations, collision rejection, dead letters,
+  and controlled replay are application-connected and negatively tested.
 
 Open product blockers:
 
-- no qualified OCR/visual, normative, market/RFQ, ERP/DMS/BI, or export
-  connectors are supplied;
+- no qualified OCR/visual, normative, market/RFQ, or organization-specific
+  ERP/DMS/BI/export endpoint bindings and business mappings are supplied;
 - production route/rate/treasury feeds and business qualification for the
   implemented logistics/mobilisation/contract-finance services are absent;
-- no external export delivery adapter or approved public-key trust registry;
+- no deployed integration scheduler, remote conformance evidence, monitored
+  dead-letter operation, or approved public-key trust registry;
 - no representative historical qualification corpus, accuracy metrics, blind
   comparison, or parallel-operation evidence.
 
@@ -54,11 +59,11 @@ Resolved during the audit:
 
 Open reliability risks:
 
-- document intake now has leased outbox dispatch, bounded retry/dead-letter,
-  timeout checks, and audited administrator replay; all audit events now enter
-  a deduplicated transactional outbox, but other topics still have no
-  production dispatcher/inbox, and the external scheduler/sandbox remains
-  unqualified;
+- document intake and generic signed integration delivery now have leased
+  dispatch, bounded retry/dead-letter, timeout checks, and audited
+  administrator replay; all audit events enter a deduplicated transactional
+  outbox, but no organization-specific worker/scheduler/endpoint deployment
+  or monitored operations evidence exists;
 - no load, soak, failover, backup-restore, or disaster-recovery result exists;
 - distributed locking and deadline behaviour under tender-day concurrency
   have not been qualified.

@@ -47,7 +47,9 @@ does.
 See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
 [requirements traceability](docs/requirements-traceability.md),
 [governed commercial cost models](docs/commercial-cost-models.md), and the
-[signed export package specification](docs/signed-export-package.md).
+[signed export package specification](docs/signed-export-package.md). The
+[signed integration contract](docs/integration-delivery.md) defines the
+transport trust boundary.
 
 ## Implemented application core
 
@@ -88,6 +90,11 @@ The repository currently connects and integration-tests:
   re-verifies current history plus the live evidence-bucket WORM policy;
 - persisted actor-scoped idempotency for every mutating API operation and a
   deduplicated transactional `audit.event.recorded` outbox stream;
+- qualification-bound Ed25519 outbound envelopes and exact signed receipts,
+  immutable delivery attempts, a durable signed inbox with collision-safe
+  deduplication, leased processing, bounded retry/dead-letter, and controlled
+  replay; transport acceptance deliberately does not verify imported business
+  data;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -127,12 +134,13 @@ integrations, historical validation set, operating procedures,
 backup/disaster-recovery evidence, trained users, and named process owners.
 
 Production route/rate/treasury feeds and qualification for the implemented
-logistics/mobilisation/contract-finance models, external export
-delivery/connectors, and a complete operator read/search UI remain to be
-completed. External verification also requires an approved out-of-band
-signing-key registry. A successful local test run cannot substitute for the
-required historical, blind-comparison, parallel-operation, security, load,
-and recovery evidence.
+logistics/mobilisation/contract-finance models, organization-specific
+ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
+schedulers/monitoring, and a complete operator read/search UI remain to be
+completed. External verification also requires approved out-of-band
+signing-key registries and real endpoint conformance evidence. A successful
+local test run cannot substitute for the required historical,
+blind-comparison, parallel-operation, security, load, and recovery evidence.
 
 The current gate-by-gate status is maintained in the
 [production readiness register](docs/production-readiness-register.md).
@@ -144,3 +152,5 @@ Audit checkpoint, anchoring, WORM, and key-rotation controls are specified in
 [the audit-integrity runbook](docs/audit-integrity.md).
 Mutation retry and outbox delivery semantics are specified in
 [the reliable-mutations contract](docs/reliable-mutations.md).
+Signed transport, inbox, and replay semantics are specified in
+[the integration-delivery contract](docs/integration-delivery.md).

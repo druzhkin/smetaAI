@@ -55,9 +55,12 @@ the last recorded owner but cannot repair an IdP-disabled sole owner.
   the live evidence-bucket WORM policy satisfies configured retention,
   authentication is configured, the normative engine, malware scanner, and
   document processor are qualified, the worker actor is configured, the
-  Ed25519 export signing key is valid, and a fresh external audit receipt
-  validates against the complete current audit history, and persisted
-  idempotency is mandatory for mutations. It returns HTTP 503 otherwise.
+  Ed25519 export and integration signing identities are valid, an active
+  outbound/source/handler qualification set exists for the operator
+  organization, a fresh external audit receipt validates against the complete
+  current audit history, and persisted idempotency is mandatory for mutations.
+  It returns HTTP 503 otherwise. Connector reachability and scheduler activity
+  require separate deployment probes and alerts.
 - Operational readiness remains distinct from bid authority. Project-specific
   document, evidence, calculation, approval, snapshot, and release hard stops
   are re-evaluated separately. Staging/production release also rechecks
@@ -155,10 +158,36 @@ logical action and reuse it only when retrying that exact method/path/body. A
 in progress; do not generate a new key blindly when the first outcome is
 unknown. Verify the original request and ledger.
 
-Outbox delivery is at least once. Consumers must deduplicate on the supplied
-`deduplication_key`, not on timing or payload similarity. Do not edit event
-payloads, keys, attempts, leases, or terminal timestamps directly. The
-complete contract is in `docs/reliable-mutations.md`.
+Outbox delivery is at least once. Internal consumers use the event
+`deduplication_key`; external signed receivers persist and deduplicate on
+`delivery_deduplication_key`. Neither may infer identity from timing or payload
+similarity. Do not edit event payloads, keys, attempts, leases, or terminal
+timestamps directly. The complete mutation contract is in
+`docs/reliable-mutations.md`.
+
+## Signed enterprise integration
+
+Run outbound dispatchers and inbound handlers only as dedicated `SYSTEM`
+identities exactly bound to active organization/topic qualifications. Runtime
+endpoints must be HTTPS, explicitly allowlisted, redirect-free, and supplied
+through the approved secrets/configuration system. A successful TLS request is
+not delivery: acknowledge an event only after the exact remote signed receipt
+is persisted.
+
+Alert on oldest pending age, retry rate, expired leases, every permanent
+protocol failure/dead letter, signature/key/identity mismatch, deduplication
+collision, replay, and absence of worker heartbeats. A replay is allowed only
+after an administrator records the corrected incident and reason. It creates a
+new immutable processing generation or internal outbox row; never rewrite the
+terminal source record.
+
+Inbound `ACCEPTED`/`CONSUMED` means only that transport and a durable handler
+result succeeded. The result must enter the relevant domain as unverified and
+pass its evidence, normalization, reconciliation, and approval controls.
+Before production, execute exact-duplicate, crash-after-remote-acceptance,
+timeout, stale/wrong-key, payload-collision, unavailable endpoint, dead-letter,
+and replay drills against each real receiver. The full contract is in
+`docs/integration-delivery.md`.
 
 ## Signed release export
 

@@ -122,6 +122,29 @@ qualification evidence are external controls and remain production blockers.
 - Status: **APPLICATION BODY LIMIT REMEDIATED; distributed/edge controls
   OPEN**.
 
+### SEC-006 - Enterprise connector trust is not operationally qualified
+
+- Rule ID: integration trust-boundary / replay and identity defence
+- Location: `src/tenderguard/application/integrations.py`,
+  `src/tenderguard/integrations/http_json.py`,
+  `docs/integration-delivery.md`
+- Evidence: the generic transport binds organization, topic, payload hash,
+  external delivery identity, source/receiver identity, and active
+  qualification to Ed25519 event/receipt signatures. It persists immutable
+  attempts and inbox messages, rejects collisions, commits network-free claim
+  transactions, and uses bounded retry/dead-letter/replay.
+- Impact: code-level signatures cannot prove that a production endpoint,
+  service identity, business mapping, TLS route, or key custodian is the
+  intended independent party. A misqualified connector can import authentic
+  but semantically wrong data or disclose signed events to the wrong system.
+- Fix: deploy organization-specific workers with endpoint allowlists, mTLS and
+  secret isolation; qualify key custody, schemas and mappings; contract-test
+  exact deduplication/receipt semantics; monitor heartbeats and dead letters;
+  perform failure/replay/key-rotation drills. Keep imported business data
+  unverified until its domain controls pass.
+- Status: **APPLICATION TRANSPORT CORE IMPLEMENTED; DEPLOYMENT AND
+  QUALIFICATION OPEN - production blocker**.
+
 ## Remediated during review
 
 - Production OpenAPI/docs are disabled.

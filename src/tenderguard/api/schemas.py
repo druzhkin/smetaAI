@@ -49,6 +49,13 @@ from tenderguard.application.exports import (
     ExportArtifactView,
     ExportVerificationResult,
 )
+from tenderguard.application.integrations import (
+    IntegrationInboxClaim,
+    IntegrationInboxMessageView,
+    IntegrationInboxProcessingView,
+    IntegrationInboxReceiptResult,
+    IntegrationInboxSettlement,
+)
 from tenderguard.application.lineage import SnapshotLineage
 from tenderguard.application.passport import (
     PassportFactDraft,
@@ -79,6 +86,7 @@ from tenderguard.domain.approvals import ApprovalSubject
 from tenderguard.domain.calculation import AtomicCostInput, CalculationPolicy
 from tenderguard.domain.commercial_costs import CommercialCostModelInput
 from tenderguard.domain.enums import ActorRole, ApprovalState, ProjectAccessLevel
+from tenderguard.domain.integration import SignedIntegrationEnvelope
 from tenderguard.domain.models import ControlledVersion, GateDecision, Observation
 from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadView
 
@@ -381,6 +389,60 @@ class CommercialCostProposalResponse(CommercialCostProposalResult):
     pass
 
 
+class ReceiveIntegrationMessageRequest(ApiModel):
+    source_qualification_id: str = Field(min_length=1, max_length=128)
+    envelope: SignedIntegrationEnvelope
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class IntegrationInboxReceiptResponse(IntegrationInboxReceiptResult):
+    pass
+
+
+class ClaimIntegrationInboxRequest(ApiModel):
+    handler_qualification_id: str = Field(min_length=1, max_length=128)
+    topics: frozenset[str] = Field(min_length=1)
+    worker_id: str = Field(min_length=1, max_length=128)
+
+
+class IntegrationInboxClaimResponse(ApiModel):
+    claim: IntegrationInboxClaim | None
+
+
+class AcknowledgeIntegrationInboxRequest(ApiModel):
+    claim: IntegrationInboxClaim
+    result_reference: str = Field(min_length=1, max_length=500)
+    result_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class RejectIntegrationInboxRequest(ApiModel):
+    claim: IntegrationInboxClaim
+    error_code: str = Field(min_length=1, max_length=200)
+    force_dead_letter: bool = False
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class IntegrationInboxSettlementResponse(IntegrationInboxSettlement):
+    pass
+
+
+class ReplayIntegrationMessageRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class IntegrationInboxProcessingResponse(IntegrationInboxProcessingView):
+    pass
+
+
+class IntegrationInboxMessageResponse(IntegrationInboxMessageView):
+    pass
+
+
+class ReplayOutboxResponse(ApiModel):
+    replay_outbox_event_id: str
+
+
 class SubmitRiskItemRequest(ApiModel):
     draft: RiskItemDraft
     reason: str = Field(min_length=1, max_length=2000)
@@ -505,4 +567,6 @@ class ReadinessResponse(ApiModel):
     malware_scanner_qualified: bool
     document_processor_qualified: bool
     export_signing_configured: bool
+    integration_signing_configured: bool
+    integration_connectors_qualified: bool
     notes: tuple[str, ...]
