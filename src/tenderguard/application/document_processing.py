@@ -656,6 +656,12 @@ class DocumentProcessingService:
             raise ValueError("Document processor qualification has expired")
         if qualification.payload.get("organization_id") != actor.organization_id:
             raise ValueError("Document processor qualification belongs to another organisation")
+        if (
+            actor.roles != frozenset({ActorRole.SYSTEM})
+            or actor.actor_id != self.settings.document_worker_actor_id
+            or qualification.payload.get("service_actor_id") != actor.actor_id
+        ):
+            raise ValueError("Document processor qualification belongs to another service identity")
         if "DOCUMENT_INTAKE" not in qualification.payload.get("supported_methods", []):
             raise ValueError("Qualification does not authorize document intake")
         return qualification
@@ -681,6 +687,9 @@ class DocumentProcessingService:
             raise ValueError("CLEAN scan qualification has expired")
         if qualification.payload.get("organization_id") != actor.organization_id:
             raise ValueError("CLEAN scan qualification belongs to another organisation")
+        scanner_actor_id = qualification.payload.get("service_actor_id")
+        if not isinstance(scanner_actor_id, str) or not scanner_actor_id:
+            raise ValueError("CLEAN scan qualification has no bound service identity")
         if "MALWARE_SCAN" not in qualification.payload.get("supported_methods", []):
             raise ValueError("CLEAN scan qualification does not authorize malware scanning")
 
@@ -690,6 +699,11 @@ class DocumentProcessingService:
         actor: Actor,
         upload_id: str,
     ) -> QuarantinedUploadRow:
+        if (
+            actor.roles != frozenset({ActorRole.SYSTEM})
+            or actor.actor_id != self.settings.document_worker_actor_id
+        ):
+            raise ValueError("Document processing is restricted to the configured service identity")
         upload = session.scalar(
             select(QuarantinedUploadRow)
             .where(
@@ -736,10 +750,9 @@ class DocumentProcessingService:
         actor: Actor,
         upload: QuarantinedUploadRow,
     ) -> QuarantinedUploadView:
-        return self._quarantine_service(session).get(
+        return self._quarantine_service(session).document_worker_view(
             actor=actor,
-            project_id=upload.project_id,
-            upload_id=upload.id,
+            upload=upload,
         )
 
     def _quarantine_service(self, session: Session) -> QuarantineService:

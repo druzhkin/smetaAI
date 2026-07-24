@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -26,6 +29,8 @@ from tenderguard.domain.enums import (
     ApprovalState,
     MatchClass,
     PriceStatus,
+    ProjectAccessLevel,
+    ProjectMembershipStatus,
     Severity,
     VerificationStatus,
     VersionStatus,
@@ -68,6 +73,7 @@ from tenderguard.infrastructure.orm import (
     OutboxEventRow,
     PriceDecisionRow,
     ProjectControlledVersionRow,
+    ProjectMembershipRow,
     ProjectPassportFactRow,
     ProjectRow,
     QuantityRow,
@@ -94,6 +100,26 @@ class ProjectView(ApplicationModel):
     state: ApprovalState
     row_version: int
     current_document_set_revision_id: str | None
+
+
+class ProjectMembershipView(ApplicationModel):
+    membership_revision_id: str
+    project_id: str
+    principal_id: str
+    roles: tuple[ActorRole, ...]
+    access_level: ProjectAccessLevel
+    status: ProjectMembershipStatus
+    version: int
+    supersedes_membership_id: str | None
+    changed_by: str
+    reason: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class SystemProjectAccess:
+    qualification_id: str
+    capability: str
 
 
 class DocumentUploadResult(ApplicationModel):
@@ -134,6 +160,11 @@ class ProjectService:
         reason: str,
     ) -> ProjectView:
         actor.require_any(ActorRole.ESTIMATOR, ActorRole.ADMIN)
+        if ActorRole.SYSTEM in actor.roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="SYSTEM identities cannot create projects",
+            )
         now = utc_now()
         project = ProjectRow(
             id=f"project-{uuid4()}",
@@ -147,6 +178,22 @@ class ProjectService:
         )
         self.session.add(project)
         self.session.flush()
+        owner_membership = self._append_membership(
+            project=project,
+            principal_id=actor.actor_id,
+            roles=tuple(
+                sorted(
+                    (role for role in actor.roles if role is not ActorRole.SYSTEM),
+                    key=lambda role: role.value,
+                )
+            ),
+            access_level=ProjectAccessLevel.OWNER,
+            status_value=ProjectMembershipStatus.ACTIVE,
+            changed_by=actor.actor_id,
+            reason=reason,
+            previous=None,
+            now=now,
+        )
         self._audit(
             aggregate_type="project",
             aggregate_id=project.id,
@@ -154,7 +201,27 @@ class ProjectService:
             actor=actor,
             request_id=request_id,
             reason=reason,
-            payload={"code": code, "name": name, "state": ApprovalState.DRAFT},
+            payload={
+                "code": code,
+                "name": name,
+                "state": ApprovalState.DRAFT,
+                "owner_membership_revision_id": owner_membership.id,
+            },
+        )
+        self._audit(
+            aggregate_type="project",
+            aggregate_id=project.id,
+            event_type="project_membership_bootstrapped",
+            actor=actor,
+            request_id=request_id,
+            reason=reason,
+            payload={
+                "membership_revision_id": owner_membership.id,
+                "principal_id": actor.actor_id,
+                "roles": owner_membership.roles,
+                "access_level": owner_membership.access_level,
+                "version": owner_membership.version,
+            },
         )
         self._outbox(
             topic="project.created",
@@ -193,7 +260,28 @@ class ProjectService:
     ) -> None:
         self._outbox(topic=topic, aggregate_id=aggregate_id, payload=payload)
 
-    def get_project(self, *, actor: Actor, project_id: str, lock: bool = False) -> ProjectRow:
+    def get_project(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        lock: bool = False,
+        required_roles: tuple[ActorRole, ...] | None = None,
+        require_owner: bool = False,
+        system_access: SystemProjectAccess | None = None,
+    ) -> ProjectRow:
+        is_system = ActorRole.SYSTEM in actor.roles
+        if is_system:
+            if actor.roles != frozenset({ActorRole.SYSTEM}) or system_access is None:
+                raise ProjectNotFoundError(project_id)
+        else:
+            if system_access is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Service access can only be used by a SYSTEM actor",
+                )
+            if required_roles:
+                actor.require_any(*required_roles)
         query: Select[tuple[ProjectRow]] = select(ProjectRow).where(
             ProjectRow.id == project_id,
             ProjectRow.organization_id == actor.organization_id,
@@ -203,10 +291,169 @@ class ProjectService:
         project = self.session.scalar(query)
         if project is None:
             raise ProjectNotFoundError(project_id)
+        if system_access is not None:
+            self._require_system_access(actor=actor, access=system_access)
+            return project
+        membership = self._current_membership(
+            project_id=project.id,
+            principal_id=actor.actor_id,
+        )
+        if membership is None or membership.status != ProjectMembershipStatus.ACTIVE.value:
+            raise ProjectNotFoundError(project_id)
+        scoped_roles = self._membership_roles(membership)
+        if required_roles:
+            effective_roles = actor.roles.intersection(scoped_roles, required_roles)
+        else:
+            effective_roles = actor.roles.intersection(scoped_roles)
+        if not effective_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Required project role is missing",
+            )
+        if require_owner and membership.access_level != ProjectAccessLevel.OWNER.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Project owner access is required",
+            )
         return project
 
     def project_view(self, *, actor: Actor, project_id: str) -> ProjectView:
         return self._view(self.get_project(actor=actor, project_id=project_id))
+
+    def grant_project_membership(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        principal_id: str,
+        roles: tuple[ActorRole, ...],
+        access_level: ProjectAccessLevel,
+        request_id: str,
+        reason: str,
+    ) -> ProjectMembershipView:
+        principal_id = self._required_text(principal_id, "principal_id", 128)
+        reason = self._required_text(reason, "reason", 2000)
+        normalized_roles = tuple(sorted(set(roles), key=lambda role: role.value))
+        if not normalized_roles:
+            raise ValueError("At least one project role is required")
+        if ActorRole.SYSTEM in normalized_roles:
+            raise ValueError(
+                "SYSTEM identities use qualified service access, not project membership"
+            )
+        if (
+            principal_id == actor.actor_id
+            and access_level is ProjectAccessLevel.OWNER
+            and not actor.roles.intersection(normalized_roles)
+        ):
+            raise ValueError("An owner cannot remove every currently usable project role")
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            require_owner=True,
+        )
+        previous = self._current_membership(
+            project_id=project.id,
+            principal_id=principal_id,
+        )
+        if (
+            previous is not None
+            and previous.status == ProjectMembershipStatus.ACTIVE.value
+            and previous.access_level == access_level.value
+            and previous.roles == [role.value for role in normalized_roles]
+        ):
+            return self._membership_view(previous)
+        if (
+            previous is not None
+            and previous.status == ProjectMembershipStatus.ACTIVE.value
+            and previous.access_level == ProjectAccessLevel.OWNER.value
+            and access_level is not ProjectAccessLevel.OWNER
+        ):
+            self._require_another_active_owner(project.id, excluding=principal_id)
+        row = self._append_membership(
+            project=project,
+            principal_id=principal_id,
+            roles=normalized_roles,
+            access_level=access_level,
+            status_value=ProjectMembershipStatus.ACTIVE,
+            changed_by=actor.actor_id,
+            reason=reason,
+            previous=previous,
+            now=utc_now(),
+        )
+        self._record_membership_change(
+            actor=actor,
+            project_id=project.id,
+            row=row,
+            request_id=request_id,
+            reason=reason,
+            event_type="project_membership_granted",
+        )
+        return self._membership_view(row)
+
+    def revoke_project_membership(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        principal_id: str,
+        request_id: str,
+        reason: str,
+    ) -> ProjectMembershipView:
+        principal_id = self._required_text(principal_id, "principal_id", 128)
+        reason = self._required_text(reason, "reason", 2000)
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            require_owner=True,
+        )
+        previous = self._current_membership(
+            project_id=project.id,
+            principal_id=principal_id,
+        )
+        if previous is None or previous.status != ProjectMembershipStatus.ACTIVE.value:
+            raise LookupError(principal_id)
+        if previous.access_level == ProjectAccessLevel.OWNER.value:
+            self._require_another_active_owner(project.id, excluding=principal_id)
+        row = self._append_membership(
+            project=project,
+            principal_id=principal_id,
+            roles=self._membership_roles(previous),
+            access_level=ProjectAccessLevel(previous.access_level),
+            status_value=ProjectMembershipStatus.REVOKED,
+            changed_by=actor.actor_id,
+            reason=reason,
+            previous=previous,
+            now=utc_now(),
+        )
+        self._record_membership_change(
+            actor=actor,
+            project_id=project.id,
+            row=row,
+            request_id=request_id,
+            reason=reason,
+            event_type="project_membership_revoked",
+        )
+        return self._membership_view(row)
+
+    def list_project_memberships(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+    ) -> tuple[ProjectMembershipView, ...]:
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            require_owner=True,
+        )
+        current = self._current_memberships(project.id)
+        return tuple(
+            self._membership_view(row)
+            for row in sorted(current, key=lambda item: item.principal_id)
+            if row.status == ProjectMembershipStatus.ACTIVE.value
+        )
 
     def register_scanned_document_revision(
         self,
@@ -231,7 +478,15 @@ class ProjectService:
         invalidated_document_set_revision_id: str | None = None,
     ) -> DocumentUploadResult:
         actor.require_any(ActorRole.SYSTEM)
-        project = self.get_project(actor=actor, project_id=project_id, lock=True)
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            system_access=SystemProjectAccess(
+                qualification_id=self.settings.document_processor_qualification_id or "",
+                capability="DOCUMENT_INTAKE",
+            ),
+        )
         if ApprovalState(project.state) in {
             ApprovalState.APPROVED_FOR_BID,
             ApprovalState.SUPERSEDED,
@@ -440,12 +695,12 @@ class ProjectService:
         request_id: str,
         reason: str,
     ) -> str | None:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.ADMIN,
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
         )
-        project = self.get_project(actor=actor, project_id=project_id, lock=True)
         state = ApprovalState(project.state)
         if state in {
             ApprovalState.APPROVED_FOR_BID,
@@ -542,8 +797,12 @@ class ProjectService:
         request_id: str,
         reason: str,
     ) -> ProjectView:
-        actor.require_any(ActorRole.REVIEWER, ActorRole.APPROVER)
-        project = self.get_project(actor=actor, project_id=project_id, lock=True)
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.REVIEWER, ActorRole.APPROVER),
+        )
         candidate = self.session.scalar(
             select(DocumentSetRevisionRow)
             .where(
@@ -600,14 +859,17 @@ class ProjectService:
             ApprovalState.APPROVED_FOR_INTERNAL_USE,
         }:
             raise ValueError("Approval states require a dedicated release decision")
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.PROCUREMENT,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.ADMIN,
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.PROCUREMENT,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
         )
-        project = self.get_project(actor=actor, project_id=project_id, lock=True)
         if project.row_version != expected_row_version:
             raise OptimisticLockError(
                 f"Expected row version {expected_row_version}, found {project.row_version}"
@@ -661,7 +923,16 @@ class ProjectService:
             )
 
     def evaluate_release(self, *, actor: Actor, project_id: str) -> ReleaseContext:
-        project = self.get_project(actor=actor, project_id=project_id)
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.REVIEWER,
+                ActorRole.APPROVER,
+                ActorRole.AUDITOR,
+            ),
+        )
         return self._build_release_context(project)
 
     def normative_engine_qualified(self) -> bool:
@@ -713,8 +984,12 @@ class ProjectService:
         reason: str,
         requested_state: ApprovalState,
     ) -> tuple[ProjectView, Any]:
-        actor.require_any(ActorRole.APPROVER)
-        project = self.get_project(actor=actor, project_id=project_id, lock=True)
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.APPROVER,),
+        )
         if project.row_version != expected_row_version:
             raise OptimisticLockError(
                 f"Expected row version {expected_row_version}, found {project.row_version}"
@@ -1354,6 +1629,199 @@ class ProjectService:
             normative_calculation_valid=normative_calculation_valid,
             production_qualification_complete=production_qualified,
         )
+
+    def _current_membership(
+        self,
+        *,
+        project_id: str,
+        principal_id: str,
+    ) -> ProjectMembershipRow | None:
+        return self.session.scalar(
+            select(ProjectMembershipRow)
+            .where(
+                ProjectMembershipRow.project_id == project_id,
+                ProjectMembershipRow.principal_id == principal_id,
+            )
+            .order_by(ProjectMembershipRow.version.desc())
+            .limit(1)
+        )
+
+    def _current_memberships(self, project_id: str) -> tuple[ProjectMembershipRow, ...]:
+        rows = list(
+            self.session.scalars(
+                select(ProjectMembershipRow)
+                .where(ProjectMembershipRow.project_id == project_id)
+                .order_by(
+                    ProjectMembershipRow.principal_id,
+                    ProjectMembershipRow.version.desc(),
+                )
+            )
+        )
+        current: dict[str, ProjectMembershipRow] = {}
+        for row in rows:
+            current.setdefault(row.principal_id, row)
+        return tuple(current.values())
+
+    def _append_membership(
+        self,
+        *,
+        project: ProjectRow,
+        principal_id: str,
+        roles: Iterable[ActorRole],
+        access_level: ProjectAccessLevel,
+        status_value: ProjectMembershipStatus,
+        changed_by: str,
+        reason: str,
+        previous: ProjectMembershipRow | None,
+        now: datetime,
+    ) -> ProjectMembershipRow:
+        row = ProjectMembershipRow(
+            id=f"membership-{uuid4()}",
+            project_id=project.id,
+            principal_id=principal_id,
+            roles=sorted(role.value for role in roles),
+            access_level=access_level.value,
+            status=status_value.value,
+            version=1 if previous is None else previous.version + 1,
+            supersedes_membership_id=None if previous is None else previous.id,
+            changed_by=changed_by,
+            reason=reason,
+            created_at=now,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def _record_membership_change(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        row: ProjectMembershipRow,
+        request_id: str,
+        reason: str,
+        event_type: str,
+    ) -> None:
+        payload = {
+            "membership_revision_id": row.id,
+            "principal_id": row.principal_id,
+            "roles": row.roles,
+            "access_level": row.access_level,
+            "status": row.status,
+            "version": row.version,
+            "supersedes_membership_id": row.supersedes_membership_id,
+        }
+        self._audit(
+            aggregate_type="project",
+            aggregate_id=project_id,
+            event_type=event_type,
+            actor=actor,
+            request_id=request_id,
+            reason=reason,
+            payload=payload,
+        )
+        self._outbox(
+            topic="project.membership.changed",
+            aggregate_id=project_id,
+            payload={"project_id": project_id, **payload},
+        )
+
+    def _require_another_active_owner(self, project_id: str, *, excluding: str) -> None:
+        owners = [
+            row
+            for row in self._current_memberships(project_id)
+            if row.principal_id != excluding
+            and row.status == ProjectMembershipStatus.ACTIVE.value
+            and row.access_level == ProjectAccessLevel.OWNER.value
+        ]
+        if not owners:
+            raise ValueError("The last active project owner cannot be removed or downgraded")
+
+    def _require_system_access(
+        self,
+        *,
+        actor: Actor,
+        access: SystemProjectAccess,
+    ) -> None:
+        qualification = self.session.scalar(
+            select(AdapterQualificationRow).where(
+                AdapterQualificationRow.id == access.qualification_id,
+                AdapterQualificationRow.status == "APPROVED",
+            )
+        )
+        if qualification is None:
+            self._deny_system_access()
+        assert qualification is not None
+        if qualification.valid_until and qualification.valid_until < utc_now().date():
+            self._deny_system_access()
+        payload = qualification.payload
+        if (
+            payload.get("organization_id") != actor.organization_id
+            or payload.get("service_actor_id") != actor.actor_id
+            or access.capability not in payload.get("supported_methods", [])
+        ):
+            self._deny_system_access()
+        configured: tuple[str | None, str | None] | None = None
+        if access.capability == "MALWARE_SCAN":
+            configured = (
+                self.settings.malware_scanner_qualification_id,
+                self.settings.malware_scanner_adapter,
+            )
+        elif access.capability == "DOCUMENT_INTAKE":
+            configured = (
+                self.settings.document_processor_qualification_id,
+                self.settings.document_processor_adapter,
+            )
+        if configured is not None and (
+            qualification.id != configured[0] or qualification.adapter_name != configured[1]
+        ):
+            self._deny_system_access()
+
+    @staticmethod
+    def _deny_system_access() -> None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Qualified service access is denied",
+        )
+
+    @staticmethod
+    def _membership_roles(row: ProjectMembershipRow) -> frozenset[ActorRole]:
+        roles: set[ActorRole] = set()
+        for value in row.roles:
+            try:
+                role = ActorRole(value)
+            except ValueError:
+                continue
+            if role is not ActorRole.SYSTEM:
+                roles.add(role)
+        return frozenset(roles)
+
+    @staticmethod
+    def _membership_view(row: ProjectMembershipRow) -> ProjectMembershipView:
+        created_at = ensure_utc(row.created_at)
+        assert created_at is not None
+        return ProjectMembershipView(
+            membership_revision_id=row.id,
+            project_id=row.project_id,
+            principal_id=row.principal_id,
+            roles=tuple(sorted(ProjectService._membership_roles(row), key=lambda role: role.value)),
+            access_level=ProjectAccessLevel(row.access_level),
+            status=ProjectMembershipStatus(row.status),
+            version=row.version,
+            supersedes_membership_id=row.supersedes_membership_id,
+            changed_by=row.changed_by,
+            reason=row.reason,
+            created_at=created_at,
+        )
+
+    @staticmethod
+    def _required_text(value: str, field: str, max_length: int) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(f"{field} is required")
+        if len(normalized) > max_length:
+            raise ValueError(f"{field} exceeds {max_length} characters")
+        return normalized
 
     def _qualified_normative_adapter(self) -> AdapterQualificationRow | None:
         qualification_id = self.settings.normative_adapter_qualification_id

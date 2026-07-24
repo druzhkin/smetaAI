@@ -9,7 +9,7 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tenderguard.application.projects import ProjectService
+from tenderguard.application.projects import ProjectService, SystemProjectAccess
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash, utc_now
 from tenderguard.domain.enums import (
@@ -91,18 +91,28 @@ class EvidenceService:
         request_id: str,
         reason: str,
     ) -> Observation:
-        actor.require_any(
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.SYSTEM,
-            ActorRole.ADMIN,
-        )
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        if ActorRole.SYSTEM in actor.roles:
+            project_service.get_project(
+                actor=actor,
+                project_id=project_id,
+                lock=True,
+                system_access=SystemProjectAccess(
+                    qualification_id=draft.adapter_qualification_id or "",
+                    capability=draft.method.value,
+                ),
+            )
+        else:
+            project_service.get_project(
+                actor=actor,
+                project_id=project_id,
+                lock=True,
+                required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+            )
         revision = self.session.scalar(
             select(DocumentRevisionRow)
             .join(DocumentRow, DocumentRow.id == DocumentRevisionRow.document_id)
@@ -191,13 +201,17 @@ class EvidenceService:
         request_id: str,
         reason: str,
     ) -> ReconciliationOutcome:
-        actor.require_any(ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT)
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT),
+        )
         rule_version = self.session.scalar(
             select(ControlledVersionRow)
             .join(
@@ -348,13 +362,17 @@ class EvidenceService:
         command: ConflictResolutionCommand,
         request_id: str,
     ) -> ConflictResolutionResult:
-        actor.require_any(ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT)
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT),
+        )
         row = self.session.scalar(
             select(ConflictRow)
             .where(
@@ -506,6 +524,8 @@ class EvidenceService:
             raise ValueError("Evidence adapter qualification has expired")
         if qualification.payload.get("organization_id") != actor.organization_id:
             raise ValueError("Evidence adapter qualification belongs to another organisation")
+        if qualification.payload.get("service_actor_id") != actor.actor_id:
+            raise ValueError("Evidence adapter qualification belongs to another service identity")
         if draft.method.value not in qualification.payload.get("supported_methods", []):
             raise ValueError("Evidence method is outside the adapter qualification")
 

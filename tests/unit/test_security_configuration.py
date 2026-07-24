@@ -114,6 +114,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
                     payload={
                         "organization_id": "org-1",
                         "supported_methods": ["MALWARE_SCAN"],
+                        "service_actor_id": "malware-scanner",
                     },
                     approved_by="owner-2",
                     approved_at=now,
@@ -128,6 +129,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
                     payload={
                         "organization_id": "org-1",
                         "supported_methods": ["DOCUMENT_INTAKE"],
+                        "service_actor_id": "document-worker",
                     },
                     approved_by="owner-2",
                     approved_at=now,

@@ -21,7 +21,7 @@ qualification evidence are external controls and remain production blockers.
 ### SEC-001 - Operational malware scanner and parser sandbox are not deployed
 
 - Rule ID: FASTAPI-UPLOAD-001 / defence-in-depth input boundary
-- Location: `src/tenderguard/application/quarantine.py:193`,
+- Location: `src/tenderguard/application/quarantine.py:211`,
   `src/tenderguard/application/document_processing.py:88`,
   `src/tenderguard/application/document_jobs.py:49`,
   `src/tenderguard/cli.py:123`
@@ -46,9 +46,9 @@ qualification evidence are external controls and remain production blockers.
 ### SEC-002 - Application-level whole-file materialisation
 
 - Rule ID: FASTAPI-RES-001 / FASTAPI-UPLOAD-001
-- Location: `src/tenderguard/api/main.py:539`,
+- Location: `src/tenderguard/api/main.py:608`,
   `src/tenderguard/infrastructure/object_store.py:48`,
-  `src/tenderguard/infrastructure/intake.py:567`
+  `src/tenderguard/infrastructure/intake.py:642`
 - Evidence: the API copies the `UploadFile` spool into quarantine with a hard
   byte limit. Archive members use `ZipFile.open`, bounded copy, and
   `SpooledTemporaryFile`; `ZipFile.read` is not used.
@@ -61,19 +61,30 @@ qualification evidence are external controls and remain production blockers.
 
 ## Medium severity
 
-### SEC-003 - Authorisation is organisation-wide, not project-ACL based
+### SEC-003 - Project object authorisation and information barriers
 
 - Rule ID: FASTAPI-AUTHZ-001
-- Location: `src/tenderguard/application/projects.py:196`
-- Evidence: object access checks organisation ID and role, but no project
-  membership or information-barrier table is evaluated.
-- Impact: an authorised estimator/reviewer in the same organisation can access
-  every tender project, which may violate need-to-know controls.
-- Fix: add project membership/ACL and enforce it in the central project lookup;
-  separate business administration from infrastructure administration.
-- False-positive note: a single-team deployment may formally accept
-  organisation-wide access, but that decision must be documented.
-- Status: **OPEN**.
+- Location: `src/tenderguard/application/projects.py:263`,
+  `src/tenderguard/infrastructure/orm.py:57`,
+  `migrations/versions/a81c4e7d9b20_add_project_access_control.py:30`
+- Evidence: the central project lookup now requires an active, latest
+  membership revision and an action-specific intersection between OIDC roles
+  and project roles. Non-members receive `404`, infrastructure `ADMIN` is no
+  longer accepted as a business-calculation role, and `SYSTEM` identities can
+  use only an explicit capability backed by an active qualification bound to
+  the exact service actor.
+- Impact: the prior same-organisation horizontal-access path is closed.
+  Membership grant, role replacement, and revocation are project-owner
+  actions with project audit events and append-only revision history.
+- Database enforcement: PostgreSQL rejects membership update/delete, forked
+  revision chains, empty roles, and human membership for `SYSTEM`; application
+  changes serialize on the project row. Legacy backfill refuses to infer an
+  owner unless exactly one `project_created` audit event exists.
+- Residual operational work: qualify IdP role/group lifecycle, owner recovery
+  and break-glass procedures, periodic access review, and (where required)
+  PostgreSQL RLS as an additional independent control.
+- Status: **REMEDIATED IN APPLICATION/DATABASE CODE; operational access
+  governance evidence OPEN**.
 
 ### SEC-004 - WORM and external audit anchoring are specified but not verified
 
@@ -139,7 +150,7 @@ qualification evidence are external controls and remain production blockers.
   quality gates require structured, hashed, owned, environment-specific
   evidence.
 - Docker installation uses the lock file; `pip-audit` found no known
-  third-party vulnerabilities in the resolved environment on 2026-07-23
+  third-party vulnerabilities in the resolved environment on 2026-07-24
   (the local proprietary package is naturally not present on PyPI).
 - Approved releases can be exported only as deterministic content-addressed
   packages whose mandatory section hashes are covered by an Ed25519 signature.
@@ -162,3 +173,7 @@ qualification evidence are external controls and remain production blockers.
   ownership token before the persisted deadline. Retry is bounded, exhausted
   work retains its input blocker in a dead-letter state, and administrator
   replay creates a new event instead of editing terminal PostgreSQL evidence.
+- Project access is no longer inherited from organisation membership. Owners
+  issue explicit versioned project roles; every project-bound service checks
+  the role needed for that action, revoked users receive no object visibility,
+  and PostgreSQL protects the membership history from mutation.

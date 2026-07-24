@@ -113,8 +113,11 @@ class ContractService:
         request_id: str,
         reason: str,
     ) -> ContractTermView:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
-        project = self._require_editable_state(actor, project_id)
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         observations = self._observations(project.id, draft.observation_ids)
         self._validate_observation_values(draft, observations)
         requirements, rules = self._requirements(project.id)
@@ -181,8 +184,11 @@ class ContractService:
         request_id: str,
         reason: str,
     ) -> tuple[ContractTermView, ContractValidationResult]:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
-        project = self._require_editable_state(actor, project_id)
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         row = self._current_term(project.id, term_id)
         if row.verified:
             raise ValueError("Only an unverified current contract term can be verified")
@@ -243,8 +249,11 @@ class ContractService:
         request_id: str,
         reason: str,
     ) -> ContractTermView:
-        actor.require_any(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT, ActorRole.ADMIN)
-        project = self._require_editable_state(actor, project_id)
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
+        )
         source = self._current_term(project.id, term_id)
         if not source.verified:
             raise ValueError("Contract cost impact requires a verified term")
@@ -319,13 +328,15 @@ class ContractService:
         request_id: str,
         reason: str,
     ) -> tuple[ContractTermView, ContractValidationResult]:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.ADMIN,
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
         )
-        project = self._require_editable_state(actor, project_id)
         row = self._current_term(project.id, term_id)
         if row.cost_impact_resolved:
             raise ValueError("Contract cost impact is already resolved")
@@ -390,17 +401,16 @@ class ContractService:
         request_id: str,
         reason: str,
     ) -> ContractValidationResult:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.AUDITOR,
-            ActorRole.ADMIN,
-        )
         self._project_service().get_project(
             actor=actor,
             project_id=project_id,
             lock=True,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+                ActorRole.AUDITOR,
+            ),
         )
         result = self._validate_current(project_id)
         self._audit(
@@ -615,11 +625,18 @@ class ContractService:
                 existing.payload = payload
                 existing.updated_at = now
 
-    def _require_editable_state(self, actor: Actor, project_id: str) -> Any:
+    def _require_editable_state(
+        self,
+        actor: Actor,
+        project_id: str,
+        *,
+        required_roles: tuple[ActorRole, ...],
+    ) -> Any:
         project = self._project_service().get_project(
             actor=actor,
             project_id=project_id,
             lock=True,
+            required_roles=required_roles,
         )
         if ApprovalState(project.state) not in {
             ApprovalState.EXTRACTION_IN_PROGRESS,

@@ -4,10 +4,11 @@ from datetime import timedelta
 from typing import BinaryIO
 from uuid import uuid4
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tenderguard.application.projects import ProjectService
+from tenderguard.application.projects import ProjectService, SystemProjectAccess
 from tenderguard.config import Settings
 from tenderguard.domain.common import canonical_json, content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import ActorRole, Severity
@@ -62,11 +63,6 @@ class QuarantineService:
         reason: str,
         make_candidate_current: bool,
     ) -> QuarantinedUploadView:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.ADMIN,
-        )
         logical_key = self._required_text(logical_key, "logical_key", 300)
         title = self._required_text(title, "title", 1000)
         document_type = self._required_text(document_type, "document_type", 100)
@@ -74,7 +70,12 @@ class QuarantineService:
         self._required_text(reason, "reason", 2000)
         safe_filename = normalize_upload_filename(filename)
         project_service = self._project_service()
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
+        )
         active_statuses = {
             QuarantineStatus.QUARANTINED.value,
             QuarantineStatus.CLEAN.value,
@@ -190,6 +191,23 @@ class QuarantineService:
             raise LookupError(upload_id)
         return self._view(upload)
 
+    def document_worker_view(
+        self,
+        *,
+        actor: Actor,
+        upload: QuarantinedUploadRow,
+    ) -> QuarantinedUploadView:
+        if (
+            actor.roles != frozenset({ActorRole.SYSTEM})
+            or actor.actor_id != self.settings.document_worker_actor_id
+            or actor.organization_id != upload.organization_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Document worker access is denied",
+            )
+        return self._view(upload)
+
     def record_scan_result(
         self,
         *,
@@ -200,8 +218,14 @@ class QuarantineService:
         request_id: str,
         reason: str,
     ) -> QuarantinedUploadView:
-        actor.require_any(ActorRole.SYSTEM)
-        self._project_service().get_project(actor=actor, project_id=project_id)
+        self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            system_access=SystemProjectAccess(
+                qualification_id=result.adapter_qualification_id,
+                capability="MALWARE_SCAN",
+            ),
+        )
         upload = self.session.scalar(
             select(QuarantinedUploadRow)
             .where(
@@ -345,10 +369,14 @@ class QuarantineService:
         request_id: str,
         reason: str,
     ) -> QuarantinedUploadView:
-        actor.require_any(ActorRole.ADMIN)
         self._required_text(reason, "reason", 2000)
         project_service = self._project_service()
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ADMIN,),
+        )
         upload = self.session.scalar(
             select(QuarantinedUploadRow)
             .where(
@@ -480,6 +508,8 @@ class QuarantineService:
             raise ValueError("Malware scanner qualification has expired")
         if qualification.payload.get("organization_id") != actor.organization_id:
             raise ValueError("Malware scanner qualification belongs to another organisation")
+        if qualification.payload.get("service_actor_id") != actor.actor_id:
+            raise ValueError("Malware scanner qualification belongs to another service identity")
         if "MALWARE_SCAN" not in qualification.payload.get("supported_methods", []):
             raise ValueError("Qualification does not authorize malware scanning")
 

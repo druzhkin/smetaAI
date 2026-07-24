@@ -16,6 +16,29 @@
 
 No critical change may be approved by its author.
 
+## Project-access migration and service identities
+
+Before applying migration `a81c4e7d9b20`, restore the exact
+`AUDIT_SIGNING_KEY` that signed the existing project audit history. The
+migration verifies every complete project chain and derives the initial owner
+only from its single verified `project_created` event. A missing event,
+tampered chain, unknown creator role, or wrong historical key aborts the
+migration transaction; do not bypass this stop by inserting memberships
+manually.
+
+Every active scanner, document processor, or other project-bound adapter
+qualification must contain the governed `service_actor_id` of the runtime
+identity that presents the `SYSTEM` role. After deployment, readiness and
+service actions fail closed when this binding is absent or differs. Reapprove
+legacy qualifications with evidence and four-eyes governance before enabling
+traffic. Do not grant `SYSTEM` through project membership.
+
+Project owners grant and revoke project membership through the API. Organisation
+membership, an `ADMIN` role, or possession of a project identifier does not
+confer project access. Retain at least two governed project owners where the
+operational policy requires owner recovery; the application blocks removal of
+the last recorded owner but cannot repair an IdP-disabled sole owner.
+
 ## Runtime health probes
 
 - `GET /health/live` returns HTTP 200 while the process can serve requests.

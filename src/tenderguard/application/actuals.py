@@ -96,14 +96,16 @@ class ActualsService:
         request_id: str,
         reason: str,
     ) -> ActualRecordView:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.PROCUREMENT,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.AUDITOR,
-            ActorRole.ADMIN,
+        project = self._require_post_award_state(
+            actor,
+            project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.PROCUREMENT,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.AUDITOR,
+            ),
         )
-        project = self._require_post_award_state(actor, project_id)
         observation = self.session.scalar(
             select(ObservationRow).where(
                 ObservationRow.id == draft.source_observation_id,
@@ -182,8 +184,11 @@ class ActualsService:
         request_id: str,
         reason: str,
     ) -> ActualRecordView:
-        actor.require_any(ActorRole.REVIEWER, ActorRole.AUDITOR)
-        project = self._require_post_award_state(actor, project_id)
+        project = self._require_post_award_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.REVIEWER, ActorRole.AUDITOR),
+        )
         row = self.session.scalar(
             select(ActualRecordRow)
             .where(
@@ -230,8 +235,11 @@ class ActualsService:
         request_id: str,
         reason: str,
     ) -> ActualComparisonResult:
-        actor.require_any(ActorRole.REVIEWER, ActorRole.AUDITOR)
-        project = self._require_post_award_state(actor, project_id)
+        project = self._require_post_award_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.REVIEWER, ActorRole.AUDITOR),
+        )
         row = self.session.scalar(
             select(ActualRecordRow).where(
                 ActualRecordRow.id == actual_id,
@@ -374,8 +382,11 @@ class ActualsService:
         request_id: str,
         reason: str,
     ) -> CalibrationExample:
-        actor.require_any(ActorRole.METHODOLOGY_OWNER)
-        project = self._require_post_award_state(actor, project_id)
+        project = self._require_post_award_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.METHODOLOGY_OWNER,),
+        )
         row = self.session.scalar(
             select(CalibrationExampleRow)
             .where(
@@ -416,11 +427,18 @@ class ActualsService:
         )
         return CalibrationExample.model_validate(row.payload["calibration_example"])
 
-    def _require_post_award_state(self, actor: Actor, project_id: str) -> Any:
+    def _require_post_award_state(
+        self,
+        actor: Actor,
+        project_id: str,
+        *,
+        required_roles: tuple[ActorRole, ...],
+    ) -> Any:
         project = self._project_service().get_project(
             actor=actor,
             project_id=project_id,
             lock=True,
+            required_roles=required_roles,
         )
         if ApprovalState(project.state) not in {
             ApprovalState.APPROVED_FOR_INTERNAL_USE,

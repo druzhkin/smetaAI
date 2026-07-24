@@ -118,6 +118,16 @@ class ActorRole(StrEnum):
     SYSTEM = "SYSTEM"
 
 
+class ProjectAccessLevel(StrEnum):
+    MEMBER = "MEMBER"
+    OWNER = "OWNER"
+
+
+class ProjectMembershipStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+
+
 class ApprovalDecision(StrEnum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"

@@ -70,6 +70,7 @@ def _seed_qualifications(engine: Engine) -> None:
                     payload={
                         "organization_id": "org-1",
                         "supported_methods": ["MALWARE_SCAN"],
+                        "service_actor_id": "scanner-1",
                     },
                     approved_by="methodology-owner-b",
                     approved_at=now,
@@ -84,6 +85,7 @@ def _seed_qualifications(engine: Engine) -> None:
                     payload={
                         "organization_id": "org-1",
                         "supported_methods": ["DOCUMENT_INTAKE"],
+                        "service_actor_id": "document-worker",
                     },
                     approved_by="methodology-owner-b",
                     approved_at=now,
@@ -464,6 +466,21 @@ def test_dispatcher_dead_letters_after_bounded_qualification_failures(
             assert dead_letter_audit is not None
         assert not [path for path in (tmp_path / "objects").rglob("*") if path.is_file()]
 
+        admin_membership = client.post(
+            f"/v1/projects/{upload['project_id']}/members",
+            headers={
+                "X-Dev-Actor": "estimator-1",
+                "X-Dev-Organization": "org-1",
+                "X-Dev-Roles": "ESTIMATOR",
+            },
+            json={
+                "principal_id": "operations-admin",
+                "roles": ["ADMIN"],
+                "access_level": "MEMBER",
+                "reason": "Authorize incident replay without business permissions",
+            },
+        )
+        assert admin_membership.status_code == 200, admin_membership.text
         denied = client.post(
             (
                 f"/v1/projects/{upload['project_id']}/document-uploads/"

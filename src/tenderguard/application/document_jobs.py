@@ -251,7 +251,7 @@ class DocumentIntakeDispatcher:
                 settings=self.settings,
                 evidence_store=self.evidence_store,
                 quarantine_store=self.quarantine_store,
-            ).get(actor=actor, project_id=upload.project_id, upload_id=upload.id)
+            ).document_worker_view(actor=actor, upload=upload)
             if view.status is QuarantineStatus.PROCESSED:
                 disposition = DispatchDisposition.PROCESSED
             elif view.status is QuarantineStatus.PROCESSING_DEAD_LETTERED:

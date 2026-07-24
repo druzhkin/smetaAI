@@ -84,13 +84,17 @@ class CalculationService:
         request_id: str,
         reason: str,
     ) -> CalculationExecutionResult:
-        actor.require_any(ActorRole.ESTIMATOR, ActorRole.ADMIN)
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ESTIMATOR,),
+        )
         if project.row_version != expected_row_version:
             from tenderguard.application.projects import OptimisticLockError
 

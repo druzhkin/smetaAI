@@ -24,6 +24,7 @@ from tenderguard.infrastructure.orm import (
     ObservationRow,
     ProjectRow,
 )
+from tests.integration.support import project_memberships
 
 
 def test_verified_actual_becomes_calibration_label_only_after_reason_and_approval(
@@ -59,6 +60,14 @@ def test_verified_actual_becomes_calibration_label_only_after_reason_and_approva
                 row_version=1,
                 created_at=now,
                 updated_at=now,
+            )
+        )
+        session.add_all(
+            project_memberships(
+                "project-actuals",
+                (recorder, reviewer, owner),
+                owner_id=recorder.actor_id,
+                now=now,
             )
         )
         session.add(

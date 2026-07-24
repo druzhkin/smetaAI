@@ -157,7 +157,12 @@ class GovernanceService:
             settings=self.settings,
             object_store=self.object_store,
         )
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=self._owner_roles(version.kind),
+        )
         existing = self.session.scalar(
             select(ProjectControlledVersionRow).where(
                 ProjectControlledVersionRow.project_id == project.id,
@@ -222,9 +227,13 @@ class GovernanceService:
             "adapter_version",
             "test_evidence_hash",
             "independence_domain",
+            "service_actor_id",
         )
         if not all(isinstance(payload.get(field), str) and payload[field] for field in required):
             raise ValueError("Adapter qualification payload is incomplete")
+        service_actor_id = str(payload["service_actor_id"])
+        if service_actor_id != service_actor_id.strip() or len(service_actor_id) > 128:
+            raise ValueError("Adapter qualification service actor ID is invalid")
         evidence_hash = str(payload["test_evidence_hash"])
         if len(evidence_hash) != 64 or any(
             character not in "0123456789abcdef" for character in evidence_hash
@@ -257,6 +266,7 @@ class GovernanceService:
                 ),
                 "independence_domain": payload["independence_domain"],
                 "organization_id": actor.organization_id,
+                "service_actor_id": service_actor_id,
             },
             approved_by=version.approved_by,
             approved_at=version.approved_at or utc_now(),
@@ -276,6 +286,7 @@ class GovernanceService:
             payload={
                 "adapter_name": qualification.adapter_name,
                 "adapter_version": qualification.adapter_version,
+                "service_actor_id": qualification.payload["service_actor_id"],
                 "test_evidence_hash": qualification.test_evidence_hash,
                 "valid_until": qualification.valid_until,
             },
@@ -284,15 +295,18 @@ class GovernanceService:
 
     @staticmethod
     def _require_owner(actor: Actor, kind: str) -> None:
+        actor.require_any(*GovernanceService._owner_roles(kind))
+
+    @staticmethod
+    def _owner_roles(kind: str) -> tuple[ActorRole, ...]:
         if kind in {
             "catalog",
             "nomenclature_catalog",
             "nomenclature_equivalence_rules",
             "equivalence_rules",
         }:
-            actor.require_any(ActorRole.CATALOG_OWNER)
-        else:
-            actor.require_any(ActorRole.METHODOLOGY_OWNER)
+            return (ActorRole.CATALOG_OWNER,)
+        return (ActorRole.METHODOLOGY_OWNER,)
 
     @staticmethod
     def _domain(row: ControlledVersionRow) -> ControlledVersion:

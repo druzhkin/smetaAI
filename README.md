@@ -54,6 +54,9 @@ The repository currently connects and integration-tests:
 
 - document intake, revision-set confirmation, qualified extraction evidence,
   reconciliation, review-task-backed conflict resolution, and source lineage;
+- owner-managed versioned project ACLs with action-specific roles,
+  same-organisation information barriers, audited revocation, and qualified
+  machine-service capabilities;
 - streamed, separately stored quarantine uploads, qualification-bound malware
   results, durable outbox leases/retries/dead letters, controlled replay, and a
   worker-only bounded document/archive parser entry point with short database

@@ -24,6 +24,7 @@ from tenderguard.infrastructure.orm import (
     QuantityRow,
     RiskCalculationRow,
 )
+from tests.integration.support import project_memberships
 
 
 def test_verified_risk_register_produces_versioned_calculation_basis(
@@ -93,6 +94,12 @@ def test_verified_risk_register_produces_versioned_calculation_basis(
                     row_version=1,
                     created_at=now,
                     updated_at=now,
+                ),
+                *project_memberships(
+                    "project-risk",
+                    (estimator, reviewer),
+                    owner_id=estimator.actor_id,
+                    now=now,
                 ),
                 model,
                 ProjectControlledVersionRow(

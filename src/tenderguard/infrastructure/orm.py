@@ -54,6 +54,52 @@ class ProjectRow(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("organization_id", "code"),)
 
 
+class ProjectMembershipRow(Base):
+    __tablename__ = "project_memberships"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    principal_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    roles: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    access_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    supersedes_membership_id: Mapped[str | None] = mapped_column(
+        ForeignKey("project_memberships.id")
+    )
+    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_project_membership_version_positive"),
+        CheckConstraint(
+            "access_level IN ('MEMBER', 'OWNER')",
+            name="ck_project_membership_access_level",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'REVOKED')",
+            name="ck_project_membership_status",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "principal_id",
+            "version",
+            name="uq_project_membership_version",
+        ),
+        UniqueConstraint(
+            "supersedes_membership_id",
+            name="uq_project_membership_supersedes",
+        ),
+        Index(
+            "ix_project_membership_current_lookup",
+            "project_id",
+            "principal_id",
+            "version",
+        ),
+    )
+
+
 class QuarantinedUploadRow(Base, TimestampMixin):
     __tablename__ = "quarantined_uploads"
 

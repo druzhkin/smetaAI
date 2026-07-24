@@ -35,6 +35,7 @@ from tenderguard.infrastructure.orm import (
     ProjectRow,
     QuantityRow,
 )
+from tests.integration.support import project_memberships
 
 
 def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path) -> None:
@@ -67,6 +68,14 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                 row_version=1,
                 created_at=now,
                 updated_at=now,
+            )
+        )
+        session.add_all(
+            project_memberships(
+                "project-boq",
+                (estimator, reviewer),
+                owner_id=estimator.actor_id,
+                now=now,
             )
         )
         versions = (

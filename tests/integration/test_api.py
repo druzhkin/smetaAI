@@ -61,6 +61,7 @@ def _seed_intake_qualifications(engine: Engine) -> None:
                         "organization_id": "org-1",
                         "supported_methods": ["MALWARE_SCAN"],
                         "independence_domain": "test-malware-engine",
+                        "service_actor_id": "malware-scanner",
                     },
                     approved_by="methodology-owner-b",
                     approved_at=now,
@@ -76,6 +77,7 @@ def _seed_intake_qualifications(engine: Engine) -> None:
                         "organization_id": "org-1",
                         "supported_methods": ["DOCUMENT_INTAKE"],
                         "independence_domain": "test-isolated-intake-worker",
+                        "service_actor_id": "document-worker",
                     },
                     approved_by="methodology-owner-b",
                     approved_at=now,
@@ -490,6 +492,23 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             headers=operator,
             json={"code": "T-CALC", "name": "Calculated tender", "reason": "Register"},
         ).json()
+        for principal_id, roles in (
+            ("owner-a", ["METHODOLOGY_OWNER"]),
+            ("owner-b", ["METHODOLOGY_OWNER", "REVIEWER"]),
+            ("catalog-owner-a", ["CATALOG_OWNER"]),
+            ("catalog-owner-b", ["CATALOG_OWNER"]),
+        ):
+            membership = client.post(
+                f"/v1/projects/{project['id']}/members",
+                headers=operator,
+                json={
+                    "principal_id": principal_id,
+                    "roles": roles,
+                    "access_level": "MEMBER",
+                    "reason": "Assign explicit project-scoped workflow roles",
+                },
+            )
+            assert membership.status_code == 200, membership.text
         uploaded = client.post(
             f"/v1/projects/{project['id']}/documents",
             headers=operator,
@@ -574,6 +593,28 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
             purpose="calculation_model",
         )
+        invalid_service_adapter = approve_version(
+            "adapter_qualification",
+            "invalid-service-identity-1",
+            {
+                "adapter_name": "invalid-service-identity",
+                "adapter_version": "1.0",
+                "test_evidence_hash": "d" * 64,
+                "valid_until": "2027-07-23",
+                "supported_methods": ["TABLE_PARSER"],
+                "independence_domain": "invalid-service-identity",
+                "service_actor_id": " extractor-service",
+            },
+        )
+        invalid_activation = client.post(
+            (
+                f"/v1/governance/versions/"
+                f"{invalid_service_adapter['version_id']}/activate-adapter-qualification"
+            ),
+            headers=owner_b,
+            json={"reason": "Reject ambiguous runtime identity binding"},
+        )
+        assert invalid_activation.status_code == 422
         parser_adapter = approve_version(
             "adapter_qualification",
             "table-parser-1",
@@ -584,6 +625,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 "valid_until": "2027-07-23",
                 "supported_methods": ["TABLE_PARSER"],
                 "independence_domain": "deterministic-table-parser",
+                "service_actor_id": "extractor-service",
             },
         )
         visual_adapter = approve_version(
@@ -596,6 +638,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 "valid_until": "2027-07-23",
                 "supported_methods": ["VISUAL_MODEL"],
                 "independence_domain": "isolated-visual-provider",
+                "service_actor_id": "extractor-service",
             },
         )
         for adapter in (parser_adapter, visual_adapter):

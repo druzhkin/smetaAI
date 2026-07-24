@@ -103,13 +103,17 @@ class ExportPackageService:
         request_id: str,
         reason: str,
     ) -> ExportArtifactView:
-        actor.require_any(ActorRole.APPROVER, ActorRole.ADMIN)
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.APPROVER,),
+        )
         if ApprovalState(project.state) not in {
             ApprovalState.APPROVED_FOR_INTERNAL_USE,
             ApprovalState.APPROVED_FOR_BID,
@@ -466,7 +470,7 @@ class ExportPackageService:
         project_id: str,
         artifact_id: str,
     ) -> ExportArtifactRow:
-        actor.require_any(
+        required_roles = (
             ActorRole.ESTIMATOR,
             ActorRole.PROCUREMENT,
             ActorRole.TECHNICAL_EXPERT,
@@ -474,13 +478,16 @@ class ExportPackageService:
             ActorRole.APPROVER,
             ActorRole.METHODOLOGY_OWNER,
             ActorRole.AUDITOR,
-            ActorRole.ADMIN,
         )
         ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
-        ).get_project(actor=actor, project_id=project_id)
+        ).get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=required_roles,
+        )
         row = self.session.scalar(
             select(ExportArtifactRow).where(
                 ExportArtifactRow.id == artifact_id,

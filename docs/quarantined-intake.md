@@ -18,7 +18,7 @@ as a successful document revision.
 
 | From | To | Authority and condition |
 |---|---|---|
-| `QUARANTINED` | `CLEAN` | `SYSTEM`; exact object hash; active configured `MALWARE_SCAN` qualification; reproducible immutable report hash |
+| `QUARANTINED` | `CLEAN` | exact `SYSTEM` service identity bound to the active configured `MALWARE_SCAN` qualification; exact object hash; reproducible immutable report hash |
 | `QUARANTINED` | `REJECTED` | same authority; `INFECTED` verdict with named threat |
 | `QUARANTINED` | `SCAN_FAILED` | same authority; scanner `ERROR` verdict |
 | `SCAN_FAILED` | `CLEAN`, `REJECTED`, `SCAN_FAILED` | a new qualified scanner run; run IDs are unique and immutable |
@@ -43,9 +43,11 @@ resolved only after a clean replacement has produced a document revision.
 ## Scanner result evidence
 
 `POST /v1/projects/{project_id}/document-uploads/{upload_id}/scan-results`
-accepts a result only from a `SYSTEM` identity. The result must bind:
+accepts a result only from the exact `SYSTEM` service identity recorded in the
+configured qualification. The result must bind:
 
 - configured and active adapter qualification;
+- organisation and service actor identity;
 - exact quarantine SHA-256;
 - unique external scanner run ID;
 - definitions version and completion time;
@@ -62,7 +64,8 @@ A dispatcher claims one available row with `FOR UPDATE SKIP LOCKED`, a random
 ownership token, worker identity, attempt number, and expiry. A different
 worker cannot acknowledge or reject that claim. After expiry, a new claim
 replaces the token; stale completion cannot finalize the document.
-The approved service actor and the per-container worker instance ID are stored
+The configured and qualification-bound service actor and the per-container
+worker instance ID are stored
 separately so parallel replicas remain attributable without minting new
 application identities.
 

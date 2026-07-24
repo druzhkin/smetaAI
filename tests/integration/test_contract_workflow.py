@@ -30,6 +30,7 @@ from tenderguard.infrastructure.orm import (
     ProjectControlledVersionRow,
     ProjectRow,
 )
+from tests.integration.support import project_memberships
 
 
 def test_contract_term_cost_impact_requires_four_eyes_approval(
@@ -99,6 +100,12 @@ def test_contract_term_cost_impact_requires_four_eyes_approval(
                     row_version=1,
                     created_at=now,
                     updated_at=now,
+                ),
+                *project_memberships(
+                    "project-contract",
+                    (submitter, reviewer, estimator),
+                    owner_id=submitter.actor_id,
+                    now=now,
                 ),
                 rules,
                 approval_policy,

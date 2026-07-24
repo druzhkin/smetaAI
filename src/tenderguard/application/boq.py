@@ -140,9 +140,13 @@ class BoqService:
         request_id: str,
         reason: str,
     ) -> BoqLineView:
-        actor.require_any(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT, ActorRole.ADMIN)
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
+        )
         if ApprovalState(project.state) is not ApprovalState.BOQ_IN_PROGRESS:
             raise ValueError("BoQ lines may be created only in BOQ_IN_PROGRESS")
         self._verified_observations(project_id, draft.evidence_observation_ids)
@@ -216,9 +220,13 @@ class BoqService:
         request_id: str,
         reason: str,
     ) -> BoqLineView:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         if ApprovalState(project.state) not in {
             ApprovalState.BOQ_IN_PROGRESS,
             ApprovalState.BOQ_REVIEW,
@@ -275,9 +283,13 @@ class BoqService:
         request_id: str,
         reason: str,
     ) -> QuantityExecutionResult:
-        actor.require_any(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT, ActorRole.ADMIN)
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
+        )
         if ApprovalState(project.state) not in {
             ApprovalState.BOQ_IN_PROGRESS,
             ApprovalState.BOQ_REVIEW,
@@ -447,9 +459,13 @@ class BoqService:
         request_id: str,
         reason: str,
     ) -> ScopeRunResult:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         if ApprovalState(project.state) is not ApprovalState.BOQ_REVIEW:
             raise ValueError("Scope completeness runs only in BOQ_REVIEW")
         rule_row = self._bound_version(

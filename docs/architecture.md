@@ -27,7 +27,9 @@ Nothing crosses a boundary merely because a model reports high confidence.
 
 ## Modules
 
-- `identity`: OIDC validation, roles, project access, segregation of duties.
+- `identity`: OIDC validation, versioned project membership and scoped roles,
+  owner-managed access, qualified service capabilities, and segregation of
+  business duties from infrastructure administration.
 - `intake`: separately stored streamed quarantine, qualification-bound malware
   results, leased outbox delivery, bounded retry/dead-letter/replay, worker-only
   bounded archive expansion, manifest, file health, Excel visibility/formula
@@ -84,6 +86,9 @@ Production deployment requires:
   uses `FOR UPDATE SKIP LOCKED`, expiring ownership tokens, bounded exponential
   retry, immutable terminal events, and explicit audited replay;
 - OIDC with MFA enforced by the identity provider;
+- governed project-owner recovery, periodic membership recertification, and
+  monitored break-glass access; PostgreSQL RLS where an independent database
+  information barrier is required;
 - central logs, metrics, traces, security audit export, alerting, and time
   synchronization;
 - audit and Ed25519 export-signing keys from a secrets manager, never
@@ -94,6 +99,13 @@ Production deployment requires:
 ## Data invariants
 
 - Money uses `Decimal`; floating point is forbidden.
+- Organisation tenancy never implies project access. Human access requires the
+  latest active membership revision and the exact project role accepted by the
+  action. Revocation is a new revision; prior membership evidence is immutable.
+- `SYSTEM` is never a project membership role. Machine access requires an
+  explicit capability, active organisation-scoped adapter qualification, and
+  an exact bound service identity; a service token cannot use generic project
+  read routes.
 - Currency, VAT basis, unit, rounding, and effective date are explicit.
 - Original observations are immutable. Corrections create new observations.
 - An original upload cannot enter the evidence zone or reach a parser before

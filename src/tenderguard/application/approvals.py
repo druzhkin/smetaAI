@@ -74,14 +74,17 @@ class ApprovalService:
         request_id: str,
         reason: str,
     ) -> ApprovalPlanResult:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.REVIEWER,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.ADMIN,
-        )
         project_service = self._project_service()
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.REVIEWER,
+                ActorRole.TECHNICAL_EXPERT,
+            ),
+        )
         policy_row = self.session.scalar(
             select(ControlledVersionRow)
             .join(
@@ -184,7 +187,11 @@ class ApprovalService:
         )
         if task is None:
             raise LookupError(task_id)
-        actor.require_any(ActorRole(task.assigned_role))
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(ActorRole(task.assigned_role),),
+        )
         if task.status != "PENDING":
             raise ValueError("Only a PENDING approval task can be decided")
         if task.required and task.payload.get("created_by") == actor.actor_id:

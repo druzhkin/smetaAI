@@ -20,6 +20,7 @@ from tenderguard.domain.calculation import (
 )
 from tenderguard.domain.common import canonical_data, canonical_json, content_hash
 from tenderguard.domain.enums import (
+    ActorRole,
     ApprovalState,
     CostCategory,
     VerificationStatus,
@@ -27,6 +28,7 @@ from tenderguard.domain.enums import (
 )
 from tenderguard.domain.exports import EXPORT_FORMAT, EXPORT_SCHEMA_VERSION
 from tenderguard.domain.models import ControlledVersion
+from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
     create_schema_for_tests,
@@ -50,6 +52,7 @@ from tenderguard.infrastructure.orm import (
     ReleaseDecisionRow,
     WorkflowTransitionRow,
 )
+from tests.integration.support import project_memberships
 
 NOW = datetime(2026, 7, 23, 12, 0, tzinfo=UTC)
 PRIVATE_KEY_B64 = base64.b64encode(bytes(range(32))).decode("ascii")
@@ -265,6 +268,30 @@ def _seed_released_snapshot(
                 row_version=12,
                 created_at=NOW - timedelta(days=5),
                 updated_at=release_time,
+            )
+        )
+        session.add_all(
+            project_memberships(
+                project_id,
+                (
+                    Actor(
+                        "estimator-export",
+                        "org-export",
+                        frozenset({ActorRole.ESTIMATOR}),
+                    ),
+                    Actor(
+                        "approver-export",
+                        "org-export",
+                        frozenset({ActorRole.APPROVER}),
+                    ),
+                    Actor(
+                        "auditor-export",
+                        "org-export",
+                        frozenset({ActorRole.AUDITOR}),
+                    ),
+                ),
+                owner_id="approver-export",
+                now=NOW - timedelta(days=5),
             )
         )
         session.add(

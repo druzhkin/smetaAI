@@ -14,6 +14,9 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi import (
+    Path as ApiPath,
+)
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +36,7 @@ from tenderguard.application.passport import PassportService
 from tenderguard.application.pricing import PricingService
 from tenderguard.application.projects import (
     OptimisticLockError,
+    ProjectMembershipView,
     ProjectNotFoundError,
     ProjectService,
     ProjectView,
@@ -94,6 +98,7 @@ from .schemas import (
     FinalizeAnalogueRequest,
     FinalizeContractCostImpactRequest,
     GenerateExportRequest,
+    GrantProjectMembershipRequest,
     NomenclatureMatchResponse,
     NormalizedPriceResponse,
     NormalizePriceRequest,
@@ -103,6 +108,7 @@ from .schemas import (
     PassportValidationResponse,
     PriceDecisionResponse,
     PriceQuoteResponse,
+    ProjectMembershipResponse,
     ProposeAnalogueRequest,
     ProposeContractCostImpactRequest,
     QuantityExecutionResponse,
@@ -120,6 +126,7 @@ from .schemas import (
     ReleaseRequest,
     RequeueDocumentProcessingRequest,
     ResolveConflictRequest,
+    RevokeProjectMembershipRequest,
     RiskCalculationResponse,
     RiskItemResponse,
     RunScopeRequest,
@@ -432,6 +439,11 @@ def create_app(
         malware_scanner_qualified = bool(
             malware_scanner_qualification
             and "MALWARE_SCAN" in malware_scanner_qualification.payload.get("supported_methods", [])
+            and isinstance(
+                malware_scanner_qualification.payload.get("service_actor_id"),
+                str,
+            )
+            and malware_scanner_qualification.payload.get("service_actor_id")
         )
         if not malware_scanner_qualified:
             notes.append("qualified malware scanner is unavailable")
@@ -456,6 +468,8 @@ def create_app(
         document_processor_qualified = bool(
             resolved_settings.document_worker_actor_id
             and document_processor_qualification
+            and document_processor_qualification.payload.get("service_actor_id")
+            == resolved_settings.document_worker_actor_id
             and "DOCUMENT_INTAKE"
             in document_processor_qualification.payload.get("supported_methods", [])
         )
@@ -530,6 +544,63 @@ def create_app(
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectView:
         return service(session).project_view(actor=actor, project_id=project_id)
+
+    @application.get(
+        "/v1/projects/{project_id}/members",
+        response_model=list[ProjectMembershipView],
+    )
+    def list_project_members(
+        project_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> tuple[ProjectMembershipView, ...]:
+        return service(session).list_project_memberships(
+            actor=actor,
+            project_id=project_id,
+        )
+
+    @application.post(
+        "/v1/projects/{project_id}/members",
+        response_model=ProjectMembershipResponse,
+    )
+    def grant_project_member(
+        project_id: str,
+        payload: GrantProjectMembershipRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProjectMembershipView:
+        with session.begin():
+            return service(session).grant_project_membership(
+                actor=actor,
+                project_id=project_id,
+                principal_id=payload.principal_id,
+                roles=payload.roles,
+                access_level=payload.access_level,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+
+    @application.post(
+        "/v1/projects/{project_id}/members/{principal_id}/revoke",
+        response_model=ProjectMembershipResponse,
+    )
+    def revoke_project_member(
+        project_id: str,
+        principal_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        payload: RevokeProjectMembershipRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProjectMembershipView:
+        with session.begin():
+            return service(session).revoke_project_membership(
+                actor=actor,
+                project_id=project_id,
+                principal_id=principal_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
 
     @application.post(
         "/v1/projects/{project_id}/documents",
@@ -694,7 +765,6 @@ def create_app(
             ActorRole.REVIEWER,
             ActorRole.APPROVER,
             ActorRole.AUDITOR,
-            ActorRole.ADMIN,
         )
         context = service(session).evaluate_release(actor=actor, project_id=project_id)
         return ReleaseGateResponse(decision=evaluate_bid_release(context))

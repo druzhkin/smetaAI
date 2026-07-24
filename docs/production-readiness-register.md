@@ -25,6 +25,7 @@ release even when repository tests pass.
 | Export packages | released fixed snapshots produce deterministic content-addressed Ed25519-signed JSON packages with lineage, versions, approvals, workflow, release decision and verified audit chain; external delivery adapters, approved public-key distribution/trust registry and business qualification are absent | **PARTIAL** |
 | Load test | no representative document corpus/workload/SLO approved | **OPEN** |
 | Malware scanning/sandbox | streamed separate quarantine, immutable qualification-bound exact-hash scan results, bounded archive streams, leased outbox dispatch, bounded retry/dead-letter/audited replay, and short-transaction worker parsing are implemented and tested; real scanner provider, production scheduler, disposable runtime limits, network policy and qualification evidence are absent | **PARTIAL - PRODUCTION BLOCKER** |
+| Project access/information barriers | versioned owner-managed membership, action-specific project roles, same-tenant non-disclosure, qualified service identities, audited revocation, and immutable PostgreSQL history are implemented; IdP lifecycle, periodic recertification, break-glass recovery and optional RLS evidence are absent | **PARTIAL** |
 | Security review | code review completed; residual findings remain below | **OPEN** |
 | Backup and point-in-time recovery | runbook drafted; restore evidence absent | **OPEN** |
 | Disaster recovery | target RPO/RTO and alternate environment not approved | **OPEN** |

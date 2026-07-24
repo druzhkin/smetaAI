@@ -66,18 +66,22 @@ class ScenarioService:
         request_id: str,
         reason: str,
     ) -> ScenarioExecutionResult:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.REVIEWER,
-            ActorRole.APPROVER,
-            ActorRole.METHODOLOGY_OWNER,
-        )
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.REVIEWER,
+                ActorRole.APPROVER,
+                ActorRole.METHODOLOGY_OWNER,
+            ),
+        )
         if ApprovalState(project.state) not in {
             ApprovalState.INDEPENDENT_VALIDATION,
             ApprovalState.EXPERT_REVIEW,

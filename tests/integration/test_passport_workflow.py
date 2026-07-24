@@ -22,6 +22,7 @@ from tenderguard.infrastructure.orm import (
     ProjectPassportFactRow,
     ProjectRow,
 )
+from tests.integration.support import project_memberships
 
 
 def test_passport_requires_independent_evidence_and_four_eyes_before_boq(
@@ -72,6 +73,12 @@ def test_passport_requires_independent_evidence_and_four_eyes_before_boq(
                     row_version=1,
                     created_at=now,
                     updated_at=now,
+                ),
+                *project_memberships(
+                    "project-passport",
+                    (submitter, verifier),
+                    owner_id=submitter.actor_id,
+                    now=now,
                 ),
                 requirements,
                 ProjectControlledVersionRow(

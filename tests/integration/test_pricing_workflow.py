@@ -40,6 +40,7 @@ from tenderguard.infrastructure.orm import (
     RiskCalculationRow,
     RiskItemRow,
 )
+from tests.integration.support import project_memberships
 
 
 def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
@@ -85,6 +86,14 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 row_version=1,
                 created_at=now,
                 updated_at=now,
+            )
+        )
+        session.add_all(
+            project_memberships(
+                "project-pricing",
+                (procurement,),
+                owner_id=procurement.actor_id,
+                now=now,
             )
         )
         session.add(

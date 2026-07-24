@@ -74,8 +74,10 @@ Resolved during the audit:
 
 Open security blockers remain tracked in
 `security_best_practices_report.md`: deployment/qualification of the real
-scanner and disposable parser runtime, project-level ACLs, verified
-WORM/external audit anchoring, and distributed rate limiting.
+scanner and disposable parser runtime, operational IdP/access recertification
+and owner recovery, verified WORM/external audit anchoring, and distributed
+rate limiting. Versioned project ACL enforcement is now implemented in the
+application and protected by PostgreSQL membership-history triggers.
 
 ## Usability and developer-experience audit
 

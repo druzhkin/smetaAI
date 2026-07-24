@@ -162,12 +162,11 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NomenclatureMatchView:
-        actor.require_any(
-            ActorRole.PROCUREMENT,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.ADMIN,
+        project = self._require_pricing_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.PROCUREMENT, ActorRole.TECHNICAL_EXPERT),
         )
-        project = self._require_pricing_state(actor, project_id)
         catalog = self._bound_version(project.id, "catalog", "catalog")
         item = self._catalog_item(catalog, draft.canonical_item_id)
         observation = self._verified_observation(
@@ -273,8 +272,11 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NomenclatureMatchView:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT)
-        project = self._require_pricing_state(actor, project_id)
+        project = self._require_pricing_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.TECHNICAL_EXPERT,),
+        )
         source = self._current_match(project.id, match_id)
         if source.match_class not in {
             MatchClass.TECHNICALLY_UNACCEPTABLE.value,
@@ -371,13 +373,15 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NomenclatureMatchView:
-        actor.require_any(
-            ActorRole.PROCUREMENT,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.ADMIN,
+        project = self._require_pricing_state(
+            actor,
+            project_id,
+            required_roles=(
+                ActorRole.PROCUREMENT,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
         )
-        project = self._require_pricing_state(actor, project_id)
         row = self._current_match(project.id, match_id)
         if row.status != VerificationStatus.IN_REVIEW.value:
             raise ValueError("Only an IN_REVIEW analogue can be finalized")
@@ -445,8 +449,11 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> PriceQuoteView:
-        actor.require_any(ActorRole.PROCUREMENT, ActorRole.ADMIN)
-        project = self._require_pricing_state(actor, project_id)
+        project = self._require_pricing_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.PROCUREMENT,),
+        )
         match = self._verified_match_for_item(project.id, draft.item_id)
         self._validate_quote_technical_attributes(match, draft.technical_attributes)
         observation = self._verified_observation(project.id, draft.source_observation_id)
@@ -531,8 +538,11 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NormalizedPriceView:
-        actor.require_any(ActorRole.PROCUREMENT, ActorRole.ESTIMATOR, ActorRole.ADMIN)
-        project = self._require_pricing_state(actor, project_id)
+        project = self._require_pricing_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.PROCUREMENT, ActorRole.ESTIMATOR),
+        )
         row = self.session.scalar(
             select(PriceQuoteRow)
             .where(
@@ -602,14 +612,17 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> PriceDecisionView:
-        actor.require_any(
-            ActorRole.PROCUREMENT,
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.ADMIN,
-        )
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(
+                ActorRole.PROCUREMENT,
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+            ),
+        )
         if ApprovalState(project.state) not in {
             ApprovalState.PRICING_IN_PROGRESS,
             ApprovalState.RFQ_REQUIRED,
@@ -1283,11 +1296,18 @@ class PricingService:
                 reason=f"Pricing decision requires project state {target.value}",
             )
 
-    def _require_pricing_state(self, actor: Actor, project_id: str) -> Any:
+    def _require_pricing_state(
+        self,
+        actor: Actor,
+        project_id: str,
+        *,
+        required_roles: tuple[ActorRole, ...],
+    ) -> Any:
         project = self._project_service().get_project(
             actor=actor,
             project_id=project_id,
             lock=True,
+            required_roles=required_roles,
         )
         if ApprovalState(project.state) not in {
             ApprovalState.PRICING_IN_PROGRESS,

@@ -56,7 +56,7 @@ from tenderguard.application.pricing import (
     PriceQuoteDraft,
     PriceQuoteView,
 )
-from tenderguard.application.projects import ProjectView
+from tenderguard.application.projects import ProjectMembershipView, ProjectView
 from tenderguard.application.risks import (
     RiskCalculationView,
     RiskItemDraft,
@@ -68,7 +68,7 @@ from tenderguard.application.scenarios import (
 )
 from tenderguard.domain.approvals import ApprovalSubject
 from tenderguard.domain.calculation import AtomicCostInput, CalculationPolicy
-from tenderguard.domain.enums import ApprovalState
+from tenderguard.domain.enums import ActorRole, ApprovalState, ProjectAccessLevel
 from tenderguard.domain.models import ControlledVersion, GateDecision, Observation
 from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadView
 
@@ -81,6 +81,21 @@ class CreateProjectRequest(ApiModel):
     code: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=500)
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class GrantProjectMembershipRequest(ApiModel):
+    principal_id: str = Field(min_length=1, max_length=128)
+    roles: tuple[ActorRole, ...] = Field(min_length=1)
+    access_level: ProjectAccessLevel = ProjectAccessLevel.MEMBER
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class RevokeProjectMembershipRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ProjectMembershipResponse(ProjectMembershipView):
+    pass
 
 
 class TransitionRequest(ApiModel):

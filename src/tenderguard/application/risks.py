@@ -96,8 +96,11 @@ class RiskService:
         request_id: str,
         reason: str,
     ) -> RiskItemView:
-        actor.require_any(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT, ActorRole.ADMIN)
-        project = self._require_editable_state(actor, project_id)
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
+        )
         observations = self._observations(project.id, draft.observation_ids)
         self._validate_observation_values(draft, observations)
         model = self._risk_model(project.id)
@@ -185,8 +188,11 @@ class RiskService:
         request_id: str,
         reason: str,
     ) -> RiskItemView:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
-        project = self._require_editable_state(actor, project_id)
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         row = self._current_risk(project.id, risk_item_id)
         if row.status != VerificationStatus.IN_REVIEW.value:
             raise ValueError("Only an IN_REVIEW risk item can be verified")
@@ -242,13 +248,15 @@ class RiskService:
         request_id: str,
         reason: str,
     ) -> RiskCalculationView:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.ADMIN,
+        project = self._require_editable_state(
+            actor,
+            project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
         )
-        project = self._require_editable_state(actor, project_id)
         model = self._risk_model(project.id)
         raw_policy = model.payload.get("policy")
         if not isinstance(raw_policy, dict):
@@ -502,11 +510,18 @@ class RiskService:
                 existing.payload = payload
                 existing.updated_at = now
 
-    def _require_editable_state(self, actor: Actor, project_id: str) -> Any:
+    def _require_editable_state(
+        self,
+        actor: Actor,
+        project_id: str,
+        *,
+        required_roles: tuple[ActorRole, ...],
+    ) -> Any:
         project = self._project_service().get_project(
             actor=actor,
             project_id=project_id,
             lock=True,
+            required_roles=required_roles,
         )
         if ApprovalState(project.state) not in {
             ApprovalState.BOQ_IN_PROGRESS,

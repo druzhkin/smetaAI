@@ -80,9 +80,13 @@ class PassportService:
         request_id: str,
         reason: str,
     ) -> PassportFactView:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         if ApprovalState(project.state) not in {
             ApprovalState.EXTRACTION_IN_PROGRESS,
             ApprovalState.EXTRACTION_REVIEW,
@@ -158,9 +162,13 @@ class PassportService:
         request_id: str,
         reason: str,
     ) -> tuple[PassportFactView, PassportValidationResult]:
-        actor.require_any(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER)
         project_service = self._project_service()
-        project = project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
         row = self.session.scalar(
             select(ProjectPassportFactRow)
             .where(
@@ -231,15 +239,18 @@ class PassportService:
         request_id: str,
         reason: str,
     ) -> PassportValidationResult:
-        actor.require_any(
-            ActorRole.ESTIMATOR,
-            ActorRole.TECHNICAL_EXPERT,
-            ActorRole.REVIEWER,
-            ActorRole.AUDITOR,
-            ActorRole.ADMIN,
-        )
         project_service = self._project_service()
-        project_service.get_project(actor=actor, project_id=project_id, lock=True)
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+                ActorRole.AUDITOR,
+            ),
+        )
         result = self._validate_current(project_id)
         project_service.record_event(
             aggregate_type="project",

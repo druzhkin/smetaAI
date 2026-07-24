@@ -81,7 +81,7 @@ class LineageService:
         project_id: str,
         snapshot_id: str,
     ) -> SnapshotLineage:
-        actor.require_any(
+        required_roles = (
             ActorRole.ESTIMATOR,
             ActorRole.PROCUREMENT,
             ActorRole.TECHNICAL_EXPERT,
@@ -89,13 +89,16 @@ class LineageService:
             ActorRole.APPROVER,
             ActorRole.METHODOLOGY_OWNER,
             ActorRole.AUDITOR,
-            ActorRole.ADMIN,
         )
         ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
-        ).get_project(actor=actor, project_id=project_id)
+        ).get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=required_roles,
+        )
         snapshot = self.session.scalar(
             select(CalculationSnapshotRow).where(
                 CalculationSnapshotRow.id == snapshot_id,

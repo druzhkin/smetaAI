@@ -47,8 +47,10 @@ negative paths through these workflows.
 This does not make every contour operationally qualified. OCR/visual
 extraction, the recognised normative engine, live price/RFQ sources,
 enterprise integrations, detailed logistics/finance workflows,
-project-level access controls, deployed/qualified sandboxing, and production operations remain
-open. Release policy consumes unresolved blocking findings rather than
+deployed/qualified sandboxing, operational IdP/access-governance procedures,
+and production operations remain open. Versioned project ACLs and
+action-specific object authorisation are application/database controls;
+release policy consumes unresolved blocking findings rather than
 informal text; no contour may silently downgrade a failure because another
 contour passed.
 
