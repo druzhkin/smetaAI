@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from fastapi import (
     Depends,
@@ -18,12 +20,14 @@ from fastapi import (
 from fastapi import (
     Path as ApiPath,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.staticfiles import StaticFiles
 
+from tenderguard import __version__
 from tenderguard.application.actuals import ActualsService
 from tenderguard.application.approvals import ApprovalService
 from tenderguard.application.audit_integrity import AuditIntegrityService
@@ -168,6 +172,7 @@ from .schemas import (
     RiskCalculationResponse,
     RiskItemResponse,
     RunScopeRequest,
+    RuntimeConfigResponse,
     ScenarioExecutionResponse,
     ScopeRunResponse,
     SnapshotLineageResponse,
@@ -187,6 +192,36 @@ from .schemas import (
 from .security import RequestSizeLimitMiddleware, SecurityHeadersMiddleware
 
 
+def _operator_ui_dist(settings: Settings) -> Path | None:
+    if not settings.operator_ui_enabled:
+        return None
+    candidates = (
+        (settings.operator_ui_dist_path.resolve(),)
+        if settings.operator_ui_dist_path is not None
+        else (
+            Path(__file__).resolve().parents[1] / "web_dist",
+            Path.cwd() / "web" / "dist",
+        )
+    )
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / "index.html").is_file():
+            return candidate
+    if settings.app_env in {"staging", "production"}:
+        raise RuntimeError("Operator UI is enabled but its built assets are unavailable")
+    return None
+
+
+def _oidc_connect_origins(settings: Settings) -> tuple[str, ...]:
+    origins: set[str] = set()
+    for value in (settings.oidc_issuer, settings.oidc_jwks_url):
+        if value is None:
+            continue
+        parsed = urlsplit(value)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    return tuple(sorted(origins))
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -199,6 +234,7 @@ def create_app(
     session_factory = create_session_factory(resolved_engine)
     resolved_store = object_store or build_object_store(resolved_settings)
     resolved_quarantine_store = quarantine_store or build_quarantine_store(resolved_settings)
+    operator_ui_dist = _operator_ui_dist(resolved_settings)
     authenticator = Authenticator(resolved_settings)
     configure_logging()
 
@@ -233,7 +269,11 @@ def create_app(
             "/scan-results": resolved_settings.max_scan_report_bytes + 64 * 1024,
         },
     )
-    application.add_middleware(SecurityHeadersMiddleware)
+    application.add_middleware(
+        SecurityHeadersMiddleware,
+        connect_sources=_oidc_connect_origins(resolved_settings),
+        include_hsts=resolved_settings.app_env in {"staging", "production"},
+    )
     application.add_middleware(RequestLoggingMiddleware)
     application.router.route_class = IdempotentAPIRoute
     application.state.settings = resolved_settings
@@ -444,6 +484,32 @@ def create_app(
     def liveness() -> dict[str, str]:
         return {"status": "alive"}
 
+    @application.get("/v1/runtime-config", response_model=RuntimeConfigResponse)
+    def runtime_config() -> RuntimeConfigResponse:
+        authentication_mode: Literal["OIDC", "DEVELOPMENT", "UNAVAILABLE"]
+        if resolved_settings.allow_insecure_dev_auth:
+            authentication_mode = "DEVELOPMENT"
+        elif all(
+            (
+                resolved_settings.oidc_issuer,
+                resolved_settings.oidc_audience,
+                resolved_settings.oidc_jwks_url,
+                resolved_settings.oidc_web_client_id,
+            )
+        ):
+            authentication_mode = "OIDC"
+        else:
+            authentication_mode = "UNAVAILABLE"
+        return RuntimeConfigResponse(
+            environment=resolved_settings.app_env,
+            authentication_mode=authentication_mode,
+            oidc_authority=resolved_settings.oidc_issuer,
+            oidc_client_id=resolved_settings.oidc_web_client_id,
+            oidc_scope=resolved_settings.oidc_web_scope,
+            api_base_path="/v1",
+            application_version=__version__,
+        )
+
     @application.get("/health/ready", response_model=ReadinessResponse)
     def readiness(
         response: Response,
@@ -500,6 +566,11 @@ def create_app(
         )
         if not auth_configured:
             notes.append("OIDC is not configured")
+        operator_ui_ready = (
+            not resolved_settings.operator_ui_enabled or operator_ui_dist is not None
+        )
+        if not operator_ui_ready:
+            notes.append("operator UI build is unavailable")
         idempotency_enforced = resolved_settings.require_idempotency_keys
         if not idempotency_enforced:
             notes.append("persisted idempotency keys are not enforced")
@@ -692,6 +763,7 @@ def create_app(
             and store_ok
             and store_worm_ok
             and quarantine_store_ok
+            and operator_ui_ready
             and auth_configured
             and idempotency_enforced
             and normative_engine_qualified
@@ -711,6 +783,7 @@ def create_app(
             object_store=store_ok,
             object_store_worm=store_worm_ok,
             quarantine_store=quarantine_store_ok,
+            operator_ui=operator_ui_ready,
             authentication_configured=bool(auth_configured),
             idempotency_enforced=idempotency_enforced,
             audit_anchor_valid=audit_anchor_valid,
@@ -2259,6 +2332,53 @@ def create_app(
             snapshot_id=snapshot_id,
         )
         return SnapshotLineageResponse.model_validate(lineage.model_dump())
+
+    if operator_ui_dist is not None:
+        asset_directory = operator_ui_dist / "assets"
+        if not asset_directory.is_dir():
+            raise RuntimeError("Operator UI assets directory is unavailable")
+        application.mount(
+            "/assets",
+            StaticFiles(directory=asset_directory),
+            name="operator-ui-assets",
+        )
+
+        def ui_index() -> FileResponse:
+            return FileResponse(operator_ui_dist / "index.html")
+
+        application.add_api_route(
+            "/",
+            ui_index,
+            methods=["GET"],
+            include_in_schema=False,
+            response_class=FileResponse,
+        )
+        for route in (
+            "/auth/callback",
+            "/auth/signout-callback",
+            "/tasks",
+            "/projects/{ui_path:path}",
+        ):
+            application.add_api_route(
+                route,
+                ui_index,
+                methods=["GET"],
+                include_in_schema=False,
+                response_class=FileResponse,
+            )
+        favicon = operator_ui_dist / "favicon.svg"
+        if favicon.is_file():
+
+            def ui_favicon() -> FileResponse:
+                return FileResponse(favicon, media_type="image/svg+xml")
+
+            application.add_api_route(
+                "/favicon.svg",
+                ui_favicon,
+                methods=["GET"],
+                include_in_schema=False,
+                response_class=FileResponse,
+            )
 
     return application
 

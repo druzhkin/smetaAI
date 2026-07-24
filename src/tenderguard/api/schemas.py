@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -99,6 +99,16 @@ from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadVi
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class RuntimeConfigResponse(ApiModel):
+    environment: str
+    authentication_mode: Literal["OIDC", "DEVELOPMENT", "UNAVAILABLE"]
+    oidc_authority: str | None
+    oidc_client_id: str | None
+    oidc_scope: str
+    api_base_path: str
+    application_version: str
 
 
 class CreateAuditCheckpointRequest(ApiModel):
@@ -582,6 +592,7 @@ class ReadinessResponse(ApiModel):
     object_store: bool
     object_store_worm: bool
     quarantine_store: bool
+    operator_ui: bool
     authentication_configured: bool
     idempotency_enforced: bool
     audit_anchor_valid: bool

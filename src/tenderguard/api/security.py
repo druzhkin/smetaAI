@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -95,8 +97,28 @@ class RequestSizeLimitMiddleware:
 
 
 class SecurityHeadersMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        connect_sources: Sequence[str] = (),
+        include_hsts: bool = False,
+    ) -> None:
         self.app = app
+        self.include_hsts = include_hsts
+        sources = " ".join(("'self'", *connect_sources))
+        self.content_security_policy = (
+            "default-src 'self'; "
+            "base-uri 'none'; "
+            f"connect-src {sources}; "
+            "font-src 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'; "
+            "img-src 'self' data:; "
+            "object-src 'none'; "
+            "script-src 'self'; "
+            "style-src 'self'"
+        ).encode("ascii")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         async def send_with_headers(message: Message) -> None:
@@ -108,8 +130,22 @@ class SecurityHeadersMiddleware:
                         (b"x-frame-options", b"DENY"),
                         (b"referrer-policy", b"no-referrer"),
                         (b"cache-control", b"no-store"),
+                        (b"content-security-policy", self.content_security_policy),
+                        (b"cross-origin-opener-policy", b"same-origin"),
+                        (b"cross-origin-resource-policy", b"same-origin"),
+                        (
+                            b"permissions-policy",
+                            b"camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+                        ),
                     ]
                 )
+                if self.include_hsts:
+                    headers.append(
+                        (
+                            b"strict-transport-security",
+                            b"max-age=31536000; includeSubDomains",
+                        )
+                    )
                 message["headers"] = headers
             await send(message)
 

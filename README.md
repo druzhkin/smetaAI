@@ -49,7 +49,9 @@ See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
 [governed commercial cost models](docs/commercial-cost-models.md), and the
 [signed export package specification](docs/signed-export-package.md). The
 [signed integration contract](docs/integration-delivery.md) defines the
-transport trust boundary.
+transport trust boundary. The [operator UI contract](docs/operator-ui.md)
+defines browser authentication, information barriers, deployment, and the
+current limits of the human workflow.
 
 ## Implemented application core
 
@@ -95,6 +97,10 @@ The repository currently connects and integration-tests:
   deduplication, leased processing, bounded retry/dead-letter, and controlled
   replay; transport acceptance deliberately does not verify imported business
   data;
+- a production-built React operator read interface with OIDC Authorization
+  Code + PKCE, role-filtered portfolio/task/workbench/record views, visible
+  hard stops, exact monetary rendering, safe same-origin navigation, restrictive
+  browser security headers, and fail-closed production asset configuration;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -110,6 +116,19 @@ uv run alembic upgrade head
 uv run uvicorn tenderguard.api.main:app --reload
 uv run pytest
 ```
+
+Run the operator UI development server in a second terminal:
+
+```powershell
+cd web
+npm ci
+npm run dev
+```
+
+The Vite development server proxies `/v1` to the API. For the container-equivalent
+production bundle, run `npm run build`; FastAPI serves the resulting `web/dist`
+assets in development or test. Staging and production startup fail if the UI is
+enabled but no built assets or browser OIDC client are configured.
 
 On Windows, `--no-editable` also avoids a Python 3.11 `.pth` locale problem
 when the checkout path contains Cyrillic characters. Keep
@@ -136,8 +155,9 @@ backup/disaster-recovery evidence, trained users, and named process owners.
 Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
-schedulers/monitoring, and a complete operator read/search UI remain to be
-completed. External verification also requires approved out-of-band
+schedulers/monitoring, controlled operator mutation/review/release surfaces,
+and business qualification of the read interface remain to be completed.
+External verification also requires approved out-of-band
 signing-key registries and real endpoint conformance evidence. A successful
 local test run cannot substitute for the required historical,
 blind-comparison, parallel-operation, security, load, and recovery evidence.

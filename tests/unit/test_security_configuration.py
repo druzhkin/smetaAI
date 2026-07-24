@@ -75,6 +75,7 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "PostgreSQL is required" in message
     assert "qualified malware scanner binding" in message
     assert "qualified isolated document processor binding" in message
+    assert "OIDC web client ID" in message
 
 
 @pytest.mark.parametrize(
@@ -164,6 +165,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         document_processor_qualification_id="qualification-intake-production",
         document_worker_actor_id="document-worker",
         trusted_hosts=["testserver"],
+        operator_ui_enabled=False,
     )
     test_db_settings = Settings(
         app_env="test",
@@ -326,11 +328,16 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         assert live.headers["x-content-type-options"] == "nosniff"
         assert live.headers["x-frame-options"] == "DENY"
         assert live.headers["cache-control"] == "no-store"
+        assert "default-src 'self'" in live.headers["content-security-policy"]
+        assert live.headers["cross-origin-opener-policy"] == "same-origin"
+        assert live.headers["cross-origin-resource-policy"] == "same-origin"
+        assert live.headers["strict-transport-security"].startswith("max-age=31536000")
         ready = client.get("/health/ready")
         assert ready.status_code == 200
         assert ready.json()["ready"] is True
         assert ready.json()["schema_current"] is True
         assert ready.json()["quarantine_store"] is True
+        assert ready.json()["operator_ui"] is True
         assert ready.json()["object_store_worm"] is True
         assert ready.json()["audit_anchor_valid"] is True
         assert ready.json()["idempotency_enforced"] is True
@@ -374,6 +381,76 @@ def test_readiness_returns_503_when_authentication_is_not_configured(
         assert ready.json()["ready"] is False
         assert ready.json()["authentication_configured"] is False
         assert ready.json()["export_signing_configured"] is False
+
+
+def test_runtime_config_exposes_only_public_browser_authentication_settings(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        oidc_issuer="https://identity.example/realms/tenderguard",
+        oidc_audience="tenderguard-api",
+        oidc_jwks_url="https://identity.example/realms/tenderguard/jwks",
+        oidc_web_client_id="tenderguard-operator-ui",
+        audit_signing_key="private-test-value-that-must-not-be-exposed",
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    )
+    with TestClient(app) as client:
+        response = client.get("/v1/runtime-config")
+        assert response.status_code == 200
+        assert response.json() == {
+            "environment": "test",
+            "authentication_mode": "OIDC",
+            "oidc_authority": "https://identity.example/realms/tenderguard",
+            "oidc_client_id": "tenderguard-operator-ui",
+            "oidc_scope": "openid profile email",
+            "api_base_path": "/v1",
+            "application_version": "0.1.0",
+        }
+        assert "private-test-value" not in response.text
+        assert "https://identity.example" in response.headers["content-security-policy"]
+    engine.dispose()
+
+
+def test_operator_ui_serves_only_declared_spa_routes_and_assets(tmp_path: Path) -> None:
+    ui_dist = tmp_path / "operator-ui"
+    assets = ui_dist / "assets"
+    assets.mkdir(parents=True)
+    (ui_dist / "index.html").write_text(
+        "<!doctype html><title>TenderGuard</title>",
+        encoding="utf-8",
+    )
+    (ui_dist / "favicon.svg").write_text("<svg></svg>", encoding="utf-8")
+    (assets / "app.js").write_text("export {};", encoding="utf-8")
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        operator_ui_dist_path=ui_dist,
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    )
+    with TestClient(app) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/tasks").status_code == 200
+        assert client.get("/projects/project-1/BOQ_SCOPE").status_code == 200
+        assert client.get("/auth/callback").status_code == 200
+        assert client.get("/assets/app.js").text == "export {};"
+        assert client.get("/favicon.svg").headers["content-type"].startswith("image/svg+xml")
+        assert client.get("/v1/not-an-api-route").status_code == 404
+        assert client.get("/not-an-ui-route").status_code == 404
+    engine.dispose()
 
 
 def test_readiness_returns_503_when_migrations_are_missing(tmp_path: Path) -> None:

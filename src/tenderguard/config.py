@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,6 +38,10 @@ class Settings(BaseSettings):
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
+    oidc_web_client_id: str | None = None
+    oidc_web_scope: str = "openid profile email"
+    operator_ui_enabled: bool = True
+    operator_ui_dist_path: Path | None = None
     allow_insecure_dev_auth: bool = False
     audit_signing_key: SecretStr = SecretStr(DEVELOPMENT_AUDIT_SIGNING_KEY)
     audit_signing_key_id: str = DEVELOPMENT_AUDIT_SIGNING_KEY_ID
@@ -117,6 +122,7 @@ class Settings(BaseSettings):
                 64,
             ),
             ("integration receiver ID", self.integration_receiver_id, 200),
+            ("OIDC web client ID", self.oidc_web_client_id, 200),
         ):
             if value is not None and (
                 not value.strip() or value != value.strip() or len(value) > max_length
@@ -137,6 +143,23 @@ class Settings(BaseSettings):
                 problems.append("insecure development authentication is enabled")
             if not all((self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)):
                 problems.append("OIDC configuration is incomplete")
+            for label, value in (
+                ("OIDC issuer", self.oidc_issuer),
+                ("OIDC JWKS URL", self.oidc_jwks_url),
+            ):
+                if value is None:
+                    continue
+                parsed = urlsplit(value)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.fragment
+                ):
+                    problems.append(f"{label} must be an HTTPS URL without credentials")
+            if self.operator_ui_enabled and not self.oidc_web_client_id:
+                problems.append("OIDC web client ID is not configured")
             if len(self.audit_signing_key.get_secret_value().encode("utf-8")) < 32:
                 problems.append("audit signing key is shorter than 32 bytes")
             if self.audit_signing_key.get_secret_value() == DEVELOPMENT_AUDIT_SIGNING_KEY:
@@ -186,6 +209,17 @@ class Settings(BaseSettings):
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         if self.allow_insecure_dev_auth and self.app_env not in {"development", "test"}:
             raise ValueError("Insecure authentication is allowed only in development/test")
+        scopes = self.oidc_web_scope.split()
+        if (
+            not scopes
+            or "openid" not in scopes
+            or len(scopes) != len(set(scopes))
+            or any(
+                not scope or len(scope) > 100 or any(character.isspace() for character in scope)
+                for scope in scopes
+            )
+        ):
+            raise ValueError("OIDC web scope must contain unique scopes including openid")
         if self.document_job_timeout_seconds >= self.document_job_lease_seconds:
             raise ValueError("Document job timeout must be shorter than its lease")
         if self.document_job_retry_max_seconds < self.document_job_retry_base_seconds:

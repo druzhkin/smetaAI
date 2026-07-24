@@ -1,3 +1,14 @@
+FROM node:24.11.1-alpine AS operator-ui
+
+WORKDIR /web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY web ./
+RUN npm run build
+
+
 FROM python:3.11-slim AS source
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,6 +19,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv==0.9.27
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
+COPY --from=operator-ui /web/dist ./src/tenderguard/web_dist
 COPY alembic.ini ./
 COPY migrations ./migrations
 
