@@ -661,6 +661,8 @@ class AuditEventRow(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     previous_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    signing_key_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    signature_version: Mapped[str] = mapped_column(String(32), nullable=False)
     event_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     signature: Mapped[str] = mapped_column(String(64), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -669,6 +671,48 @@ class AuditEventRow(Base):
         UniqueConstraint("aggregate_type", "aggregate_id", "sequence"),
         Index("ix_audit_aggregate_sequence", "aggregate_type", "aggregate_id", "sequence"),
     )
+
+
+class AuditCheckpointRow(Base):
+    __tablename__ = "audit_checkpoints"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    terminal_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    checkpoint_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    object_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("event_count >= 1", name="ck_audit_checkpoint_event_count"),
+        CheckConstraint("terminal_count >= 1", name="ck_audit_checkpoint_terminal_count"),
+        Index("ix_audit_checkpoints_created_at", "created_at"),
+    )
+
+
+class AuditAnchorReceiptRow(Base):
+    __tablename__ = "audit_anchor_receipts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    checkpoint_id: Mapped[str] = mapped_column(
+        ForeignKey("audit_checkpoints.id"),
+        nullable=False,
+        unique=True,
+    )
+    provider_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider_key_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    external_reference: Mapped[str] = mapped_column(String(500), nullable=False)
+    anchored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    signature_b64: Mapped[str] = mapped_column(String(200), nullable=False)
+    receipt_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    registered_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_audit_anchor_receipts_anchored_at", "anchored_at"),)
 
 
 class OutboxEventRow(Base):

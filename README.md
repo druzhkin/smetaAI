@@ -79,6 +79,9 @@ The repository currently connects and integration-tests:
 - deterministic Ed25519-signed estimate/audit export packages containing the
   fixed snapshot, recursive lineage, controlled versions, approvals, workflow,
   release decision, and verified project audit chain;
+- versioned audit HMAC keys, fail-closed legacy migration, content-addressed
+  global checkpoints, four-eyes external Ed25519 receipts, and readiness that
+  re-verifies current history plus the live evidence-bucket WORM policy;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -113,7 +116,8 @@ malware scanner and production scheduler/isolated worker runtime, normative
 engine, OCR/visual
 extraction and market/RFQ adapters, approved
 methodology and financial thresholds, production identity and infrastructure,
-enterprise integrations, historical validation set, operating procedures,
+an approved external audit-anchor provider and verified WORM policy, enterprise
+integrations, historical validation set, operating procedures,
 backup/disaster-recovery evidence, trained users, and named process owners.
 
 Detailed logistics/mobilisation planning, contract cash-flow modelling,
@@ -129,3 +133,5 @@ Open security findings are in
 [the security review](security_best_practices_report.md).
 The untrusted-file boundary is specified in the
 [quarantined intake contract](docs/quarantined-intake.md).
+Audit checkpoint, anchoring, WORM, and key-rotation controls are specified in
+[the audit-integrity runbook](docs/audit-integrity.md).

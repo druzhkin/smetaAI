@@ -67,6 +67,7 @@ class ReleaseContext(DomainModel):
     normative_engine_qualified: bool = False
     normative_calculation_valid: bool = False
     production_qualification_complete: bool = False
+    operational_integrity_valid: bool = True
 
 
 def _finding(
@@ -293,6 +294,13 @@ def evaluate_bid_release(context: ReleaseContext) -> GateDecision:
             _finding(
                 FindingCode.PRODUCTION_QUALIFICATION_INCOMPLETE,
                 "Production quality gates and formal methodology approval are incomplete",
+            )
+        )
+    if not context.operational_integrity_valid:
+        findings.append(
+            _finding(
+                FindingCode.OPERATIONAL_INTEGRITY_UNAVAILABLE,
+                "WORM evidence storage or external audit anchoring is not valid",
             )
         )
 

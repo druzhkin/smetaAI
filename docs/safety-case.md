@@ -29,6 +29,7 @@ all operational qualification evidence remain open.
 | Independent validation | separate recalculation from atomic inputs | arithmetic mismatch hard stop |
 | Scenario | approved definitions over a fixed base snapshot plus independent recalculation | reject unknown or unsupported overrides |
 | Export | fixed released snapshot, mandatory content hashes, Ed25519 signature, immutable artifact metadata | refuse generation or verification |
+| Audit integrity | per-key hash chains, WORM checkpoint, independent Ed25519 receipt, full current-history verification | readiness 503; investigate tampering or stale anchor |
 | Contract | revisioned evidence-backed obligations tied to approved cost impacts | unresolved contract risk hard stop |
 | Risk | verified register and version-bound deterministic reserve | missing or stale reserve hard stop |
 | Approval | configurable tasks and four-eyes rule | approval hard stop |
@@ -46,6 +47,11 @@ Calculation cannot advance without a complete governed price basis, resolved
 contract assessment, verified risk register, and current risk calculation.
 Release independently re-evaluates these gates rather than trusting the
 workflow state alone.
+
+In staging and production, release also re-verifies the configured WORM policy
+and fresh external audit checkpoint. Failure adds
+`OPERATIONAL_INTEGRITY_UNAVAILABLE` and results in `BLOCKED`, even if an
+orchestrator mistakenly sends traffic to a non-ready replica.
 
 When a newer current document revision is uploaded, the confirmed document-set
 reference is cleared, the project moves to `BLOCKED`, current derived facts and
@@ -68,8 +74,11 @@ and creates a new verified derived observation with recursive lineage.
 - Two extraction paths are independent only when their active, approved adapter
   qualifications declare different independence domains. Merely using two
   prompts or two runs of one adapter is not independent evidence.
-- A hash chain detects alteration but is not a substitute for database
-  permissions, external anchoring, backups, or WORM retention.
+- The repository now combines hash chains, immutable PostgreSQL rows,
+  content-addressed checkpoints, live WORM-policy enforcement, and external
+  Ed25519 receipt validation. Production assurance still depends on an
+  independently operated provider, protected keys, monitoring, and tested
+  backup/restore and tamper response.
 - Market evidence may be technically comparable yet commercially unavailable;
   availability and validity are mandatory price attributes.
 - Model behaviour can change; exact model/prompt/rule versions and regression

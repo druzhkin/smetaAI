@@ -16,7 +16,15 @@
 
 No critical change may be approved by its author.
 
-## Project-access migration and service identities
+## Audit and project-access migrations
+
+Before applying migration `b92d5f8c0e31`, restore the exact
+`AUDIT_SIGNING_KEY` that signed all unversioned audit history and configure its
+non-legacy `AUDIT_SIGNING_KEY_ID`. The migration verifies every chain before
+adding key/version metadata and never re-signs history. A wrong key or damaged
+event aborts before DDL. Rotate only after this migration; preserve the old key
+in `AUDIT_VERIFICATION_KEYS`. The complete protocol is in
+`docs/audit-integrity.md`.
 
 Before applying migration `a81c4e7d9b20`, restore the exact
 `AUDIT_SIGNING_KEY` that signed the existing project audit history. The
@@ -44,12 +52,17 @@ the last recorded owner but cannot repair an IdP-disabled sole owner.
 - `GET /health/live` returns HTTP 200 while the process can serve requests.
 - `GET /health/ready` returns HTTP 200 only when the database is at the exact
   application Alembic head, evidence and quarantine stores are reachable,
-  authentication is configured, malware-scanner and document-processor
-  qualifications are active, the worker actor is configured, and the Ed25519
-  export signing key is valid. It returns HTTP 503 otherwise.
-- Normative-engine qualification is reported by readiness but remains a
-  separate bid-release hard stop; an operational API process is not, by that
-  fact alone, authorised to issue a bid.
+  the live evidence-bucket WORM policy satisfies configured retention,
+  authentication is configured, the normative engine, malware scanner, and
+  document processor are qualified, the worker actor is configured, the
+  Ed25519 export signing key is valid, and a fresh external audit receipt
+  validates against the complete current audit history. It returns HTTP 503
+  otherwise.
+- Operational readiness remains distinct from bid authority. Project-specific
+  document, evidence, calculation, approval, snapshot, and release hard stops
+  are re-evaluated separately. Staging/production release also rechecks
+  WORM/anchor integrity and returns a blocked decision with
+  `OPERATIONAL_INTEGRITY_UNAVAILABLE` when it fails.
 
 ## Quarantined document intake
 
@@ -191,8 +204,9 @@ snapshots are never edited.
 ## Key rotation
 
 - Rotate OIDC/JWKS according to IdP procedure.
-- Audit HMAC rotation requires a key ID and externally anchored final hash for
-  the old chain; this is an open implementation item.
+- Audit HMAC rotation uses versioned key IDs, retained historical verification
+  keys, and independently anchored checkpoints. Never re-sign history; follow
+  `docs/audit-integrity.md`.
 - Ed25519 export-key rotation uses a new key ID. Existing artifact rows retain
   their exact public key and fingerprint, but the organisation must maintain
   the independently trusted historical public-key registry.

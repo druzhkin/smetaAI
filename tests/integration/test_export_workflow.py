@@ -57,6 +57,7 @@ from tests.integration.support import project_memberships
 NOW = datetime(2026, 7, 23, 12, 0, tzinfo=UTC)
 PRIVATE_KEY_B64 = base64.b64encode(bytes(range(32))).decode("ascii")
 AUDIT_KEY = "export-workflow-audit-key-at-least-32-bytes"
+AUDIT_KEY_ID = "export-workflow-key-1"
 
 
 def _headers(actor: str, roles: str) -> dict[str, str]:
@@ -113,6 +114,8 @@ def _audit_row(event: AuditEvent) -> AuditEventRow:
         reason=event.reason,
         payload=canonical_data(event.payload),
         previous_hash=event.previous_hash,
+        signing_key_id=event.signing_key_id,
+        signature_version=event.signature_version,
         event_hash=event.event_hash,
         signature=event.signature,
         occurred_at=event.occurred_at,
@@ -253,6 +256,7 @@ def _seed_released_snapshot(
             reason="Fixture release evidence",
             occurred_at=occurred_at,
             payload=payload,
+            signing_key_id=settings.audit_signing_key_id,
             signing_key=settings.audit_signing_key.get_secret_value().encode("utf-8"),
         )
         audit_events.append(event)
@@ -459,6 +463,7 @@ def test_signed_export_api_is_idempotent_verifiable_and_fail_closed(
         database_url="sqlite+pysqlite://",
         allow_insecure_dev_auth=True,
         audit_signing_key=AUDIT_KEY,
+        audit_signing_key_id=AUDIT_KEY_ID,
         export_signing_key_id="export-key-2026-01",
         export_signing_private_key_b64=PRIVATE_KEY_B64,
     )

@@ -7,7 +7,10 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from tenderguard.domain.audit_anchor import validate_anchor_public_key
+
 DEVELOPMENT_AUDIT_SIGNING_KEY = "development-only-not-for-production"
+DEVELOPMENT_AUDIT_SIGNING_KEY_ID = "legacy"
 
 
 class Settings(BaseSettings):
@@ -35,6 +38,13 @@ class Settings(BaseSettings):
     oidc_jwks_url: str | None = None
     allow_insecure_dev_auth: bool = False
     audit_signing_key: SecretStr = SecretStr(DEVELOPMENT_AUDIT_SIGNING_KEY)
+    audit_signing_key_id: str = DEVELOPMENT_AUDIT_SIGNING_KEY_ID
+    audit_verification_keys: dict[str, SecretStr] = Field(default_factory=dict)
+    audit_anchor_provider_id: str | None = None
+    audit_anchor_provider_key_id: str | None = None
+    audit_anchor_public_key_b64: str | None = None
+    audit_anchor_max_age_seconds: int | None = Field(default=None, ge=60)
+    audit_operator_organization_id: str | None = None
     export_signing_key_id: str | None = None
     export_signing_private_key_b64: SecretStr | None = None
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "testserver"]
@@ -44,6 +54,8 @@ class Settings(BaseSettings):
     s3_quarantine_bucket: str | None = None
     s3_access_key: SecretStr | None = None
     s3_secret_key: SecretStr | None = None
+    s3_required_object_lock_mode: Literal["GOVERNANCE", "COMPLIANCE"] | None = None
+    s3_minimum_retention_days: int | None = Field(default=None, ge=1)
 
     normative_adapter: str | None = None
     normative_adapter_qualification_id: str | None = None
@@ -60,6 +72,35 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def production_is_fail_closed(self) -> Settings:
+        if (
+            not self.audit_signing_key_id.strip()
+            or self.audit_signing_key_id != self.audit_signing_key_id.strip()
+            or len(self.audit_signing_key_id) > 200
+        ):
+            raise ValueError("Audit signing key ID is invalid")
+        for key_id, key in self.audit_verification_keys.items():
+            if not key_id.strip() or key_id != key_id.strip() or len(key_id) > 200:
+                raise ValueError("An audit verification key ID is invalid")
+            if not key.get_secret_value():
+                raise ValueError("An audit verification key is empty")
+        for field_name, value, max_length in (
+            ("audit anchor provider ID", self.audit_anchor_provider_id, 200),
+            ("audit anchor provider key ID", self.audit_anchor_provider_key_id, 200),
+            ("audit operator organization ID", self.audit_operator_organization_id, 64),
+        ):
+            if value is not None and (
+                not value.strip() or value != value.strip() or len(value) > max_length
+            ):
+                raise ValueError(f"{field_name} is invalid")
+        current_verification_key = self.audit_verification_keys.get(self.audit_signing_key_id)
+        if (
+            current_verification_key is not None
+            and current_verification_key.get_secret_value()
+            != self.audit_signing_key.get_secret_value()
+        ):
+            raise ValueError("Current audit verification key differs from the signing key")
+        if self.audit_anchor_public_key_b64 is not None:
+            validate_anchor_public_key(self.audit_anchor_public_key_b64)
         if self.app_env in {"staging", "production"}:
             problems: list[str] = []
             if self.allow_insecure_dev_auth:
@@ -70,6 +111,12 @@ class Settings(BaseSettings):
                 problems.append("audit signing key is shorter than 32 bytes")
             if self.audit_signing_key.get_secret_value() == DEVELOPMENT_AUDIT_SIGNING_KEY:
                 problems.append("development audit signing key is still configured")
+            if self.audit_signing_key_id == DEVELOPMENT_AUDIT_SIGNING_KEY_ID:
+                problems.append("legacy audit signing key ID is still configured")
+            if not self.audit_anchor_configured:
+                problems.append("external audit anchor configuration is incomplete")
+            if not self.audit_operator_organization_id:
+                problems.append("audit operator organization is not configured")
             if not self.export_signing_key_id or not self.export_signing_private_key_b64:
                 problems.append("Ed25519 export signing key configuration is incomplete")
             if not self.trusted_hosts or "*" in self.trusted_hosts:
@@ -89,6 +136,8 @@ class Settings(BaseSettings):
                 problems.append("S3 credentials/evidence/quarantine buckets are incomplete")
             if self.s3_bucket and self.s3_bucket == self.s3_quarantine_bucket:
                 problems.append("quarantine and evidence must use different S3 buckets")
+            if not self.worm_policy_configured:
+                problems.append("S3 object-lock retention policy is not configured")
             if not self.malware_scanner_configured:
                 problems.append("qualified malware scanner binding is incomplete")
             if not self.document_processor_configured:
@@ -112,6 +161,30 @@ class Settings(BaseSettings):
     @property
     def export_signing_configured(self) -> bool:
         return bool(self.export_signing_key_id and self.export_signing_private_key_b64)
+
+    @property
+    def audit_verification_keyring(self) -> dict[str, bytes]:
+        keyring = {
+            key_id: secret.get_secret_value().encode("utf-8")
+            for key_id, secret in self.audit_verification_keys.items()
+        }
+        keyring[self.audit_signing_key_id] = self.audit_signing_key.get_secret_value().encode(
+            "utf-8"
+        )
+        return keyring
+
+    @property
+    def audit_anchor_configured(self) -> bool:
+        return bool(
+            self.audit_anchor_provider_id
+            and self.audit_anchor_provider_key_id
+            and self.audit_anchor_public_key_b64
+            and self.audit_anchor_max_age_seconds
+        )
+
+    @property
+    def worm_policy_configured(self) -> bool:
+        return bool(self.s3_required_object_lock_mode and self.s3_minimum_retention_days)
 
     @property
     def malware_scanner_configured(self) -> bool:

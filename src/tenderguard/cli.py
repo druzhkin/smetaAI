@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from sqlalchemy import text
 
+from tenderguard.application.audit_integrity import AuditIntegrityService
+from tenderguard.application.projects import ProjectService
 from tenderguard.config import get_settings
 from tenderguard.domain.jobs import DispatchDisposition
 from tenderguard.infrastructure.database import (
@@ -26,14 +28,18 @@ def doctor() -> int:
         "database": False,
         "schema_current": False,
         "object_store": False,
+        "object_store_worm": False,
         "quarantine_store": False,
+        "audit_anchor_valid": False,
         "oidc_configured": bool(
             settings.allow_insecure_dev_auth
             or (settings.oidc_issuer and settings.oidc_audience and settings.oidc_jwks_url)
         ),
         "normative_adapter_configured": settings.normative_adapter_configured,
+        "normative_engine_qualified": False,
     }
     engine = create_database_engine(settings)
+    object_store = None
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -44,16 +50,42 @@ def doctor() -> int:
         checks["schema_current"] = revision == CURRENT_SCHEMA_REVISION
     except Exception as error:
         checks["database_error"] = type(error).__name__
-    finally:
-        engine.dispose()
     try:
-        checks["object_store"] = build_object_store(settings).healthcheck()
+        object_store = build_object_store(settings)
+        checks["object_store"] = object_store.healthcheck()
+        if settings.worm_policy_configured:
+            assert settings.s3_required_object_lock_mode is not None
+            assert settings.s3_minimum_retention_days is not None
+            checks["object_store_worm"] = object_store.retention_status().satisfies(
+                required_mode=settings.s3_required_object_lock_mode,
+                minimum_days=settings.s3_minimum_retention_days,
+            )
     except Exception as error:
         checks["object_store_error"] = type(error).__name__
     try:
         checks["quarantine_store"] = build_quarantine_store(settings).healthcheck()
     except Exception as error:
         checks["quarantine_store_error"] = type(error).__name__
+    if checks["database"] is True and checks["schema_current"] is True and object_store is not None:
+        try:
+            with create_session_factory(engine)() as session:
+                project_service = ProjectService(
+                    session=session,
+                    settings=settings,
+                    object_store=object_store,
+                )
+                checks["normative_engine_qualified"] = project_service.normative_engine_qualified()
+                anchor_status = AuditIntegrityService(
+                    session=session,
+                    settings=settings,
+                    object_store=object_store,
+                ).anchor_status()
+                checks["audit_anchor_valid"] = anchor_status.valid
+                if anchor_status.reasons:
+                    checks["audit_anchor_reasons"] = "; ".join(anchor_status.reasons)
+        except Exception as error:
+            checks["governed_readiness_error"] = type(error).__name__
+    engine.dispose()
     print(json.dumps(checks, ensure_ascii=False, indent=2, sort_keys=True))
     return (
         0
@@ -63,8 +95,11 @@ def doctor() -> int:
                 "database",
                 "schema_current",
                 "object_store",
+                "object_store_worm",
                 "quarantine_store",
+                "audit_anchor_valid",
                 "oidc_configured",
+                "normative_engine_qualified",
             )
         )
         else 1

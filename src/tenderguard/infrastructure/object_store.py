@@ -6,9 +6,10 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
-from typing import BinaryIO, Protocol, cast
+from typing import Any, BinaryIO, Protocol, cast
 
 import boto3
+from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field
 
 from tenderguard.config import Settings
@@ -22,12 +23,35 @@ class StoredObject(BaseModel):
     size_bytes: int = Field(ge=0)
 
 
+class ObjectStoreRetentionStatus(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    versioning_enabled: bool
+    object_lock_enabled: bool
+    default_retention_mode: str | None = None
+    default_retention_days: int | None = Field(default=None, ge=1)
+
+    def satisfies(self, *, required_mode: str, minimum_days: int) -> bool:
+        mode_satisfies = self.default_retention_mode == required_mode or (
+            required_mode == "GOVERNANCE" and self.default_retention_mode == "COMPLIANCE"
+        )
+        return bool(
+            self.versioning_enabled
+            and self.object_lock_enabled
+            and mode_satisfies
+            and self.default_retention_days is not None
+            and self.default_retention_days >= minimum_days
+        )
+
+
 class ObjectStore(Protocol):
     def put(self, stream: BinaryIO, *, max_bytes: int | None = None) -> StoredObject: ...
 
     def open(self, object_hash: str) -> AbstractContextManager[BinaryIO]: ...
 
     def healthcheck(self) -> bool: ...
+
+    def retention_status(self) -> ObjectStoreRetentionStatus: ...
 
 
 class LocalObjectStore:
@@ -85,6 +109,12 @@ class LocalObjectStore:
     def healthcheck(self) -> bool:
         return self.root.is_dir() and os.access(self.root, os.R_OK | os.W_OK)
 
+    def retention_status(self) -> ObjectStoreRetentionStatus:
+        return ObjectStoreRetentionStatus(
+            versioning_enabled=False,
+            object_lock_enabled=False,
+        )
+
 
 class S3ObjectStore:
     def __init__(self, settings: Settings, *, bucket: str | None = None) -> None:
@@ -93,6 +123,11 @@ class S3ObjectStore:
             raise ValueError("S3 object store configuration is incomplete")
         self.bucket = resolved_bucket
         self.spool_memory_bytes = settings.max_parser_spool_memory_bytes
+        self.required_object_lock_mode = settings.s3_required_object_lock_mode
+        self.minimum_retention_days = settings.s3_minimum_retention_days
+        self.enforce_worm = bool(
+            settings.app_env in {"staging", "production"} and resolved_bucket == settings.s3_bucket
+        )
         self.client = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,
@@ -107,6 +142,8 @@ class S3ObjectStore:
         return f"objects/{object_hash[:2]}/{object_hash}"
 
     def put(self, stream: BinaryIO, *, max_bytes: int | None = None) -> StoredObject:
+        if self.enforce_worm:
+            self._require_worm()
         digest = hashlib.sha256()
         size = 0
         with tempfile.SpooledTemporaryFile(max_size=self.spool_memory_bytes) as spool:
@@ -147,6 +184,48 @@ class S3ObjectStore:
     def healthcheck(self) -> bool:
         self.client.head_bucket(Bucket=self.bucket)
         return True
+
+    def retention_status(self) -> ObjectStoreRetentionStatus:
+        versioning = self.client.get_bucket_versioning(Bucket=self.bucket)
+        try:
+            lock_response = cast(
+                dict[str, Any],
+                self.client.get_object_lock_configuration(Bucket=self.bucket),
+            )
+        except ClientError as error:
+            error_code = error.response.get("Error", {}).get("Code")
+            if error_code not in {
+                "ObjectLockConfigurationNotFoundError",
+                "InvalidRequest",
+                "NoSuchObjectLockConfiguration",
+            }:
+                raise
+            lock_response = {}
+        configuration = lock_response.get("ObjectLockConfiguration", {})
+        retention = configuration.get("Rule", {}).get("DefaultRetention", {})
+        days = retention.get("Days")
+        years = retention.get("Years")
+        retention_days: int | None = None
+        if isinstance(days, int) and days > 0:
+            retention_days = days
+        elif isinstance(years, int) and years > 0:
+            retention_days = years * 365
+        return ObjectStoreRetentionStatus(
+            versioning_enabled=versioning.get("Status") == "Enabled",
+            object_lock_enabled=configuration.get("ObjectLockEnabled") == "Enabled",
+            default_retention_mode=retention.get("Mode"),
+            default_retention_days=retention_days,
+        )
+
+    def _require_worm(self) -> None:
+        if self.required_object_lock_mode is None or self.minimum_retention_days is None:
+            raise RuntimeError("Evidence-store WORM policy is not configured")
+        status = self.retention_status()
+        if not status.satisfies(
+            required_mode=self.required_object_lock_mode,
+            minimum_days=self.minimum_retention_days,
+        ):
+            raise RuntimeError("Evidence-store WORM policy is not satisfied")
 
 
 def build_object_store(settings: Settings) -> ObjectStore:

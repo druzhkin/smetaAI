@@ -434,7 +434,7 @@ class ExportPackageService:
         ]
         if not audit_events or not verify_chain(
             audit_events,
-            self.settings.audit_signing_key.get_secret_value().encode("utf-8"),
+            self.settings.audit_verification_keyring,
         ):
             raise ExportIntegrityError("Signed export audit chain verification failed")
         if audit_events[-1].event_hash != package.manifest.audit_cutoff_event_hash:
@@ -645,7 +645,7 @@ class ExportPackageService:
         chain = events[: cutoff_index + 1]
         if not verify_chain(
             chain,
-            self.settings.audit_signing_key.get_secret_value().encode("utf-8"),
+            self.settings.audit_verification_keyring,
         ):
             raise ExportIntegrityError("Project audit chain failed verification")
         return chain, chain[-1]
@@ -854,6 +854,8 @@ class ExportPackageService:
             occurred_at=occurred_at,
             payload=row.payload,
             previous_hash=row.previous_hash,
+            signing_key_id=row.signing_key_id,
+            signature_version=row.signature_version,
             event_hash=row.event_hash,
             signature=row.signature,
         )

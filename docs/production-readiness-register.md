@@ -26,6 +26,7 @@ release even when repository tests pass.
 | Load test | no representative document corpus/workload/SLO approved | **OPEN** |
 | Malware scanning/sandbox | streamed separate quarantine, immutable qualification-bound exact-hash scan results, bounded archive streams, leased outbox dispatch, bounded retry/dead-letter/audited replay, and short-transaction worker parsing are implemented and tested; real scanner provider, production scheduler, disposable runtime limits, network policy and qualification evidence are absent | **PARTIAL - PRODUCTION BLOCKER** |
 | Project access/information barriers | versioned owner-managed membership, action-specific project roles, same-tenant non-disclosure, qualified service identities, audited revocation, and immutable PostgreSQL history are implemented; IdP lifecycle, periodic recertification, break-glass recovery and optional RLS evidence are absent | **PARTIAL** |
+| Audit integrity/WORM | versioned HMAC keys, verified legacy migration, immutable global checkpoints, four-eyes Ed25519 external receipts, full current-chain/anchored-terminal verification, and live WORM readiness enforcement are implemented and negatively tested; production provider, real bucket-policy evidence, schedules, alerts and tamper drill are absent | **PARTIAL - PRODUCTION BLOCKER** |
 | Security review | code review completed; residual findings remain below | **OPEN** |
 | Backup and point-in-time recovery | runbook drafted; restore evidence absent | **OPEN** |
 | Disaster recovery | target RPO/RTO and alternate environment not approved | **OPEN** |

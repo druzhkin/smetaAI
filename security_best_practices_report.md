@@ -86,20 +86,26 @@ qualification evidence are external controls and remain production blockers.
 - Status: **REMEDIATED IN APPLICATION/DATABASE CODE; operational access
   governance evidence OPEN**.
 
-### SEC-004 - WORM and external audit anchoring are specified but not verified
+### SEC-004 - WORM and external audit anchoring require production evidence
 
 - Rule ID: integrity/repudiation defence in depth
-- Location: `docs/architecture.md:64`,
-  `src/tenderguard/infrastructure/object_store.py`
-- Evidence: S3-compatible storage is required, but bucket object-lock/retention
-  configuration is not checked; the audit chain is HMAC-signed but not
-  externally anchored and has no key-ID rotation protocol in code.
+- Location: `src/tenderguard/infrastructure/object_store.py`,
+  `src/tenderguard/application/audit_integrity.py`,
+  `migrations/versions/b92d5f8c0e31_add_anchored_audit_integrity.py`
+- Evidence: production writes and readiness verify live bucket
+  versioning/object-lock/default retention. Audit events bind versioned HMAC
+  key IDs; legacy history is verified before migration without re-signing.
+  Global content-addressed checkpoints require a second administrator to
+  register a configured-provider Ed25519 receipt. Readiness re-verifies the
+  receipt, WORM object, every current chain, and all anchored terminals.
 - Impact: a privileged infrastructure actor with DB/object-store/key access
-  could rewrite both records and verification material.
-- Fix: verify bucket versioning/object lock at readiness; use separate audit
-  writer/reader roles; periodically anchor the terminal chain hash outside the
-  application trust domain; add signing key IDs and rotation.
-- Status: **OPEN**.
+  is detected only if the external provider/key and operational monitoring are
+  genuinely independent. A simulated test provider is not that evidence.
+- Fix: deploy and qualify the independent provider, separate audit
+  writer/reader and provider custody, schedule anchors, alert on age/failure,
+  capture real retention evidence, and run restore/tamper drills.
+- Status: **REMEDIATED IN APPLICATION/DATABASE CODE; external trust and
+  operational evidence OPEN - production blocker**.
 
 ### SEC-005 - Distributed rate limiting and edge multipart controls are absent
 
@@ -177,3 +183,7 @@ qualification evidence are external controls and remain production blockers.
   issue explicit versioned project roles; every project-bound service checks
   the role needed for that action, revoked users receive no object visibility,
   and PostgreSQL protects the membership history from mutation.
+- Audit HMAC key IDs are covered by the event hash, old keys remain
+  independently selectable for verification, and migration refuses damaged or
+  wrongly keyed legacy history. WORM policy and a fresh externally signed
+  checkpoint are now mandatory readiness conditions.

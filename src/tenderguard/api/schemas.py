@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +15,11 @@ from tenderguard.application.approvals import (
     ApprovalDecisionCommand,
     ApprovalDecisionResult,
     ApprovalPlanResult,
+)
+from tenderguard.application.audit_integrity import (
+    AuditAnchorReceiptView,
+    AuditAnchorStatus,
+    AuditCheckpointView,
 )
 from tenderguard.application.boq import (
     BoqLineDraft,
@@ -75,6 +80,29 @@ from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadVi
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class CreateAuditCheckpointRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class RegisterAuditAnchorReceiptRequest(ApiModel):
+    anchored_at: datetime
+    external_reference: str = Field(min_length=1, max_length=500)
+    signature_b64: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class AuditCheckpointResponse(AuditCheckpointView):
+    pass
+
+
+class AuditAnchorReceiptResponse(AuditAnchorReceiptView):
+    pass
+
+
+class AuditAnchorStatusResponse(AuditAnchorStatus):
+    pass
 
 
 class CreateProjectRequest(ApiModel):
@@ -446,8 +474,10 @@ class ReadinessResponse(ApiModel):
     database: bool
     schema_current: bool
     object_store: bool
+    object_store_worm: bool
     quarantine_store: bool
     authentication_configured: bool
+    audit_anchor_valid: bool
     normative_engine_qualified: bool
     malware_scanner_qualified: bool
     document_processor_qualified: bool

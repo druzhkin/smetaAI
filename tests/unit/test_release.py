@@ -153,6 +153,17 @@ def test_production_qualification_and_normative_engine_fail_closed() -> None:
     assert "PRODUCTION_QUALIFICATION_INCOMPLETE" in codes
 
 
+def test_operational_integrity_failure_blocks_release() -> None:
+    decision = evaluate_bid_release(
+        good_context().model_copy(update={"operational_integrity_valid": False})
+    )
+
+    assert not decision.allowed
+    assert {finding.code.value for finding in decision.findings} >= {
+        "OPERATIONAL_INTEGRITY_UNAVAILABLE"
+    }
+
+
 def test_stale_or_unverified_snapshot_is_blocked() -> None:
     stale = evaluate_bid_release(
         good_context().model_copy(update={"current_document_set_revision_id": "docs-v3"})

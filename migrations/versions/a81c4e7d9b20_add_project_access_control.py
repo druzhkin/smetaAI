@@ -7,7 +7,9 @@ Create Date: 2026-07-24
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
+from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
@@ -17,7 +19,7 @@ from pydantic import ValidationError
 from sqlalchemy.engine import RowMapping
 
 from tenderguard.config import get_settings
-from tenderguard.domain.audit import AuditEvent, verify_chain
+from tenderguard.domain.audit import AUDIT_SIGNATURE_V1, AuditEvent, verify_chain
 from tenderguard.domain.common import ensure_utc
 from tenderguard.domain.enums import ActorRole
 
@@ -25,6 +27,32 @@ revision: str = "a81c4e7d9b20"
 down_revision: str | None = "f42d8a1b6c53"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+
+def _json_list(value: Any, field: str) -> list[Any]:
+    decoded = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(decoded, list):
+        raise ValueError(f"Legacy audit {field} must be a JSON list")
+    return decoded
+
+
+def _json_dict(value: Any, field: str) -> dict[str, Any]:
+    decoded = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(decoded, dict):
+        raise ValueError(f"Legacy audit {field} must be a JSON object")
+    return decoded
+
+
+def _legacy_datetime(value: Any) -> datetime:
+    parsed = (
+        datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+    )
+    if not isinstance(parsed, datetime):
+        raise ValueError("Legacy audit occurred_at must be a timestamp")
+    normalized = ensure_utc(parsed)
+    if normalized is None:
+        raise ValueError("Legacy audit occurred_at is missing")
+    return normalized
 
 
 def _verified_creator_events() -> list[dict[str, Any]]:
@@ -46,7 +74,9 @@ def _verified_creator_events() -> list[dict[str, Any]]:
     by_project: dict[str, list[RowMapping]] = {}
     for event in audit_rows:
         by_project.setdefault(str(event["aggregate_id"]), []).append(event)
-    signing_key = get_settings().audit_signing_key.get_secret_value().encode("utf-8")
+    settings = get_settings()
+    signing_key_id = settings.audit_signing_key_id
+    signing_key = settings.audit_signing_key.get_secret_value().encode("utf-8")
     verified: list[dict[str, Any]] = []
     for project in projects:
         project_id = str(project["id"])
@@ -60,12 +90,14 @@ def _verified_creator_events() -> list[dict[str, Any]]:
                     aggregate_id=project_id,
                     event_type=str(row["event_type"]),
                     actor_id=str(row["actor_id"]),
-                    actor_roles=tuple(row["actor_roles"]),
+                    actor_roles=tuple(_json_list(row["actor_roles"], "actor_roles")),
                     request_id=str(row["request_id"]),
                     reason=str(row["reason"]),
-                    occurred_at=ensure_utc(row["occurred_at"]),
-                    payload=row["payload"],
+                    occurred_at=_legacy_datetime(row["occurred_at"]),
+                    payload=_json_dict(row["payload"], "payload"),
                     previous_hash=str(row["previous_hash"]),
+                    signing_key_id=signing_key_id,
+                    signature_version=AUDIT_SIGNATURE_V1,
                     event_hash=str(row["event_hash"]),
                     signature=str(row["signature"]),
                 )
@@ -75,7 +107,7 @@ def _verified_creator_events() -> list[dict[str, Any]]:
             raise RuntimeError(
                 "Cannot infer project ACL safely: project audit data is invalid"
             ) from error
-        if not events or not verify_chain(events, signing_key):
+        if not events or not verify_chain(events, {signing_key_id: signing_key}):
             raise RuntimeError(
                 "Cannot infer project ACL safely: the complete project audit chain "
                 "does not verify with the configured audit key"

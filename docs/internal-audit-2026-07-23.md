@@ -71,13 +71,17 @@ Resolved during the audit:
 - document parsing no longer holds a database transaction; stale leases are
   reclaimable, terminal outbox events are immutable in PostgreSQL, and an
   exhausted upload retains its blocker until a new audited replay succeeds.
+- audit events bind versioned HMAC key IDs; legacy migration verifies rather
+  than re-signs history; WORM retention and fresh four-eyes external Ed25519
+  checkpoints are enforced by readiness with full current-chain verification.
 
 Open security blockers remain tracked in
 `security_best_practices_report.md`: deployment/qualification of the real
 scanner and disposable parser runtime, operational IdP/access recertification
-and owner recovery, verified WORM/external audit anchoring, and distributed
-rate limiting. Versioned project ACL enforcement is now implemented in the
-application and protected by PostgreSQL membership-history triggers.
+and owner recovery, deployment/qualification of the independent audit anchor
+and real WORM/tamper evidence, and distributed rate limiting. Versioned project
+ACL enforcement is now implemented in the application and protected by
+PostgreSQL membership-history triggers.
 
 ## Usability and developer-experience audit
 

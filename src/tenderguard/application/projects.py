@@ -1604,6 +1604,7 @@ class ProjectService:
                 )
                 is not None
             )
+        operational_integrity_valid = self._operational_integrity_valid()
         return ReleaseContext(
             current_document_set_confirmed=bool(project.current_document_set_revision_id),
             current_document_set_revision_id=project.current_document_set_revision_id,
@@ -1628,7 +1629,36 @@ class ProjectService:
             normative_engine_qualified=qualification is not None,
             normative_calculation_valid=normative_calculation_valid,
             production_qualification_complete=production_qualified,
+            operational_integrity_valid=operational_integrity_valid,
         )
+
+    def _operational_integrity_valid(self) -> bool:
+        if self.settings.app_env not in {"staging", "production"}:
+            return True
+        if not self.settings.worm_policy_configured:
+            return False
+        assert self.settings.s3_required_object_lock_mode is not None
+        assert self.settings.s3_minimum_retention_days is not None
+        try:
+            retention_valid = self.object_store.retention_status().satisfies(
+                required_mode=self.settings.s3_required_object_lock_mode,
+                minimum_days=self.settings.s3_minimum_retention_days,
+            )
+            if not retention_valid:
+                return False
+            from tenderguard.application.audit_integrity import AuditIntegrityService
+
+            return (
+                AuditIntegrityService(
+                    session=self.session,
+                    settings=self.settings,
+                    object_store=self.object_store,
+                )
+                .anchor_status()
+                .valid
+            )
+        except Exception:
+            return False
 
     def _current_membership(
         self,
@@ -1916,6 +1946,7 @@ class ProjectService:
             occurred_at=utc_now(),
             payload=payload,
             signing_key=self.settings.audit_signing_key.get_secret_value().encode("utf-8"),
+            signing_key_id=self.settings.audit_signing_key_id,
         )
         self.session.add(
             AuditEventRow(
@@ -1930,6 +1961,8 @@ class ProjectService:
                 reason=event.reason,
                 payload=canonical_data(event.payload),
                 previous_hash=event.previous_hash,
+                signing_key_id=event.signing_key_id,
+                signature_version=event.signature_version,
                 event_hash=event.event_hash,
                 signature=event.signature,
                 occurred_at=event.occurred_at,
@@ -1955,6 +1988,8 @@ class ProjectService:
             occurred_at=ensure_utc(row.occurred_at),
             payload=row.payload,
             previous_hash=row.previous_hash,
+            signing_key_id=row.signing_key_id,
+            signature_version=row.signature_version,
             event_hash=row.event_hash,
             signature=row.signature,
         )

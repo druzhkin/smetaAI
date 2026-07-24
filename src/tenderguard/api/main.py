@@ -25,6 +25,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from tenderguard.application.actuals import ActualsService
 from tenderguard.application.approvals import ApprovalService
+from tenderguard.application.audit_integrity import AuditIntegrityService
 from tenderguard.application.boq import BoqService
 from tenderguard.application.calculations import CalculationService
 from tenderguard.application.contracts import ContractService
@@ -73,6 +74,9 @@ from .schemas import (
     ApproveCalibrationRequest,
     ApproveControlledVersionRequest,
     AssessNomenclatureRequest,
+    AuditAnchorReceiptResponse,
+    AuditAnchorStatusResponse,
+    AuditCheckpointResponse,
     BindControlledVersionRequest,
     BoqLineResponse,
     BuildApprovalPlanRequest,
@@ -88,6 +92,7 @@ from .schemas import (
     ContractTermValidationResponse,
     ContractValidationResponse,
     ControlledVersionResponse,
+    CreateAuditCheckpointRequest,
     CreateBoqLineRequest,
     CreateControlledVersionRequest,
     CreateProjectRequest,
@@ -121,6 +126,7 @@ from .schemas import (
     RecordObservationRequest,
     RecordPriceQuoteRequest,
     RecordQuantityRequest,
+    RegisterAuditAnchorReceiptRequest,
     ReleaseAttemptResponse,
     ReleaseGateResponse,
     ReleaseRequest,
@@ -321,6 +327,13 @@ def create_app(
             object_store=resolved_store,
         )
 
+    def audit_integrity_service(session: Session) -> AuditIntegrityService:
+        return AuditIntegrityService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
     @application.exception_handler(ProjectNotFoundError)
     async def project_not_found(_: Request, error: ProjectNotFoundError) -> JSONResponse:
         return JSONResponse(
@@ -375,7 +388,9 @@ def create_app(
         database_ok = False
         schema_current = False
         store_ok = False
+        store_worm_ok = False
         quarantine_store_ok = False
+        audit_anchor_valid = False
         notes: list[str] = []
         try:
             session.execute(text("SELECT 1"))
@@ -396,6 +411,18 @@ def create_app(
             store_ok = resolved_store.healthcheck()
         except Exception:
             notes.append("object-store check failed")
+        if resolved_settings.worm_policy_configured:
+            assert resolved_settings.s3_required_object_lock_mode is not None
+            assert resolved_settings.s3_minimum_retention_days is not None
+            try:
+                store_worm_ok = resolved_store.retention_status().satisfies(
+                    required_mode=resolved_settings.s3_required_object_lock_mode,
+                    minimum_days=resolved_settings.s3_minimum_retention_days,
+                )
+            except Exception:
+                notes.append("evidence-store WORM retention check failed")
+        if not store_worm_ok:
+            notes.append("evidence-store WORM retention policy is not satisfied")
         try:
             quarantine_store_ok = resolved_quarantine_store.healthcheck()
         except Exception:
@@ -417,6 +444,13 @@ def create_app(
                 notes.append("normative qualification check failed")
         if not normative_engine_qualified:
             notes.append("bid release remains blocked: normative engine is not qualified")
+        if schema_current:
+            try:
+                anchor_status = audit_integrity_service(session).anchor_status()
+                audit_anchor_valid = anchor_status.valid
+                notes.extend(anchor_status.reasons)
+            except Exception:
+                notes.append("external audit anchor validation failed")
         now = utc_now()
         malware_scanner_qualification = None
         if schema_current and resolved_settings.malware_scanner_configured:
@@ -495,8 +529,11 @@ def create_app(
             database_ok
             and schema_current
             and store_ok
+            and store_worm_ok
             and quarantine_store_ok
             and auth_configured
+            and normative_engine_qualified
+            and audit_anchor_valid
             and malware_scanner_qualified
             and document_processor_qualified
             and export_signing_configured
@@ -508,14 +545,71 @@ def create_app(
             database=database_ok,
             schema_current=schema_current,
             object_store=store_ok,
+            object_store_worm=store_worm_ok,
             quarantine_store=quarantine_store_ok,
             authentication_configured=bool(auth_configured),
+            audit_anchor_valid=audit_anchor_valid,
             normative_engine_qualified=normative_engine_qualified,
             malware_scanner_qualified=malware_scanner_qualified,
             document_processor_qualified=document_processor_qualified,
             export_signing_configured=export_signing_configured,
             notes=tuple(notes),
         )
+
+    @application.post(
+        "/v1/audit/checkpoints",
+        response_model=AuditCheckpointResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_audit_checkpoint(
+        payload: CreateAuditCheckpointRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> AuditCheckpointResponse:
+        with session.begin():
+            checkpoint = audit_integrity_service(session).create_checkpoint(
+                actor=actor,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return AuditCheckpointResponse.model_validate(checkpoint)
+
+    @application.post(
+        "/v1/audit/checkpoints/{checkpoint_id}/receipts",
+        response_model=AuditAnchorReceiptResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def register_audit_anchor_receipt(
+        checkpoint_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        payload: RegisterAuditAnchorReceiptRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> AuditAnchorReceiptResponse:
+        with session.begin():
+            receipt = audit_integrity_service(session).register_receipt(
+                actor=actor,
+                checkpoint_id=checkpoint_id,
+                anchored_at=payload.anchored_at,
+                external_reference=payload.external_reference,
+                signature_b64=payload.signature_b64,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return AuditAnchorReceiptResponse.model_validate(receipt)
+
+    @application.get(
+        "/v1/audit/anchor-status",
+        response_model=AuditAnchorStatusResponse,
+    )
+    def get_audit_anchor_status(
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> AuditAnchorStatusResponse:
+        integrity_service = audit_integrity_service(session)
+        integrity_service.require_operator(actor)
+        return AuditAnchorStatusResponse.model_validate(integrity_service.anchor_status())
 
     @application.post(
         "/v1/projects",
