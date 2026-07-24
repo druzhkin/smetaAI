@@ -89,6 +89,10 @@ Production deployment requires:
   reservation, business state, audit, universal outbox event, and saved
   response commit atomically; all audit events publish a unique downstream
   deduplication key;
+- typed logistics, mobilisation, and dated finance models bind formula values
+  to current-document observations, use controlled Decimal rounding, execute
+  independent capacity/day-by-day recalculation, require four-eyes approval,
+  and expose only immutable `DERIVED_MODEL` BoQ bases to the main calculation;
 - OIDC with MFA enforced by the identity provider;
 - governed project-owner recovery, periodic membership recertification, and
   monitored break-glass access; PostgreSQL RLS where an independent database

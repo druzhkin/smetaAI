@@ -58,6 +58,7 @@ class AtomicCostInput(DomainModel):
     approved_assumption_id: str | None = None
     normative_rate_id: str | None = None
     risk_reserve_id: str | None = None
+    derived_cost_model_id: str | None = None
 
     @model_validator(mode="after")
     def basis_reference_is_unambiguous(self) -> AtomicCostInput:
@@ -66,6 +67,7 @@ class AtomicCostInput(DomainModel):
             self.approved_assumption_id,
             self.normative_rate_id,
             self.risk_reserve_id,
+            self.derived_cost_model_id,
         ]
         if sum(value is not None for value in references) > 1:
             raise ValueError("A cost input may have only one direct basis reference")
@@ -80,6 +82,7 @@ class AtomicCostInput(DomainModel):
                 self.approved_assumption_id,
                 self.normative_rate_id,
                 self.risk_reserve_id,
+                self.derived_cost_model_id,
             )
         )
 

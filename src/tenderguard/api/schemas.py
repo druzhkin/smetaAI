@@ -29,6 +29,10 @@ from tenderguard.application.boq import (
     ScopeRunResult,
 )
 from tenderguard.application.calculations import CalculationExecutionResult
+from tenderguard.application.commercial_costs import (
+    CommercialCostModelView,
+    CommercialCostProposalResult,
+)
 from tenderguard.application.contracts import (
     ContractCostImpactCommand,
     ContractTermDraft,
@@ -73,6 +77,7 @@ from tenderguard.application.scenarios import (
 )
 from tenderguard.domain.approvals import ApprovalSubject
 from tenderguard.domain.calculation import AtomicCostInput, CalculationPolicy
+from tenderguard.domain.commercial_costs import CommercialCostModelInput
 from tenderguard.domain.enums import ActorRole, ApprovalState, ProjectAccessLevel
 from tenderguard.domain.models import ControlledVersion, GateDecision, Observation
 from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadView
@@ -356,6 +361,23 @@ class ContractTermValidationResponse(ApiModel):
 
 
 class ContractValidationResponse(ContractValidationResult):
+    pass
+
+
+class ProposeCommercialCostModelRequest(ApiModel):
+    model: CommercialCostModelInput
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class FinalizeCommercialCostModelRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class CommercialCostModelResponse(CommercialCostModelView):
+    pass
+
+
+class CommercialCostProposalResponse(CommercialCostProposalResult):
     pass
 
 

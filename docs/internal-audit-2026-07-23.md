@@ -22,8 +22,8 @@ Open product blockers:
 
 - no qualified OCR/visual, normative, market/RFQ, ERP/DMS/BI, or export
   connectors are supplied;
-- detailed logistics/mobilisation planning and contract cash-flow calculation
-  remain generic cost components rather than operational planning services;
+- production route/rate/treasury feeds and business qualification for the
+  implemented logistics/mobilisation/contract-finance services are absent;
 - no external export delivery adapter or approved public-key trust registry;
 - no representative historical qualification corpus, accuracy metrics, blind
   comparison, or parallel-operation evidence.
@@ -41,6 +41,10 @@ Resolved during the audit:
 - mutating APIs atomically persist their actor-scoped idempotency ledger,
   business writes, audit events, universal deduplicated outbox messages, and
   replay response; JSON/multipart retries and rollback are negatively tested;
+- typed logistics, mobilisation, and dated contract-finance models bind every
+  formula value to current-document observations, recalculate independently,
+  require four-eyes approval, become immutable PostgreSQL evidence, and feed
+  the main snapshot through a derived BoQ basis;
 - native export generation is idempotent and verification detects package,
   manifest, signature, source-snapshot, release-decision, and audit-chain
   divergence;

@@ -62,6 +62,13 @@ def test_mutations_use_atomic_persisted_idempotency_and_universal_outbox(
             if parameter["name"] == "Idempotency-Key"
         )
         assert idempotency_parameter["required"] is True
+        assert "/v1/projects/{project_id}/commercial-costs/models" in openapi["paths"]
+        assert any(
+            parameter["name"] == "Idempotency-Key" and parameter["required"] is True
+            for parameter in openapi["paths"]["/v1/projects/{project_id}/commercial-costs/models"][
+                "post"
+            ]["parameters"]
+        )
 
         missing = client.post(
             "/v1/projects",

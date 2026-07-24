@@ -28,6 +28,7 @@ from tenderguard.application.approvals import ApprovalService
 from tenderguard.application.audit_integrity import AuditIntegrityService
 from tenderguard.application.boq import BoqService
 from tenderguard.application.calculations import CalculationService
+from tenderguard.application.commercial_costs import CommercialCostService
 from tenderguard.application.contracts import ContractService
 from tenderguard.application.evidence import EvidenceService
 from tenderguard.application.exports import ExportIntegrityError, ExportPackageService
@@ -91,6 +92,8 @@ from .schemas import (
     CalculationExecutionRequest,
     CalculationExecutionResponse,
     CalibrationApprovalResponse,
+    CommercialCostModelResponse,
+    CommercialCostProposalResponse,
     CompareActualRequest,
     ConfirmDocumentSetRequest,
     ConflictResolutionResponse,
@@ -107,6 +110,7 @@ from .schemas import (
     ExportArtifactResponse,
     ExportVerificationResponse,
     FinalizeAnalogueRequest,
+    FinalizeCommercialCostModelRequest,
     FinalizeContractCostImpactRequest,
     GenerateExportRequest,
     GrantProjectMembershipRequest,
@@ -121,6 +125,7 @@ from .schemas import (
     PriceQuoteResponse,
     ProjectMembershipResponse,
     ProposeAnalogueRequest,
+    ProposeCommercialCostModelRequest,
     ProposeContractCostImpactRequest,
     QuantityExecutionResponse,
     QuarantinedUploadResponse,
@@ -310,6 +315,13 @@ def create_app(
 
     def contract_service(session: Session) -> ContractService:
         return ContractService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def commercial_cost_service(session: Session) -> CommercialCostService:
+        return CommercialCostService(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
@@ -1482,6 +1494,67 @@ def create_app(
                 reason=payload.reason,
             )
         return ContractValidationResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/commercial-costs/models",
+        response_model=CommercialCostProposalResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def propose_commercial_cost_model(
+        project_id: str,
+        payload: ProposeCommercialCostModelRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CommercialCostProposalResponse:
+        with mutation_transaction(session):
+            result = commercial_cost_service(session).propose(
+                actor=actor,
+                project_id=project_id,
+                model=payload.model,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return CommercialCostProposalResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/commercial-costs/models/{model_id}/finalize",
+        response_model=CommercialCostModelResponse,
+    )
+    def finalize_commercial_cost_model(
+        project_id: str,
+        model_id: str,
+        payload: FinalizeCommercialCostModelRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CommercialCostModelResponse:
+        with mutation_transaction(session):
+            result = commercial_cost_service(session).finalize(
+                actor=actor,
+                project_id=project_id,
+                model_id=model_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return CommercialCostModelResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/commercial-costs/models/{model_id}",
+        response_model=CommercialCostModelResponse,
+    )
+    def get_commercial_cost_model(
+        project_id: str,
+        model_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CommercialCostModelResponse:
+        result = commercial_cost_service(session).get(
+            actor=actor,
+            project_id=project_id,
+            model_id=model_id,
+        )
+        return CommercialCostModelResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/risks",

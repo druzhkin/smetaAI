@@ -10,7 +10,7 @@ and integration-tests a broad transactional enforcement core, including the
 governed BoQ, quantity, scope, nomenclature, pricing, contract, risk,
 calculation, independent validation, approval, release, lineage, actuals, and
 calibration workflows, plus signed estimate/audit export packages. External
-adapters, several detailed costing workflows, enterprise integrations, and
+adapters, production route/rate/treasury feeds, enterprise integrations, and
 all operational qualification evidence remain open.
 
 ## Defence in depth
@@ -25,6 +25,7 @@ all operational qualification evidence remain open.
 | Nomenclature | explicit critical attributes and match class | reject or expert review |
 | Normative | approved engine/basis/version/applicability | normative calculation unavailable |
 | Price | qualified source classes, normalized commercial basis, triangulation and spread review | `RFQ_REQUIRED` or expert review |
+| Logistics/finance | typed capacity/cash-flow models, exact observation-value binding, controlled completeness and dual recalculation | blocked model; no derived cost basis |
 | Calculation | exact planned-component coverage and deterministic primary build-up | no release on missing, duplicate, or unplanned components |
 | Independent validation | separate recalculation from atomic inputs | arithmetic mismatch hard stop |
 | Scenario | approved definitions over a fixed base snapshot plus independent recalculation | reject unknown or unsupported overrides |

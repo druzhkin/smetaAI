@@ -18,6 +18,7 @@ from tenderguard.infrastructure.orm import (
     ApprovalTaskRow,
     CalculationRunRow,
     CalculationSnapshotRow,
+    CommercialCostModelRow,
     CostInputRow,
     DocumentRevisionRow,
     DocumentRow,
@@ -241,6 +242,63 @@ class LineageService:
                     "currency": risk.currency,
                     "unit": risk.unit,
                 },
+            )
+        commercial = self.session.scalar(
+            select(CommercialCostModelRow).where(
+                CommercialCostModelRow.id == basis_id,
+                CommercialCostModelRow.project_id == project_id,
+            )
+        )
+        if commercial is not None:
+            raw_observation_ids = commercial.payload.get("observation_ids")
+            if not isinstance(raw_observation_ids, list) or not all(
+                isinstance(item, str) for item in raw_observation_ids
+            ):
+                raise RuntimeError("Commercial cost model observation lineage is invalid")
+            observations = tuple(
+                self.session.scalars(
+                    select(ObservationRow).where(
+                        ObservationRow.project_id == project_id,
+                        ObservationRow.id.in_(raw_observation_ids),
+                    )
+                )
+            )
+            if len(observations) != len(set(raw_observation_ids)):
+                raise RuntimeError("Commercial cost model observation lineage is incomplete")
+            source_nodes = tuple(
+                ObservationLineageNode(
+                    observation_id=item.id,
+                    status=item.status,
+                    payload=item.payload,
+                    document=self._document_lineage(
+                        project_id,
+                        item.document_revision_id,
+                    ),
+                    source_observations=self._source_observation_lineage(
+                        project_id,
+                        item,
+                        visited={item.id},
+                    ),
+                )
+                for item in sorted(observations, key=lambda value: value.id)
+            )
+            return EvidenceLineage(
+                basis_id=basis_id,
+                basis_type="DERIVED_COMMERCIAL_COST",
+                status=commercial.status,
+                payload={
+                    **commercial.payload,
+                    "model_kind": commercial.model_kind,
+                    "policy_version_id": commercial.policy_version_id,
+                    "document_set_revision_id": commercial.document_set_revision_id,
+                    "input_hash": commercial.input_hash,
+                    "output_hash": commercial.output_hash,
+                    "approval_task_ids": commercial.approval_task_ids,
+                    "approval_record_ids": commercial.approval_record_ids or [],
+                    "created_by": commercial.created_by,
+                    "finalized_by": commercial.finalized_by,
+                },
+                source_observations=source_nodes,
             )
         raise RuntimeError(f"Evidence basis does not resolve: {basis_id}")
 

@@ -132,6 +132,15 @@ The reviewer must state the reason and select an observation already present
 in the conflict. The resulting derived verified observation, review task, and
 approval record must remain in the audit chain.
 
+Before pricing can advance, create every `commercial_cost_model` kind required
+by the bound methodology. Do not enter a lump-sum percentage. Confirm that
+each transport/cargo/rate, mobilisation, cash-flow, funding-rate, and guarantee
+value is reproduced by the `commercial_cost_bases` map of its verified current
+observation. A different reviewer must approve the generated task before
+finalization. If a document set, policy, BoQ target, contract term, or evidence
+value changes, create and approve a new model revision; never edit a validated
+row. The full operating contract is in `docs/commercial-cost-models.md`.
+
 Actuals may be entered only after an internal/bid approval or project closure.
 The factual observation must be verified, the variance must be classified
 against a fixed snapshot input, and a different methodology owner must approve

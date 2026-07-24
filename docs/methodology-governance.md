@@ -12,6 +12,9 @@ The methodology owner must version and approve:
 - critical nomenclature attributes and equivalence rules;
 - approved normative bases, methods, regions, periods, and coefficients;
 - price commercial basis, triangulation, expiry, reliability, and RFQ rules;
+- required logistics/mobilisation/finance model kinds and components,
+  commercial-model rounding, day-count convention, zero-cost policy, and
+  required contract-term/cash-flow coverage;
 - approval triggers and all monetary/share thresholds;
 - risk method, correlations, reserve treatment, and scenario definitions;
 - calculation rounding/tax/currency policy and independent tolerance;
@@ -25,7 +28,8 @@ stage gates or calculation lineage:
 - `nomenclature_catalog`, `equivalence_rules`, `price_policy`, and
   `approval_thresholds`;
 - `contract_risk_rules`, `risk_model`, `calculation_policy`,
-  `scenario_policy`, `export_template`, and `production_qualification`;
+  `commercial_cost_model`, `scenario_policy`, `export_template`, and
+  `production_qualification`;
 - a qualified normative adapter version plus a validated project-specific
   normative result whenever a normative component is used.
 

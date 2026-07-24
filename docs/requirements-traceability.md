@@ -23,8 +23,8 @@ Status values:
 | 6-8 BoQ, completeness, nomenclature | BoQ, scope, nomenclature | BoQ/quantity revisions, exact cost-component plan, scope attestations, deterministic attribute matching and governed analogues (`APPLICATION_CORE`) |
 | 9-10 norms and normative cost | normative adapter | result validation (`DOMAIN_CORE`); licensed engine (`PORT`, `QUALIFICATION`) |
 | 11-13 procurement, market, resources | pricing, calculation | governed normalization, evidence classes, triangulation, price decisions, RFQ and exact atomic-input binding (`APPLICATION_CORE`); live sources/supplier exchange (`PORT`) |
-| 14 logistics and mobilisation | calculation | explicit cost categories and exact component/evidence coverage (`APPLICATION_CORE`); detailed routing, mobilisation schedule and operational model remain open |
-| 15 contract and finance | contract, calculation | revisioned terms, independent critical evidence, completeness findings and four-eyes cost impacts (`APPLICATION_CORE`); detailed cash-flow/guarantee model remains open |
+| 14 logistics and mobilisation | calculation | governed capacity-constrained transport, handling, storage, ancillary and mobilisation models; canonical observation-value binding; controlled completeness/rounding; independent calculation; four-eyes; immutable derived BoQ input and lineage (`APPLICATION_CORE`); route/rate feeds and qualification (`PORT`, `QUALIFICATION`) |
+| 15 contract and finance | contract, calculation | versioned evidence-bound required terms plus dated cash-flow, piecewise funding-rate, guarantee-fee and day-count model; independent daily recalculation; four-eyes derived cost impact and snapshot lineage (`APPLICATION_CORE`); treasury/indexation/FX feeds and qualification (`PORT`, `QUALIFICATION`) |
 | 16-18 risk, bid price, scenarios | risk, calculation, scenario | verified risk register, model-bound reserve and reserve-to-BoQ binding (`APPLICATION_CORE`); base bid calculation (`APPLICATION_SLICE`); approved-policy scenarios over fixed snapshots with independent recalculation (`APPLICATION_CORE`) |
 | 19 independent verification | validation | separate recalculation, mismatch and snapshot controls (`APPLICATION_SLICE`) |
 | 20 expert approval | workflow | version-bound task planning, evidence-required decisions and four-eyes checks (`APPLICATION_SLICE`); organisation policy qualification remains open |
@@ -46,7 +46,7 @@ negative paths through these workflows.
 
 This does not make every contour operationally qualified. OCR/visual
 extraction, the recognised normative engine, live price/RFQ sources,
-enterprise integrations, detailed logistics/finance workflows,
+enterprise integrations, production logistics/finance feeds and qualification,
 deployed/qualified sandboxing, operational IdP/access-governance procedures,
 and production operations remain open. Versioned project ACLs and
 action-specific object authorisation are application/database controls;

@@ -19,6 +19,7 @@ class ContractTerm(DomainModel):
     cost_impact_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     cost_input_id: str | None = None
     approved_assumption_id: str | None = None
+    derived_cost_model_id: str | None = None
 
 
 class ContractAssessment(DomainModel):
@@ -52,7 +53,7 @@ def validate_contract(assessment: ContractAssessment) -> tuple[ValidationFinding
                 )
             )
         if term.cost_impact_amount is not None and not (
-            term.cost_input_id or term.approved_assumption_id
+            term.cost_input_id or term.approved_assumption_id or term.derived_cost_model_id
         ):
             findings.append(
                 ValidationFinding(

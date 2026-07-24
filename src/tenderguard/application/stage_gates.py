@@ -13,6 +13,7 @@ from tenderguard.domain.enums import (
 from tenderguard.infrastructure.orm import (
     ApprovalTaskRow,
     BoqLineRow,
+    CommercialCostModelRow,
     ContractTermRow,
     ControlledVersionRow,
     NomenclatureMatchRow,
@@ -20,6 +21,7 @@ from tenderguard.infrastructure.orm import (
     PriceDecisionRow,
     ProjectControlledVersionRow,
     ProjectPassportFactRow,
+    ProjectRow,
     QuantityRow,
     RiskCalculationRow,
     RiskItemRow,
@@ -251,14 +253,19 @@ def pricing_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]
             )
             .where(
                 ProjectControlledVersionRow.project_id == project_id,
-                ProjectControlledVersionRow.purpose.in_(("catalog", "price_policy")),
+                ProjectControlledVersionRow.purpose.in_(
+                    ("catalog", "price_policy", "commercial_cost_model")
+                ),
                 ControlledVersionRow.status == VersionStatus.APPROVED.value,
-                ControlledVersionRow.kind.in_(("catalog", "price_policy")),
+                ControlledVersionRow.kind.in_(("catalog", "price_policy", "commercial_cost_model")),
             )
         )
     }
     catalog = bound_versions.get("catalog")
     price_policy = bound_versions.get("price_policy")
+    commercial_policy = bound_versions.get("commercial_cost_model")
+    project = session.get(ProjectRow, project_id)
+    current_document_set = project.current_document_set_revision_id if project is not None else None
     lines = list(
         session.scalars(
             select(BoqLineRow).where(
@@ -326,6 +333,32 @@ def pricing_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]
             RiskCalculationRow.status == "VALIDATED",
         )
     )
+    all_commercial_models = list(
+        session.scalars(
+            select(CommercialCostModelRow)
+            .where(CommercialCostModelRow.project_id == project_id)
+            .order_by(CommercialCostModelRow.created_at, CommercialCostModelRow.id)
+        )
+    )
+    commercial_models = {
+        (row.target_line_id, row.target_semantic_key): row
+        for row in all_commercial_models
+        if row.status == "VALIDATED" and row.is_current
+    }
+    latest_commercial_models = {
+        (row.target_line_id, row.target_semantic_key): row for row in all_commercial_models
+    }
+    current_component_keys = {
+        (line.id, component.get("semantic_key"))
+        for line, component in components
+        if isinstance(component.get("semantic_key"), str)
+    }
+    blockers.extend(
+        f"commercial-cost-model:{line_id}:{semantic_key}:latest-unresolved"
+        for (line_id, semantic_key), row in latest_commercial_models.items()
+        if (line_id, semantic_key) in current_component_keys
+        and (row.status != "VALIDATED" or not row.is_current)
+    )
     for line, component in components:
         semantic_key = component.get("semantic_key")
         basis_kind = component.get("basis_kind")
@@ -371,6 +404,16 @@ def pricing_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]
                 or reference.get("semantic_key") != semantic_key
             ):
                 blockers.append(f"risk-reserve:{line.id}:{semantic_key}")
+        elif basis_kind == CostBasisKind.DERIVED_MODEL.value:
+            model = commercial_models.get((line.id, semantic_key))
+            if (
+                model is None
+                or commercial_policy is None
+                or model.policy_version_id != commercial_policy.id
+                or model.document_set_revision_id != current_document_set
+                or model.category != component.get("category")
+            ):
+                blockers.append(f"commercial-cost-model:{line.id}:{semantic_key}")
         else:
             blockers.append(f"cost-components:{line.id}:{semantic_key}:basis-invalid")
     if not lines:
@@ -379,6 +422,26 @@ def pricing_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]
         blockers.append("catalog:missing")
     if price_policy is None:
         blockers.append("price-policy:missing")
+    if commercial_policy is not None:
+        policy_payload = commercial_policy.payload.get("policy")
+        required_model_kinds = (
+            policy_payload.get("required_model_kinds") if isinstance(policy_payload, dict) else None
+        )
+        if not isinstance(required_model_kinds, list) or not all(
+            isinstance(item, str) for item in required_model_kinds
+        ):
+            blockers.append(f"commercial-cost-policy:{commercial_policy.id}:invalid")
+        else:
+            current_model_kinds = {
+                row.model_kind
+                for row in commercial_models.values()
+                if row.policy_version_id == commercial_policy.id
+                and row.document_set_revision_id == current_document_set
+            }
+            blockers.extend(
+                f"commercial-cost-model:{kind}"
+                for kind in sorted(set(required_model_kinds) - current_model_kinds)
+            )
     return tuple(sorted(set(blockers)))
 
 

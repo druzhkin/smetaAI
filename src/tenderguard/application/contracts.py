@@ -37,6 +37,7 @@ from tenderguard.infrastructure.orm import (
     ApprovalRecordRow,
     ApprovalTaskRow,
     BoqLineRow,
+    CommercialCostModelRow,
     ContractTermRow,
     ControlledVersionRow,
     ObservationRow,
@@ -56,6 +57,7 @@ class ContractCostImpactCommand(DomainModel):
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     cost_component_line_id: str | None = None
     cost_component_semantic_key: str | None = None
+    derived_cost_model_id: str | None = None
     no_cost_reason: str | None = None
 
     @model_validator(mode="after")
@@ -63,13 +65,21 @@ class ContractCostImpactCommand(DomainModel):
         if self.amount == 0:
             if not self.no_cost_reason:
                 raise ValueError("Zero contract cost impact requires an explicit reason")
-            if self.cost_component_line_id or self.cost_component_semantic_key:
+            if (
+                self.cost_component_line_id
+                or self.cost_component_semantic_key
+                or self.derived_cost_model_id
+            ):
                 raise ValueError("Zero contract cost impact cannot reference a cost component")
         elif not (
-            self.currency and self.cost_component_line_id and self.cost_component_semantic_key
+            self.currency
+            and self.cost_component_line_id
+            and self.cost_component_semantic_key
+            and self.derived_cost_model_id
         ):
             raise ValueError(
-                "Non-zero contract impact requires currency and a planned cost component"
+                "Non-zero contract impact requires currency, a planned component, "
+                "and a validated derived cost model"
             )
         return self
 
@@ -258,7 +268,11 @@ class ContractService:
         if not source.verified:
             raise ValueError("Contract cost impact requires a verified term")
         if command.amount > 0:
-            self._validate_contract_cost_component(project.id, command)
+            self._validate_contract_cost_component(
+                project.id,
+                project.current_document_set_revision_id,
+                command,
+            )
         now = utc_now()
         source.is_current = False
         source.updated_at = now
@@ -343,6 +357,13 @@ class ContractService:
         proposal = row.payload.get("cost_impact_proposal")
         if not isinstance(proposal, dict):
             raise ValueError("Contract term has no cost impact proposal")
+        command = ContractCostImpactCommand.model_validate(proposal)
+        if command.amount > 0:
+            self._validate_contract_cost_component(
+                project.id,
+                project.current_document_set_revision_id,
+                command,
+            )
         task_ids = tuple(row.payload.get("approval_task_ids", []))
         if not task_ids:
             raise ValueError("Contract cost impact has no approval task")
@@ -524,8 +545,26 @@ class ContractService:
     def _validate_contract_cost_component(
         self,
         project_id: str,
+        document_set_revision_id: str | None,
         command: ContractCostImpactCommand,
     ) -> None:
+        commercial_policy_id = self.session.scalar(
+            select(ControlledVersionRow.id)
+            .join(
+                ProjectControlledVersionRow,
+                ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
+            )
+            .where(
+                ProjectControlledVersionRow.project_id == project_id,
+                ProjectControlledVersionRow.purpose == "commercial_cost_model",
+                ControlledVersionRow.kind == "commercial_cost_model",
+                ControlledVersionRow.status == VersionStatus.APPROVED.value,
+            )
+        )
+        if document_set_revision_id is None or commercial_policy_id is None:
+            raise ValueError(
+                "Contract impact requires a current document set and commercial cost policy"
+            )
         line = self.session.scalar(
             select(BoqLineRow).where(
                 BoqLineRow.id == command.cost_component_line_id,
@@ -551,8 +590,26 @@ class ContractService:
         if (
             not isinstance(match, dict)
             or match.get("category") != CostCategory.CONTRACT_FINANCE.value
+            or match.get("basis_kind") != "DERIVED_MODEL"
         ):
-            raise ValueError("Contract impact must reference a CONTRACT_FINANCE component")
+            raise ValueError("Contract impact must reference a derived CONTRACT_FINANCE component")
+        model = self.session.scalar(
+            select(CommercialCostModelRow).where(
+                CommercialCostModelRow.id == command.derived_cost_model_id,
+                CommercialCostModelRow.project_id == project_id,
+                CommercialCostModelRow.status == "VALIDATED",
+                CommercialCostModelRow.is_current.is_(True),
+                CommercialCostModelRow.model_kind == "CONTRACT_FINANCE",
+                CommercialCostModelRow.target_line_id == command.cost_component_line_id,
+                CommercialCostModelRow.target_semantic_key == command.cost_component_semantic_key,
+                CommercialCostModelRow.document_set_revision_id == document_set_revision_id,
+                CommercialCostModelRow.policy_version_id == commercial_policy_id,
+                CommercialCostModelRow.total == command.amount,
+                CommercialCostModelRow.currency == command.currency,
+            )
+        )
+        if model is None:
+            raise ValueError("Contract impact does not reproduce a current validated finance model")
 
     def _current_term(self, project_id: str, term_id: str) -> ContractTermRow:
         row = self.session.scalar(
@@ -704,6 +761,7 @@ class ContractService:
             cost_impact_currency=impact_payload.get("currency"),
             cost_input_id=cost_input_id,
             approved_assumption_id=row.payload.get("cost_impact_approval_id"),
+            derived_cost_model_id=impact_payload.get("derived_cost_model_id"),
         )
 
     @staticmethod

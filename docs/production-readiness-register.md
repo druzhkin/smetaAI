@@ -5,7 +5,7 @@ release even when repository tests pass.
 
 | Gate | Current evidence | Status | Required owner/evidence |
 |---|---|---|---|
-| Full end-to-end controlled calculation | intake through passport, BoQ/quantity, scope, nomenclature/pricing/RFQ, contract, risk, calculation, controlled scenario execution, independent snapshot/release, signed audit export, actual comparison and calibration approval are application-connected; qualified external extraction/normative/market adapters, detailed logistics/finance, scenario business qualification, and external delivery remain open | **PARTIAL** |
+| Full end-to-end controlled calculation | intake through passport, BoQ/quantity, scope, nomenclature/pricing/RFQ, typed logistics/mobilisation/contract finance, contract, risk, calculation, controlled scenario execution, independent snapshot/release, signed audit export, actual comparison and calibration approval are application-connected; qualified external extraction/normative/market/route/treasury adapters, scenario business qualification, and external delivery remain open | **PARTIAL** |
 | Reproducibility | canonical Decimal inputs, version binding, content hashes, immutable snapshot | CORE IMPLEMENTED |
 | Independent machine validation | separate recalculation path and mismatch/double-count tests | CORE IMPLEMENTED |
 | Expert/four-eyes controls | version-bound tasks cover critical changes, analogues, price spread, contract impacts, reserves and calibration; organisation policy qualification absent | **PARTIAL** |
@@ -19,8 +19,8 @@ release even when repository tests pass.
 | Market/RFQ connectors | interfaces exist; credentials/source agreements not supplied | **OPEN** |
 | OCR + independent visual extraction | interfaces/reconciliation exist; qualified providers absent | **OPEN** |
 | ERP/DMS/BI integrations | target ports/schema exist; endpoints and credentials absent | **OPEN** |
-| Detailed logistics/mobilisation | generic governed cost components exist; routing, mobilisation schedule, site constraints and operational estimation service are not implemented | **OPEN** |
-| Detailed contract finance | governed terms and cost impacts exist; cash-flow, retention, guarantee, credit and indexation calculation service is not implemented | **OPEN** |
+| Detailed logistics/mobilisation | typed capacity-constrained transport, handling, storage, ancillary and mobilisation models; exact observation-value binding; controlled completeness/rounding; independent recalculation; mandatory four-eyes; immutable PostgreSQL revisions; BoQ/calculation/lineage integration are implemented and tested; real route/rate feeds and business qualification are absent | **PARTIAL** |
+| Detailed contract finance | dated signed cash flows, piecewise funding rates, guarantee fees, day-count policy, independent day-by-day recalculation, required contract-term lineage, derived contract-impact and snapshot integration are implemented and tested; treasury feeds, indexation/FX policy data and business qualification are absent | **PARTIAL** |
 | Operational scenario modelling | approved-policy scenarios execute from fixed snapshots, persist results, and independently recalculate; portfolio comparison UI and business qualification remain absent | **PARTIAL** |
 | Export packages | released fixed snapshots produce deterministic content-addressed Ed25519-signed JSON packages with lineage, versions, approvals, workflow, release decision and verified audit chain; external delivery adapters, approved public-key distribution/trust registry and business qualification are absent | **PARTIAL** |
 | Mutation reliability/outbox | all mutating APIs can atomically persist actor-scoped idempotency, business writes, audit, universal deduplicated outbox and replay response; JSON and multipart retries, rollback and PostgreSQL concurrency/immutability are tested; production connector dispatchers/inboxes, scheduler and operational drills remain absent | **PARTIAL** |

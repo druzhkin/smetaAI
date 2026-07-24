@@ -891,6 +891,83 @@ class ContractTermRow(Base, TimestampMixin):
     )
 
 
+class CommercialCostModelRow(Base):
+    __tablename__ = "commercial_cost_models"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    model_kind: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    target_line_id: Mapped[str] = mapped_column(
+        ForeignKey("boq_lines.id"),
+        nullable=False,
+    )
+    target_semantic_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str] = mapped_column(String(80), nullable=False)
+    policy_version_id: Mapped[str] = mapped_column(
+        ForeignKey("controlled_versions.id"),
+        nullable=False,
+    )
+    document_set_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("document_set_revisions.id"),
+        nullable=False,
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    total: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    independent_total: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    approval_task_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    approval_record_ids: Mapped[list[str] | None] = mapped_column(JSON(none_as_null=True))
+    supersedes_model_id: Mapped[str | None] = mapped_column(ForeignKey("commercial_cost_models.id"))
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    finalized_by: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "model_kind IN ('LOGISTICS', 'MOBILISATION', 'CONTRACT_FINANCE')",
+            name="ck_commercial_cost_model_kind",
+        ),
+        CheckConstraint(
+            "status IN ('BLOCKED', 'REVIEW_REQUIRED', 'VALIDATED')",
+            name="ck_commercial_cost_model_status",
+        ),
+        CheckConstraint(
+            "total >= 0 AND independent_total >= 0",
+            name="ck_commercial_cost_model_totals",
+        ),
+        CheckConstraint(
+            "("
+            "status = 'VALIDATED' AND finalized_by IS NOT NULL "
+            "AND finalized_at IS NOT NULL AND approval_record_ids IS NOT NULL"
+            ") OR ("
+            "status <> 'VALIDATED' AND finalized_by IS NULL "
+            "AND finalized_at IS NULL AND approval_record_ids IS NULL "
+            "AND is_current = false"
+            ")",
+            name="ck_commercial_cost_model_finalization",
+        ),
+        Index(
+            "uq_commercial_cost_model_current_target",
+            "project_id",
+            "target_line_id",
+            "target_semantic_key",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+            postgresql_where=text("is_current"),
+        ),
+        Index(
+            "ix_commercial_cost_model_project_kind",
+            "project_id",
+            "model_kind",
+        ),
+    )
+
+
 class RiskItemRow(Base, TimestampMixin):
     __tablename__ = "risk_items"
 

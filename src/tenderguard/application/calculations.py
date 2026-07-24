@@ -43,6 +43,7 @@ from tenderguard.infrastructure.orm import (
     BoqLineRow,
     CalculationRunRow,
     CalculationSnapshotRow,
+    CommercialCostModelRow,
     ControlledVersionRow,
     CostInputRow,
     NormativeCalculationRow,
@@ -134,7 +135,12 @@ class CalculationService:
             raise ValueError("An approved calculation_model version must be bound")
         if policy.policy_version != calculation_model.version_id:
             raise ValueError("Calculation policy does not match the bound controlled version")
-        self._validate_input_lineage(project.id, inputs, version_rows)
+        self._validate_input_lineage(
+            project.id,
+            project.current_document_set_revision_id,
+            inputs,
+            version_rows,
+        )
         canonical_inputs = tuple(sorted(inputs, key=lambda item: item.cost_input_id))
         canonical_versions = tuple(sorted(versions, key=lambda item: (item.kind, item.version_id)))
 
@@ -224,6 +230,7 @@ class CalculationService:
                 or item.approved_assumption_id
                 or item.normative_rate_id
                 or item.risk_reserve_id
+                or item.derived_cost_model_id
             )
             self.session.add(
                 CostInputRow(
@@ -290,6 +297,7 @@ class CalculationService:
     def _validate_input_lineage(
         self,
         project_id: str,
+        document_set_revision_id: str,
         inputs: tuple[AtomicCostInput, ...],
         version_rows: list[ControlledVersionRow],
     ) -> None:
@@ -373,6 +381,13 @@ class CalculationService:
             if basis_kind == CostBasisKind.RISK_MODEL.value and item.risk_reserve_id is None:
                 raise ValueError(
                     f"Risk cost component {item.cost_input_id} requires a risk calculation"
+                )
+            if (
+                basis_kind == CostBasisKind.DERIVED_MODEL.value
+                and item.derived_cost_model_id is None
+            ):
+                raise ValueError(
+                    f"Derived cost component {item.cost_input_id} requires a validated model"
                 )
             if item.source_observation_id:
                 observation = self.session.scalar(
@@ -471,6 +486,36 @@ class CalculationService:
                     item,
                     risk.payload,
                     expected_basis_type="RISK_RESERVE",
+                )
+            elif item.derived_cost_model_id:
+                commercial = self.session.scalar(
+                    select(CommercialCostModelRow).where(
+                        CommercialCostModelRow.id == item.derived_cost_model_id,
+                        CommercialCostModelRow.project_id == project_id,
+                        CommercialCostModelRow.status == "VALIDATED",
+                        CommercialCostModelRow.is_current.is_(True),
+                        CommercialCostModelRow.target_line_id == item.line_id,
+                        CommercialCostModelRow.target_semantic_key == item.semantic_key,
+                        CommercialCostModelRow.category == item.category.value,
+                        CommercialCostModelRow.document_set_revision_id == document_set_revision_id,
+                    )
+                )
+                commercial_policy = (
+                    versions.get(commercial.policy_version_id) if commercial is not None else None
+                )
+                if (
+                    commercial is None
+                    or commercial_policy is None
+                    or commercial_policy.kind != "commercial_cost_model"
+                ):
+                    raise ValueError(
+                        f"Cost input {item.cost_input_id} references no current, "
+                        "document-aligned, policy-bound commercial cost model"
+                    )
+                self._match_rate_basis(
+                    item,
+                    commercial.payload,
+                    expected_basis_type="DERIVED_COMMERCIAL_COST",
                 )
             else:
                 raise ValueError(f"Cost input {item.cost_input_id} has no evidence basis")

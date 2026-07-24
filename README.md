@@ -45,7 +45,8 @@ does not install PDF, Excel, or image parser libraries; only the worker target
 does.
 
 See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
-[requirements traceability](docs/requirements-traceability.md), and the
+[requirements traceability](docs/requirements-traceability.md),
+[governed commercial cost models](docs/commercial-cost-models.md), and the
 [signed export package specification](docs/signed-export-package.md).
 
 ## Implemented application core
@@ -68,6 +69,9 @@ The repository currently connects and integration-tests:
 - deterministic critical-attribute nomenclature matching, governed analogues,
   quote normalization, source triangulation, price decisions, and RFQ state;
 - revisioned contract terms and approved contract-cost impacts;
+- governed capacity-based logistics, component-based mobilisation, and dated
+  contract-finance models with exact observation-value binding, independent
+  recalculation, mandatory four-eyes approval, and derived BoQ inputs;
 - revisioned risks, a version-bound deterministic reserve calculation, and
   binding of the reserve to an explicit BoQ cost component;
 - deterministic primary calculation from atomic inputs, a separate
@@ -122,12 +126,13 @@ an approved external audit-anchor provider and verified WORM policy, enterprise
 integrations, historical validation set, operating procedures,
 backup/disaster-recovery evidence, trained users, and named process owners.
 
-Detailed logistics/mobilisation planning, contract cash-flow modelling,
-external export delivery/connectors, and a complete operator read/search UI
-remain to be completed. External verification also requires an approved
-out-of-band signing-key registry. A successful local test run cannot
-substitute for the required historical, blind-comparison, parallel-operation,
-security, load, and recovery evidence.
+Production route/rate/treasury feeds and qualification for the implemented
+logistics/mobilisation/contract-finance models, external export
+delivery/connectors, and a complete operator read/search UI remain to be
+completed. External verification also requires an approved out-of-band
+signing-key registry. A successful local test run cannot substitute for the
+required historical, blind-comparison, parallel-operation, security, load,
+and recovery evidence.
 
 The current gate-by-gate status is maintained in the
 [production readiness register](docs/production-readiness-register.md).
