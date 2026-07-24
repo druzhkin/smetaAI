@@ -61,6 +61,7 @@ class ProjectMembershipRow(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
     principal_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     roles: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    role_mask: Mapped[int] = mapped_column(Integer, nullable=False)
     access_level: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -81,6 +82,10 @@ class ProjectMembershipRow(Base):
             "status IN ('ACTIVE', 'REVOKED')",
             name="ck_project_membership_status",
         ),
+        CheckConstraint(
+            "role_mask > 0 AND role_mask <= 511",
+            name="ck_project_membership_role_mask",
+        ),
         UniqueConstraint(
             "project_id",
             "principal_id",
@@ -95,6 +100,12 @@ class ProjectMembershipRow(Base):
             "ix_project_membership_current_lookup",
             "project_id",
             "principal_id",
+            "version",
+        ),
+        Index(
+            "ix_project_membership_principal_current",
+            "principal_id",
+            "project_id",
             "version",
         ),
     )

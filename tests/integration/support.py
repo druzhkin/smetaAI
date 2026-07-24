@@ -4,6 +4,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from tenderguard.domain.access import project_role_mask
 from tenderguard.domain.common import content_hash, ensure_utc
 from tenderguard.domain.enums import ActorRole, ProjectAccessLevel, ProjectMembershipStatus
 from tenderguard.infrastructure.auth import Actor
@@ -36,6 +37,7 @@ def project_memberships(
             project_id=project_id,
             principal_id=principal_id,
             roles=sorted(role.value for role in roles),
+            role_mask=project_role_mask(roles),
             access_level=(
                 ProjectAccessLevel.OWNER.value
                 if principal_id == owner_id

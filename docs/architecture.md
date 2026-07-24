@@ -126,7 +126,10 @@ Production deployment requires:
 - Money uses `Decimal`; floating point is forbidden.
 - Organisation tenancy never implies project access. Human access requires the
   latest active membership revision and the exact project role accepted by the
-  action. Revocation is a new revision; prior membership evidence is immutable.
+  action. The immutable JSON role set must reproduce its relational bit mask;
+  PostgreSQL rejects divergent revisions. Portfolio and work-queue queries join
+  the latest membership and apply the exact project role before pagination.
+  Revocation is a new revision; prior membership evidence is immutable.
 - `SYSTEM` is never a project membership role. Machine access requires an
   explicit capability, active organisation-scoped adapter qualification, and
   an exact bound service identity; a service token cannot use generic project

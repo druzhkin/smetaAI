@@ -46,6 +46,9 @@ membership, an `ADMIN` role, or possession of a project identifier does not
 confer project access. Retain at least two governed project owners where the
 operational policy requires owner recovery; the application blocks removal of
 the last recorded owner but cannot repair an IdP-disabled sole owner.
+Membership migrations validate and backfill the relational role mask from the
+immutable JSON role set. Invalid, duplicate, unknown, or `SYSTEM` role evidence
+blocks migration; do not bypass the stop with a hand-written mask.
 
 ## Runtime health probes
 

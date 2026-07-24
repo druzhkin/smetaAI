@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Select, select
+from sqlalchemy import Select, and_, func, select
 from sqlalchemy.orm import Session
 
 from tenderguard.application.snapshot_integrity import read_verified_snapshot
@@ -22,6 +22,7 @@ from tenderguard.application.stage_gates import (
     scope_stage_blockers,
 )
 from tenderguard.config import Settings
+from tenderguard.domain.access import project_role_mask, validate_project_role_evidence
 from tenderguard.domain.audit import AuditEvent, append_event
 from tenderguard.domain.common import canonical_data, content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import (
@@ -1729,20 +1730,29 @@ class ProjectService:
         )
 
     def _current_memberships(self, project_id: str) -> tuple[ProjectMembershipRow, ...]:
-        rows = list(
+        latest_versions = (
+            select(
+                ProjectMembershipRow.principal_id.label("principal_id"),
+                func.max(ProjectMembershipRow.version).label("version"),
+            )
+            .where(ProjectMembershipRow.project_id == project_id)
+            .group_by(ProjectMembershipRow.principal_id)
+            .subquery()
+        )
+        return tuple(
             self.session.scalars(
                 select(ProjectMembershipRow)
-                .where(ProjectMembershipRow.project_id == project_id)
-                .order_by(
-                    ProjectMembershipRow.principal_id,
-                    ProjectMembershipRow.version.desc(),
+                .join(
+                    latest_versions,
+                    and_(
+                        latest_versions.c.principal_id == ProjectMembershipRow.principal_id,
+                        latest_versions.c.version == ProjectMembershipRow.version,
+                    ),
                 )
+                .where(ProjectMembershipRow.project_id == project_id)
+                .order_by(ProjectMembershipRow.principal_id)
             )
         )
-        current: dict[str, ProjectMembershipRow] = {}
-        for row in rows:
-            current.setdefault(row.principal_id, row)
-        return tuple(current.values())
 
     def _append_membership(
         self,
@@ -1757,11 +1767,13 @@ class ProjectService:
         previous: ProjectMembershipRow | None,
         now: datetime,
     ) -> ProjectMembershipRow:
+        normalized_roles = tuple(roles)
         row = ProjectMembershipRow(
             id=f"membership-{uuid4()}",
             project_id=project.id,
             principal_id=principal_id,
-            roles=sorted(role.value for role in roles),
+            roles=sorted(role.value for role in normalized_roles),
+            role_mask=project_role_mask(normalized_roles),
             access_level=access_level.value,
             status=status_value.value,
             version=1 if previous is None else previous.version + 1,
@@ -1868,15 +1880,10 @@ class ProjectService:
 
     @staticmethod
     def _membership_roles(row: ProjectMembershipRow) -> frozenset[ActorRole]:
-        roles: set[ActorRole] = set()
-        for value in row.roles:
-            try:
-                role = ActorRole(value)
-            except ValueError:
-                continue
-            if role is not ActorRole.SYSTEM:
-                roles.add(role)
-        return frozenset(roles)
+        try:
+            return validate_project_role_evidence(row.roles, row.role_mask)
+        except ValueError as error:
+            raise RuntimeError("Project membership role evidence is invalid") from error
 
     @staticmethod
     def _membership_view(row: ProjectMembershipRow) -> ProjectMembershipView:

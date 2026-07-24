@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -699,5 +699,96 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
         assert decided_task.json()["decision_blockers"] == ["TASK_NOT_PENDING"]
         assert decided_task.json()["decisions"][0]["decision"] == "APPROVED"
         assert decided_task.json()["decisions"][0]["evidence_ids"] == ["observation-workbench"]
+
+    engine.dispose()
+
+
+def test_work_item_pagination_filters_project_roles_before_limit(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        local_object_store_path=tmp_path / "objects",
+        allow_insecure_dev_auth=True,
+        audit_signing_key="workbench-pagination-audit-key-at-least-32-bytes",
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    )
+    owner = _headers("pagination-owner", "ESTIMATOR", "REVIEWER")
+
+    with TestClient(app) as client:
+        project_id = _create_project(
+            client,
+            headers=owner,
+            code="WB-PAGINATION",
+        )
+        narrowed = client.post(
+            f"/v1/projects/{project_id}/members",
+            headers=owner,
+            json={
+                "principal_id": "pagination-owner",
+                "roles": ["ESTIMATOR"],
+                "access_level": "OWNER",
+                "reason": "Limit project duty to estimating while retaining identity roles",
+            },
+        )
+        assert narrowed.status_code == 200, narrowed.text
+
+        now = datetime.now(UTC)
+        with create_session_factory(engine).begin() as session:
+            session.add_all(
+                [
+                    ApprovalTaskRow(
+                        id=f"approval-task-ineligible-{index}",
+                        project_id=project_id,
+                        task_type="REVIEW_ONLY",
+                        entity_type="boq_line",
+                        entity_id=f"line-ineligible-{index}",
+                        assigned_role="REVIEWER",
+                        status="PENDING",
+                        required=True,
+                        payload={"created_by": "another-user"},
+                        created_at=now + timedelta(minutes=10 + index),
+                        updated_at=now + timedelta(minutes=10 + index),
+                    )
+                    for index in range(5)
+                ]
+            )
+            session.add(
+                ApprovalTaskRow(
+                    id="approval-task-eligible-after-role-filter",
+                    project_id=project_id,
+                    task_type="ESTIMATOR_REVIEW",
+                    entity_type="boq_line",
+                    entity_id="line-eligible",
+                    assigned_role="ESTIMATOR",
+                    status="PENDING",
+                    required=True,
+                    payload={"created_by": "another-user"},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        work_items = client.get(
+            "/v1/work-items",
+            headers=owner,
+            params={"limit": 1},
+        )
+        assert work_items.status_code == 200, work_items.text
+        assert [item["task_id"] for item in work_items.json()["items"]] == [
+            "approval-task-eligible-after-role-filter"
+        ]
+        assert work_items.json()["next_cursor"] is None
+
+        portfolio = client.get("/v1/projects", headers=owner)
+        assert portfolio.status_code == 200, portfolio.text
+        assert portfolio.json()["items"][0]["access"]["roles"] == ["ESTIMATOR"]
 
     engine.dispose()

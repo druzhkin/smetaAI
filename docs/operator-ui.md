@@ -97,6 +97,12 @@ project existence disclosure. Membership revocation takes effect at the API
 boundary even if a browser still holds previously rendered data; responses use
 `Cache-Control: no-store`.
 
+Portfolio and work-queue pagination is authorization-aware in SQL. The latest
+membership revision, active status, actor identity role and exact task role are
+filtered before `LIMIT`; the service does not fetch an arbitrary oversampled
+page and discard unauthorized rows afterward. A stored membership role mask is
+checked against the immutable role evidence before returned rows are rendered.
+
 ## Navigation and rendering safety
 
 The client router accepts only same-origin absolute paths. Scheme-relative

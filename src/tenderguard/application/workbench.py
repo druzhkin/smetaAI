@@ -17,6 +17,11 @@ from tenderguard.application.projects import (
     ProjectView,
 )
 from tenderguard.config import Settings
+from tenderguard.domain.access import (
+    project_role_bit,
+    project_role_mask,
+    validate_project_role_evidence,
+)
 from tenderguard.domain.approvals import DEDICATED_APPROVAL_TASK_TYPES
 from tenderguard.domain.common import ensure_utc, utc_now
 from tenderguard.domain.enums import (
@@ -306,18 +311,29 @@ class ProjectReadService:
         limit = self._limit(limit)
         normalized_query = self._query(query)
         decoded = self._decode_cursor(cursor, "projects")
-        memberships = self._current_memberships(actor)
-        accessible = {
-            project_id: row
-            for project_id, row in memberships.items()
-            if row.status == ProjectMembershipStatus.ACTIVE.value
-            and actor.roles.intersection(self._membership_roles(row))
-        }
-        if not accessible:
+        actor_role_mask = self._actor_project_role_mask(actor)
+        if actor_role_mask == 0:
             return ProjectPortfolioPage(items=(), next_cursor=None)
-        statement = select(ProjectRow).where(
-            ProjectRow.id.in_(tuple(accessible)),
-            ProjectRow.organization_id == actor.organization_id,
+        latest_memberships = self._latest_actor_memberships(actor).subquery()
+        statement = (
+            select(ProjectRow, ProjectMembershipRow)
+            .join(
+                ProjectMembershipRow,
+                ProjectMembershipRow.project_id == ProjectRow.id,
+            )
+            .join(
+                latest_memberships,
+                and_(
+                    latest_memberships.c.project_id == ProjectMembershipRow.project_id,
+                    latest_memberships.c.version == ProjectMembershipRow.version,
+                ),
+            )
+            .where(
+                ProjectMembershipRow.principal_id == actor.actor_id,
+                ProjectMembershipRow.status == ProjectMembershipStatus.ACTIVE.value,
+                ProjectMembershipRow.role_mask.bitwise_and(actor_role_mask) != 0,
+                ProjectRow.organization_id == actor.organization_id,
+            )
         )
         if states:
             statement = statement.where(
@@ -337,9 +353,11 @@ class ProjectReadService:
             ProjectRow.id,
             decoded,
         ).order_by(ProjectRow.updated_at.desc(), ProjectRow.id.desc())
-        rows = tuple(self.session.scalars(statement.limit(limit + 1)))
+        rows = tuple(self.session.execute(statement.limit(limit + 1)).all())
         selected = rows[:limit]
-        project_ids = tuple(row.id for row in selected)
+        for _, membership in selected:
+            self._membership_roles(membership)
+        project_ids = tuple(project.id for project, _ in selected)
         open_tasks = self._counts(
             ApprovalTaskRow.project_id,
             project_ids,
@@ -352,33 +370,34 @@ class ProjectReadService:
             VerificationFindingRow.severity == "BLOCKER",
         )
         financial_project_ids = tuple(
-            project_id
-            for project_id, membership in accessible.items()
-            if actor.roles.intersection(
-                self._membership_roles(membership),
-                FINANCIAL_READ_ROLES,
-            )
+            project.id
+            for project, membership in selected
+            if actor.roles.intersection(self._membership_roles(membership), FINANCIAL_READ_ROLES)
         )
         latest_runs = self._latest_calculations(financial_project_ids)
         items = tuple(
             ProjectPortfolioItem(
-                project=self._project_view(row),
-                access=self._access_view(accessible[row.id]),
-                open_approval_count=open_tasks.get(row.id, 0),
-                unresolved_blocker_count=blocking_findings.get(row.id, 0),
-                latest_total=(latest_runs[row.id].grand_total if row.id in latest_runs else None),
-                latest_currency=(latest_runs[row.id].currency if row.id in latest_runs else None),
-                updated_at=row.updated_at,
+                project=self._project_view(project),
+                access=self._access_view(membership),
+                open_approval_count=open_tasks.get(project.id, 0),
+                unresolved_blocker_count=blocking_findings.get(project.id, 0),
+                latest_total=(
+                    latest_runs[project.id].grand_total if project.id in latest_runs else None
+                ),
+                latest_currency=(
+                    latest_runs[project.id].currency if project.id in latest_runs else None
+                ),
+                updated_at=project.updated_at,
             )
-            for row in selected
+            for project, membership in selected
         )
         return ProjectPortfolioPage(
             items=items,
             next_cursor=(
                 self._encode_cursor(
                     scope="projects",
-                    occurred_at=selected[-1].updated_at,
-                    record_id=selected[-1].id,
+                    occurred_at=selected[-1][0].updated_at,
+                    record_id=selected[-1][0].id,
                 )
                 if len(rows) > limit and selected
                 else None
@@ -396,25 +415,41 @@ class ProjectReadService:
         self._require_human(actor)
         limit = self._limit(limit)
         decoded = self._decode_cursor(cursor, "work-items")
-        memberships = self._current_memberships(actor)
-        accessible_roles = {
-            project_id: actor.roles.intersection(self._membership_roles(row))
-            for project_id, row in memberships.items()
-            if row.status == ProjectMembershipStatus.ACTIVE.value
-        }
-        project_ids = tuple(project_id for project_id, roles in accessible_roles.items() if roles)
-        if not project_ids:
+        actor_project_roles = tuple(
+            sorted(
+                (role for role in actor.roles if role is not ActorRole.SYSTEM),
+                key=lambda role: role.value,
+            )
+        )
+        if not actor_project_roles:
             return WorkItemPage(items=(), next_cursor=None)
-        allowed_roles = tuple(
-            sorted({role.value for roles in accessible_roles.values() for role in roles})
+        latest_memberships = self._latest_actor_memberships(actor).subquery()
+        role_conditions = tuple(
+            and_(
+                ApprovalTaskRow.assigned_role == role.value,
+                ProjectMembershipRow.role_mask.bitwise_and(project_role_bit(role)) != 0,
+            )
+            for role in actor_project_roles
         )
         statement = (
-            select(ApprovalTaskRow, ProjectRow)
+            select(ApprovalTaskRow, ProjectRow, ProjectMembershipRow)
             .join(ProjectRow, ProjectRow.id == ApprovalTaskRow.project_id)
+            .join(
+                ProjectMembershipRow,
+                ProjectMembershipRow.project_id == ProjectRow.id,
+            )
+            .join(
+                latest_memberships,
+                and_(
+                    latest_memberships.c.project_id == ProjectMembershipRow.project_id,
+                    latest_memberships.c.version == ProjectMembershipRow.version,
+                ),
+            )
             .where(
-                ApprovalTaskRow.project_id.in_(project_ids),
-                ApprovalTaskRow.assigned_role.in_(allowed_roles),
+                ProjectMembershipRow.principal_id == actor.actor_id,
+                ProjectMembershipRow.status == ProjectMembershipStatus.ACTIVE.value,
                 ProjectRow.organization_id == actor.organization_id,
+                or_(*role_conditions),
             )
         )
         if statuses:
@@ -425,14 +460,11 @@ class ProjectReadService:
             ApprovalTaskRow.id,
             decoded,
         ).order_by(ApprovalTaskRow.updated_at.desc(), ApprovalTaskRow.id.desc())
-        candidates = self.session.execute(statement.limit(limit * 3 + 1)).all()
-        visible = [
-            (task, project)
-            for task, project in candidates
-            if ActorRole(task.assigned_role) in accessible_roles[task.project_id]
-        ]
-        selected = visible[:limit]
-        items = tuple(self._work_item_view(task, project) for task, project in selected)
+        rows = self.session.execute(statement.limit(limit + 1)).all()
+        selected = rows[:limit]
+        for _, _, membership in selected:
+            self._membership_roles(membership)
+        items = tuple(self._work_item_view(task, project) for task, project, _ in selected)
         return WorkItemPage(
             items=items,
             next_cursor=(
@@ -441,7 +473,7 @@ class ProjectReadService:
                     occurred_at=selected[-1][0].updated_at,
                     record_id=selected[-1][0].id,
                 )
-                if len(visible) > limit and selected
+                if len(rows) > limit and selected
                 else None
             ),
         )
@@ -2230,43 +2262,49 @@ class ProjectReadService:
         records.sort(key=lambda item: (item.occurred_at, item.id), reverse=True)
         return tuple(records[:limit])
 
-    def _current_memberships(
-        self,
-        actor: Actor,
-    ) -> dict[str, ProjectMembershipRow]:
-        rows = self.session.scalars(
-            select(ProjectMembershipRow)
-            .join(ProjectRow, ProjectRow.id == ProjectMembershipRow.project_id)
-            .where(
-                ProjectMembershipRow.principal_id == actor.actor_id,
-                ProjectRow.organization_id == actor.organization_id,
+    @staticmethod
+    def _latest_actor_memberships(actor: Actor) -> Select[Any]:
+        return (
+            select(
+                ProjectMembershipRow.project_id.label("project_id"),
+                func.max(ProjectMembershipRow.version).label("version"),
             )
-            .order_by(
-                ProjectMembershipRow.project_id,
-                ProjectMembershipRow.version.desc(),
-            )
+            .where(ProjectMembershipRow.principal_id == actor.actor_id)
+            .group_by(ProjectMembershipRow.project_id)
         )
-        result: dict[str, ProjectMembershipRow] = {}
-        for row in rows:
-            result.setdefault(row.project_id, row)
-        return result
 
     def _current_membership(
         self,
         actor: Actor,
         project_id: str,
     ) -> ProjectMembershipRow:
-        row = self._current_memberships(actor).get(project_id)
+        row = self.session.scalar(
+            select(ProjectMembershipRow)
+            .join(ProjectRow, ProjectRow.id == ProjectMembershipRow.project_id)
+            .where(
+                ProjectMembershipRow.project_id == project_id,
+                ProjectMembershipRow.principal_id == actor.actor_id,
+                ProjectRow.organization_id == actor.organization_id,
+            )
+            .order_by(ProjectMembershipRow.version.desc())
+            .limit(1)
+        )
         if row is None:
             raise LookupError(project_id)
+        self._membership_roles(row)
         return row
 
     @staticmethod
     def _membership_roles(row: ProjectMembershipRow) -> frozenset[ActorRole]:
         try:
-            return frozenset(ActorRole(value) for value in row.roles)
+            return validate_project_role_evidence(row.roles, row.role_mask)
         except ValueError as error:
-            raise RuntimeError("Project membership contains an unknown role") from error
+            raise RuntimeError("Project membership role evidence is invalid") from error
+
+    @staticmethod
+    def _actor_project_role_mask(actor: Actor) -> int:
+        roles = tuple(role for role in actor.roles if role is not ActorRole.SYSTEM)
+        return project_role_mask(roles) if roles else 0
 
     def _access_view(self, row: ProjectMembershipRow) -> ProjectAccessView:
         return ProjectAccessView(
@@ -2280,19 +2318,28 @@ class ProjectReadService:
     ) -> dict[str, CalculationRunRow]:
         if not project_ids:
             return {}
+        ranked = (
+            select(
+                CalculationRunRow.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=CalculationRunRow.project_id,
+                    order_by=(
+                        CalculationRunRow.created_at.desc(),
+                        CalculationRunRow.id.desc(),
+                    ),
+                )
+                .label("position"),
+            )
+            .where(CalculationRunRow.project_id.in_(project_ids))
+            .subquery()
+        )
         rows = self.session.scalars(
             select(CalculationRunRow)
-            .where(CalculationRunRow.project_id.in_(project_ids))
-            .order_by(
-                CalculationRunRow.project_id,
-                CalculationRunRow.created_at.desc(),
-                CalculationRunRow.id.desc(),
-            )
+            .join(ranked, ranked.c.id == CalculationRunRow.id)
+            .where(ranked.c.position == 1)
         )
-        result: dict[str, CalculationRunRow] = {}
-        for row in rows:
-            result.setdefault(row.project_id, row)
-        return result
+        return {row.project_id: row for row in rows}
 
     def _counts(
         self,
