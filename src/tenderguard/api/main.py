@@ -509,6 +509,7 @@ def create_app(
             oidc_scope=resolved_settings.oidc_web_scope,
             api_base_path="/v1",
             application_version=__version__,
+            max_upload_bytes=resolved_settings.max_upload_bytes,
         )
 
     @application.get("/health/ready", response_model=ReadinessResponse)

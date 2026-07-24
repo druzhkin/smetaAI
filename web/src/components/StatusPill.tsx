@@ -13,6 +13,7 @@ const positive = new Set([
   "SIGNED",
   "ALLOWED",
   "BOUND",
+  "PROCESSED",
 ]);
 const negative = new Set([
   "BLOCKED",
@@ -22,6 +23,10 @@ const negative = new Set([
   "FAILED",
   "CORRUPT",
   "DEAD_LETTER",
+  "INFECTED",
+  "PROCESSING_DEAD_LETTERED",
+  "SCAN_FAILED",
+  "PROCESSING_FAILED",
 ]);
 const warning = new Set([
   "PENDING",
@@ -31,6 +36,9 @@ const warning = new Set([
   "DOCUMENTS_INCOMPLETE",
   "EXPERT_REVIEW",
   "OPEN",
+  "QUARANTINED",
+  "CLEAN",
+  "PROCESSING",
 ]);
 const genericLabels: Record<string, string> = {
   APPROVED: "Утверждено",
@@ -45,6 +53,14 @@ const genericLabels: Record<string, string> = {
   PASSED: "Пройдено",
   FAILED: "Ошибка",
   REVIEW_REQUIRED: "Требует проверки",
+  QUARANTINED: "В карантине",
+  CLEAN: "Malware scan: угроз не выявлено",
+  SCAN_FAILED: "Сканирование не завершено",
+  PROCESSING: "Обработка",
+  PROCESSED: "Обработано",
+  PROCESSING_FAILED: "Сбой обработки",
+  PROCESSING_DEAD_LETTERED: "Обработка заблокирована",
+  INFECTED: "Обнаружена угроза",
 };
 
 export function statusTone(

@@ -8,7 +8,8 @@ type IconName =
   | "warning"
   | "check"
   | "trace"
-  | "refresh";
+  | "refresh"
+  | "plus";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const common = {
@@ -86,6 +87,12 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       return (
         <svg {...common}>
           <path d="M20 7v5h-5M4 17v-5h5M18 10a7 7 0 0 0-12-3l-2 2M6 14a7 7 0 0 0 12 3l2-2" />
+        </svg>
+      );
+    case "plus":
+      return (
+        <svg {...common}>
+          <path d="M12 5v14M5 12h14" />
         </svg>
       );
   }

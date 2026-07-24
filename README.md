@@ -105,6 +105,10 @@ The repository currently connects and integration-tests:
   validates project-scoped evidence, enforces four-eyes eligibility, requires
   explicit high-impact confirmation, persists idempotently, and refreshes the
   immutable decision/audit history;
+- controlled project registration and document-intake surfaces with stable
+  idempotency keys, server-aligned byte limits, strict identifier validation,
+  explicit operator attestations, separate quarantine receipts, and status
+  polling that never represents an unscanned upload as evidence;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -159,7 +163,8 @@ backup/disaster-recovery evidence, trained users, and named process owners.
 Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
-schedulers/monitoring, remaining controlled data-entry/reconciliation/release
+schedulers/monitoring, remaining controlled extraction-correction,
+BoQ/pricing/calculation/reconciliation/release
 surfaces, and business qualification of the operator interface remain to be
 completed.
 External verification also requires approved out-of-band

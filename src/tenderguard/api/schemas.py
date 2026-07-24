@@ -110,6 +110,7 @@ class RuntimeConfigResponse(ApiModel):
     oidc_scope: str
     api_base_path: str
     application_version: str
+    max_upload_bytes: int = Field(gt=0)
 
 
 class CreateAuditCheckpointRequest(ApiModel):

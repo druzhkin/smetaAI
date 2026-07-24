@@ -7,6 +7,7 @@ import type {
   ProjectRecordSection,
   ProjectView,
   ProjectWorkbench,
+  QuarantinedUpload,
   WorkItemPage,
   WorkItemDetail,
 } from "./types";
@@ -114,6 +115,44 @@ async function mutate<T>(
   return (await response.json()) as T;
 }
 
+async function mutateForm<T>(
+  context: RequestContext,
+  path: string,
+  options: {
+    body: FormData;
+    idempotencyKey: string;
+  },
+): Promise<T> {
+  const url = new URL(`${context.apiBasePath}${path}`, window.location.origin);
+  const response = await fetch(url, {
+    method: "POST",
+    credentials: "omit",
+    headers: {
+      Accept: "application/json",
+      "Idempotency-Key": options.idempotencyKey,
+      ...context.authorizationHeaders(),
+    },
+    body: options.body,
+  });
+  if (!response.ok) {
+    let detail = `Запрос завершился с кодом ${response.status}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      }
+    } catch {
+      // Do not reflect an arbitrary non-JSON response into the interface.
+    }
+    throw new ApiError(
+      detail,
+      response.status,
+      response.headers.get("x-request-id"),
+    );
+  }
+  return (await response.json()) as T;
+}
+
 export function newIdempotencyKey(): string {
   if (typeof crypto.randomUUID !== "function") {
     throw new Error(
@@ -144,6 +183,25 @@ export function listProjects(
     },
     signal,
   );
+}
+
+export function createProject(
+  context: RequestContext,
+  input: {
+    code: string;
+    name: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ProjectView> {
+  return mutate(context, "/projects", {
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      code: input.code,
+      name: input.name,
+      reason: input.reason,
+    },
+  });
 }
 
 export function listWorkItems(
@@ -230,6 +288,51 @@ export function getProject(
   return request(
     context,
     `/projects/${encodeURIComponent(projectId)}`,
+    undefined,
+    signal,
+  );
+}
+
+export function uploadDocument(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    logicalKey: string;
+    title: string;
+    documentType: string;
+    revisionLabel: string;
+    reason: string;
+    file: File;
+    critical: boolean;
+    makeCandidateCurrent: boolean;
+    idempotencyKey: string;
+  },
+): Promise<QuarantinedUpload> {
+  const body = new FormData();
+  body.set("logical_key", input.logicalKey);
+  body.set("title", input.title);
+  body.set("document_type", input.documentType);
+  body.set("revision_label", input.revisionLabel);
+  body.set("reason", input.reason);
+  body.set("critical", String(input.critical));
+  body.set("make_candidate_current", String(input.makeCandidateCurrent));
+  body.set("upload", input.file, input.file.name);
+  return mutateForm(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/documents`,
+    { body, idempotencyKey: input.idempotencyKey },
+  );
+}
+
+export function getDocumentUpload(
+  context: RequestContext,
+  projectId: string,
+  uploadId: string,
+  signal?: AbortSignal,
+): Promise<QuarantinedUpload> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/document-uploads/${encodeURIComponent(uploadId)}`,
     undefined,
     signal,
   );

@@ -8,6 +8,7 @@ export interface RuntimeConfig {
   oidc_scope: string;
   api_base_path: string;
   application_version: string;
+  max_upload_bytes: number;
 }
 
 export type ApprovalState =
@@ -119,6 +120,38 @@ export interface ApprovalDecisionResult {
   task_id: string;
   decision: ApprovalDecision;
   decided_by: string;
+}
+
+export type QuarantineStatus =
+  | "QUARANTINED"
+  | "CLEAN"
+  | "REJECTED"
+  | "SCAN_FAILED"
+  | "PROCESSING"
+  | "PROCESSED"
+  | "PROCESSING_FAILED"
+  | "PROCESSING_DEAD_LETTERED";
+
+export interface QuarantinedUpload {
+  upload_id: string;
+  project_id: string;
+  status: QuarantineStatus;
+  object_hash: string;
+  size_bytes: number;
+  original_filename: string;
+  uploaded_by: string;
+  latest_scan_verdict: "CLEAN" | "INFECTED" | "ERROR" | null;
+  latest_scan_report_hash: string | null;
+  processed_document_id: string | null;
+  processed_document_revision_id: string | null;
+  candidate_document_set_revision_id: string | null;
+  manifest: Record<string, unknown> | null;
+  failure_code: string | null;
+  processing_attempts: number;
+  processing_lease_expires_at: string | null;
+  processing_dead_lettered_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ValidationFinding {

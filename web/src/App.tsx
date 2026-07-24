@@ -6,8 +6,10 @@ import { AuthProvider, useAuth } from "./auth";
 import { AppShell } from "./components/AppShell";
 import { LoadingBlock } from "./components/Feedback";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
+import { DocumentUploadPage } from "./pages/DocumentUploadPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
+import { ProjectCreatePage } from "./pages/ProjectCreatePage";
 import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
 import { RecordsPage } from "./pages/RecordsPage";
 import { TaskDetailPage } from "./pages/TaskDetailPage";
@@ -72,6 +74,8 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
     page = <PortfolioPage config={config} />;
   } else if (pathname === "/tasks") {
     page = <TaskQueuePage config={config} />;
+  } else if (pathname === "/projects/new") {
+    page = <ProjectCreatePage config={config} />;
   } else {
     const parts = pathname.split("/").filter(Boolean);
     if (parts[0] === "tasks" && parts.length === 2) {
@@ -92,7 +96,15 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
         projectId = null;
       }
       const rawSection = parts[2];
-      if (projectId !== null && projectId !== "" && parts.length === 2) {
+      if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "documents" &&
+        parts[3] === "new"
+      ) {
+        page = <DocumentUploadPage config={config} projectId={projectId} />;
+      } else if (projectId !== null && projectId !== "" && parts.length === 2) {
         page = <ProjectWorkbenchPage config={config} projectId={projectId} />;
       } else if (
         projectId !== null &&

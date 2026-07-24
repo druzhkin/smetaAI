@@ -147,6 +147,7 @@ SECTION_READ_ROLES: dict[ProjectRecordSection, tuple[ActorRole, ...]] = {
         ActorRole.AUDITOR,
     ),
     ProjectRecordSection.AUDIT: (
+        ActorRole.ESTIMATOR,
         ActorRole.REVIEWER,
         ActorRole.APPROVER,
         ActorRole.AUDITOR,

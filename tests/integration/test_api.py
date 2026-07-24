@@ -339,6 +339,22 @@ def test_quarantine_fails_closed_before_scan_and_rejects_forged_or_infected_resu
             headers=estimator,
             json={"code": "T-Q", "name": "Quarantine test", "reason": "Register"},
         ).json()
+        invalid_logical_key = client.post(
+            f"/v1/projects/{project['id']}/documents",
+            headers=estimator,
+            data={
+                "logical_key": "terms invalid",
+                "title": "Invalid logical key",
+                "document_type": "TENDER_TERMS",
+                "revision_label": "1",
+                "reason": "Must fail before storing untrusted bytes",
+                "critical": "true",
+            },
+            files={"upload": ("invalid.txt", b"must not persist", "text/plain")},
+        )
+        assert invalid_logical_key.status_code == 422
+        assert not [path for path in (tmp_path / "quarantine").rglob("*") if path.is_file()]
+
         response = client.post(
             f"/v1/projects/{project['id']}/documents",
             headers=estimator,

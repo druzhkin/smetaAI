@@ -15,4 +15,14 @@ describe("StatusPill", () => {
     expect(screen.getByText("UNRECOGNISED STATE")).toBeInTheDocument();
     expect(statusTone("UNRECOGNISED_STATE")).toBe("neutral");
   });
+
+  it("does not present a clean malware scan as completed processing", () => {
+    render(<StatusPill value="CLEAN" />);
+    expect(
+      screen.getByText("Malware scan: угроз не выявлено"),
+    ).toBeInTheDocument();
+    expect(statusTone("CLEAN")).toBe("warning");
+    expect(statusTone("SCAN_FAILED")).toBe("negative");
+    expect(statusTone("PROCESSING_FAILED")).toBe("negative");
+  });
 });

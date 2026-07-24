@@ -62,6 +62,48 @@ def _create_project(
     return str(response.json()["id"])
 
 
+def test_estimator_only_owner_can_open_new_project_workbench_and_audit(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        local_object_store_path=tmp_path / "objects",
+        allow_insecure_dev_auth=True,
+        audit_signing_key="workbench-audit-signing-key-at-least-32-bytes",
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    )
+    estimator = _headers("estimator-only", "ESTIMATOR")
+
+    with TestClient(app) as client:
+        project_id = _create_project(client, headers=estimator, code="WB-ESTIMATOR")
+
+        workbench = client.get(
+            f"/v1/projects/{project_id}/workbench",
+            headers=estimator,
+        )
+        assert workbench.status_code == 200, workbench.text
+        assert workbench.json()["project"]["state"] == "DRAFT"
+        assert workbench.json()["release_decision"]["allowed"] is False
+
+        audit = client.get(
+            f"/v1/projects/{project_id}/records",
+            headers=estimator,
+            params={"section": "AUDIT"},
+        )
+        assert audit.status_code == 200, audit.text
+        assert any(
+            record["kind"] == "AUDIT_EVENT" and record["title"] == "project_created"
+            for record in audit.json()["items"]
+        )
+
+
 def test_operator_read_models_are_scoped_paginated_and_fail_closed(
     tmp_path: Path,
 ) -> None:

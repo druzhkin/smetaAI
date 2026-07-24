@@ -64,6 +64,8 @@ class QuarantineService:
         make_candidate_current: bool,
     ) -> QuarantinedUploadView:
         logical_key = self._required_text(logical_key, "logical_key", 300)
+        if any(character.isspace() for character in logical_key):
+            raise ValueError("logical_key must not contain whitespace")
         title = self._required_text(title, "title", 1000)
         document_type = self._required_text(document_type, "document_type", 100)
         revision_label = self._required_text(revision_label, "revision_label", 100)

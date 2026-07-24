@@ -18,22 +18,49 @@ export function formatMoney(
   if (amount === null || currency === null) {
     return "Нет подтверждённой суммы";
   }
-  const value = Number(amount);
-  if (!Number.isFinite(value)) {
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(amount);
+  if (match === null) {
     return `${amount} ${currency}`;
   }
-  try {
-    return new Intl.NumberFormat("ru-RU", {
-      style: "currency",
-      currency,
-      currencyDisplay: "symbol",
-      maximumFractionDigits: 2,
-    }).format(value);
-  } catch {
-    return `${new Intl.NumberFormat("ru-RU", {
-      maximumFractionDigits: 2,
-    }).format(value)} ${currency}`;
+  const sign = match[1] === "-" ? "-" : "";
+  const integer = match[2] ?? "0";
+  let fraction = match[3] ?? "";
+  while (fraction.length > 2 && fraction.endsWith("0")) {
+    fraction = fraction.slice(0, -1);
   }
+  const grouped = new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 0,
+  }).format(BigInt(integer));
+  let currencyLabel = currency;
+  try {
+    currencyLabel =
+      new Intl.NumberFormat("ru-RU", {
+        style: "currency",
+        currency,
+        currencyDisplay: "symbol",
+      })
+        .formatToParts(0)
+        .find((part) => part.type === "currency")?.value ?? currency;
+  } catch {
+    currencyLabel = currency;
+  }
+  return `${sign}${grouped}${fraction ? `,${fraction}` : ""} ${currencyLabel}`;
+}
+
+export function formatBytes(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return `${value} байт`;
+  }
+  const units = ["байт", "КиБ", "МиБ", "ГиБ"];
+  let amount = value;
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  return `${new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: unitIndex === 0 ? 0 : 2,
+  }).format(amount)} ${units[unitIndex]}`;
 }
 
 export function compactId(value: string): string {

@@ -98,7 +98,20 @@ export function RecordsPage({
           <h1>{definition.label}</h1>
           <p>{definition.description}</p>
         </div>
-        <StatusPill value={projectQuery.data.state} />
+        <div className="records-header__actions">
+          {section === "DOCUMENTS" &&
+            (auth.roles.includes("ESTIMATOR") ||
+              auth.roles.includes("TECHNICAL_EXPERT")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/documents/new`}
+              >
+                <Icon name="plus" size={16} />
+                Загрузить документ
+              </Link>
+            )}
+          <StatusPill value={projectQuery.data.state} />
+        </div>
       </header>
 
       <div className="records-layout">

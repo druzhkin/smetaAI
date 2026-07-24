@@ -413,6 +413,7 @@ def test_runtime_config_exposes_only_public_browser_authentication_settings(
             "oidc_scope": "openid profile email",
             "api_base_path": "/v1",
             "application_version": "0.1.0",
+            "max_upload_bytes": 524288000,
         }
         assert "private-test-value" not in response.text
         assert "https://identity.example" in response.headers["content-security-policy"]

@@ -60,10 +60,18 @@ export function PortfolioPage({ config }: { config: RuntimeConfig }) {
         title="Контроль выпуска цены"
         description="Каждый проект показан в фактическом состоянии. BLOCKED — это запрет выпуска, а не рекомендация."
         actions={
-          <Link className="button button--secondary" to="/tasks">
-            <Icon name="tasks" size={16} />
-            Мои проверки
-          </Link>
+          <>
+            {auth.roles.includes("ESTIMATOR") && (
+              <Link className="button button--primary" to="/projects/new">
+                <Icon name="plus" size={16} />
+                Новый проект
+              </Link>
+            )}
+            <Link className="button button--secondary" to="/tasks">
+              <Icon name="tasks" size={16} />
+              Мои проверки
+            </Link>
+          </>
         }
       />
 

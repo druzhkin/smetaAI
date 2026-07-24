@@ -14,6 +14,13 @@ binding immediately. A draft moves to `DOCUMENTS_INCOMPLETE`; an advanced
 mutable project moves to `BLOCKED`. A scan or parsing failure is never reported
 as a successful document revision.
 
+The operator UI submits the same governed command and displays a quarantine
+receipt with the upload ID, exact SHA-256, byte count, malware verdict,
+processing attempts, failure code, and processed revision ID. It polls the
+read endpoint without inferring success from elapsed time. Quarantined uploads
+may appear in the document register as `QUARANTINED_UPLOAD` records, but they
+remain distinct from document revisions and observations.
+
 ## State machine
 
 | From | To | Authority and condition |

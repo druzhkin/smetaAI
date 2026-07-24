@@ -56,6 +56,17 @@ def test_project_acl_hides_same_tenant_projects_and_preserves_membership_history
     mixed_system = _headers("mixed-system", "SYSTEM,ESTIMATOR")
 
     with TestClient(app) as client:
+        whitespace_code = client.post(
+            "/v1/projects",
+            headers=owner,
+            json={
+                "code": "ACL INVALID",
+                "name": "Invalid tender",
+                "reason": "Project codes must remain stable route identifiers",
+            },
+        )
+        assert whitespace_code.status_code == 422
+
         mixed_identity_creation = client.post(
             "/v1/projects",
             headers=mixed_system,
@@ -70,9 +81,15 @@ def test_project_acl_hides_same_tenant_projects_and_preserves_membership_history
         created = client.post(
             "/v1/projects",
             headers=owner,
-            json={"code": "ACL-1", "name": "Restricted tender", "reason": "Create owner ACL"},
+            json={
+                "code": "  ACL-1  ",
+                "name": "  Restricted tender  ",
+                "reason": "  Create owner ACL  ",
+            },
         )
         assert created.status_code == 201, created.text
+        assert created.json()["code"] == "ACL-1"
+        assert created.json()["name"] == "Restricted tender"
         project_id = created.json()["id"]
 
         for denied in (outsider, infrastructure_admin, system):

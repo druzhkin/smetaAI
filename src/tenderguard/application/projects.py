@@ -165,6 +165,11 @@ class ProjectService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="SYSTEM identities cannot create projects",
             )
+        code = self._required_text(code, "code", 128)
+        name = self._required_text(name, "name", 500)
+        reason = self._required_text(reason, "reason", 2000)
+        if any(character.isspace() for character in code):
+            raise ValueError("Project code must not contain whitespace")
         now = utc_now()
         project = ProjectRow(
             id=f"project-{uuid4()}",
