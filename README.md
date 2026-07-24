@@ -112,6 +112,10 @@ The repository currently connects and integration-tests:
 - independent document-set confirmation that exposes the exact manifest and
   revision identifiers, rejects self-confirmation and stale candidates, and
   does not confuse version selection with document completeness;
+- dedicated conflict resolution that compares full source observations and
+  locations, rejects the source author and conflict-task creator, binds both
+  optimistic versions, preserves a validated normalized commercial basis, and
+  creates a separately verified derived observation;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 

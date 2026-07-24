@@ -127,6 +127,72 @@ export interface WorkItemDetail {
   decision_blockers: string[];
 }
 
+export interface EvidenceLocation {
+  document_id: string;
+  document_revision_id: string;
+  original_object_hash: string;
+  locator_kind: string;
+  locator: string;
+  page: number | null;
+  table: string | null;
+  sheet: string | null;
+  cell_or_range: string | null;
+}
+
+export interface EvidenceObservation {
+  observation_id: string;
+  field_name: string;
+  value: unknown;
+  unit: string | null;
+  method: string;
+  method_version: string;
+  source_priority: number;
+  location: EvidenceLocation;
+  observed_at: string;
+  actor_id: string;
+  confidence: string | null;
+  status: string;
+}
+
+export interface ConflictObservation extends EvidenceObservation {
+  adapter_qualification_id: string | null;
+  adapter_qualification_status: string | null;
+  adapter_qualification_valid_until: string | null;
+  independence_domain: string | null;
+  basis_metadata: Record<string, string>;
+}
+
+export interface EvidenceConflict {
+  conflict_id: string;
+  field_name: string;
+  observation_ids: string[];
+  reason: string;
+  status: string;
+  resolved_value: unknown | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  resolution_reason: string | null;
+}
+
+export interface ConflictReview {
+  conflict: EvidenceConflict;
+  conflict_updated_at: string;
+  observations: ConflictObservation[];
+  missing_observation_ids: string[];
+  task_id: string;
+  task_status: string | null;
+  task_required: boolean | null;
+  task_updated_at: string | null;
+  task_created_by: string | null;
+  resolution_allowed: boolean;
+  resolution_blockers: string[];
+}
+
+export interface ConflictResolutionResult {
+  conflict: EvidenceConflict;
+  verified_observation: EvidenceObservation;
+}
+
 export interface ApprovalDecisionResult {
   approval_id: string;
   task_id: string;

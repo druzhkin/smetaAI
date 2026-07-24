@@ -17,12 +17,14 @@ from tenderguard.application.projects import (
     ProjectView,
 )
 from tenderguard.config import Settings
+from tenderguard.domain.approvals import DEDICATED_APPROVAL_TASK_TYPES
 from tenderguard.domain.common import ensure_utc, utc_now
 from tenderguard.domain.enums import (
     ActorRole,
     ApprovalState,
     ProjectAccessLevel,
     ProjectMembershipStatus,
+    VerificationStatus,
 )
 from tenderguard.domain.models import DomainModel, GateDecision
 from tenderguard.domain.release import evaluate_bid_release
@@ -481,6 +483,8 @@ class ProjectReadService:
         blockers: list[str] = []
         if task.status != "PENDING":
             blockers.append("TASK_NOT_PENDING")
+        if task.task_type in DEDICATED_APPROVAL_TASK_TYPES:
+            blockers.append("DEDICATED_WORKFLOW_REQUIRED")
         if task.required and task.payload.get("created_by") == actor.actor_id:
             blockers.append("FOUR_EYES_TASK_CREATOR")
         if task.entity_type == "manual_change":
@@ -554,7 +558,7 @@ class ProjectReadService:
         unresolved_conflicts = self._count(
             ConflictRow,
             ConflictRow.project_id == project_id,
-            ConflictRow.status != "RESOLVED",
+            ConflictRow.status != VerificationStatus.VERIFIED.value,
         )
         blocking_findings = self._count(
             VerificationFindingRow,
@@ -940,7 +944,7 @@ class ProjectReadService:
                 title=row.field_name,
                 subtitle="Conflicting source observations",
                 status=row.status,
-                severity="BLOCKER" if row.status != "RESOLVED" else None,
+                severity=("BLOCKER" if row.status != VerificationStatus.VERIFIED.value else None),
                 occurred_at=row.created_at,
                 attributes={
                     "observation_ids": row.payload.get("observation_ids", []),
@@ -2175,7 +2179,7 @@ class ProjectReadService:
             select(ConflictRow)
             .where(
                 ConflictRow.project_id == project_id,
-                ConflictRow.status != "RESOLVED",
+                ConflictRow.status != VerificationStatus.VERIFIED.value,
             )
             .order_by(ConflictRow.updated_at.desc(), ConflictRow.id.desc())
             .limit(limit)

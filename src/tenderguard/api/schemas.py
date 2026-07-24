@@ -42,6 +42,7 @@ from tenderguard.application.contracts import (
 from tenderguard.application.evidence import (
     ConflictResolutionCommand,
     ConflictResolutionResult,
+    ConflictReviewView,
     ObservationDraft,
     ReconciliationOutcome,
 )
@@ -254,6 +255,10 @@ class ReconciliationResponse(ReconciliationOutcome):
 
 
 class ResolveConflictRequest(ConflictResolutionCommand):
+    pass
+
+
+class ConflictReviewResponse(ConflictReviewView):
     pass
 
 

@@ -116,6 +116,7 @@ export const sections: SectionDefinition[] = [
 export const taskLabels: Record<string, string> = {
   HIGH_VALUE_REVIEW: "Проверка дорогостоящей позиции",
   CONFLICT_REVIEW: "Разрешение конфликта",
+  CONFLICT_RESOLUTION: "Разрешение конфликта источников",
   QUANTITY_REVIEW: "Проверка объёма",
   ANALOGUE_REVIEW: "Проверка аналога",
   PRICE_REVIEW: "Проверка цены",

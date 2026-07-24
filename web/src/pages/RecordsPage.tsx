@@ -169,6 +169,23 @@ export function RecordsPage({
               records={records}
               renderAction={(record) => {
                 if (
+                  section === "EVIDENCE" &&
+                  record.kind === "CONFLICT" &&
+                  record.status === "CONFLICT" &&
+                  (auth.roles.includes("REVIEWER") ||
+                    auth.roles.includes("TECHNICAL_EXPERT"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/conflicts/${encodeURIComponent(record.id)}/resolve`}
+                    >
+                      <Icon name="warning" size={15} />
+                      Разрешить конфликт
+                    </Link>
+                  );
+                }
+                if (
                   section !== "DOCUMENTS" ||
                   record.kind !== "DOCUMENT_SET_REVISION" ||
                   record.status !== "DRAFT" ||

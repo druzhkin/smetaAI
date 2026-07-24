@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes four controlled mutation families:
+The current interface includes five controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -32,6 +32,15 @@ The current interface includes four controlled mutation families:
   revalidates the candidate, rejects stale or non-draft candidates, records
   the independent actor, and leaves document completeness and downstream
   verification gates unresolved;
+- a reviewer or technical expert may resolve an extraction conflict only
+  through its dedicated screen. The screen exposes every source value,
+  method, actor, document revision, locator and object hash; disables a source
+  authored by the current actor; binds the exact conflict and task timestamps;
+  shows the adapter qualification, independence domain and commercial basis;
+  and requires an independent reason, project code and acknowledgement. The
+  backend revalidates all qualifications at decision time, rejects the
+  conflict-task creator, and prevents the generic approval command from
+  closing this task;
 - an assigned expert may record an approval, rejection, or
   changes-requested decision for an existing approval task. The operation
   requires the exact task timestamp, a reason, project-scoped evidence
@@ -39,15 +48,14 @@ The current interface includes four controlled mutation families:
   additionally requires explicit project-code confirmation in the browser.
 
 The backend remains authoritative and records every accepted mutation in the
-audit chain. An unsupported file, invalid logical key, stale task, stale
-document-set candidate, self-confirmation, missing role, or unacknowledged
-command fails closed.
+audit chain. An unsupported file, invalid logical key, stale task or conflict,
+stale document-set candidate, self-confirmation, self-resolution, missing
+role, or unacknowledged command fails closed.
 
-Extraction correction, conflict resolution, BoQ and price maintenance,
-calculation execution, workflow transition, and bid release are not yet
-represented as delivered UI operations. Production acceptance also requires
-role-based user testing, accessibility verification, and business-process
-qualification.
+Extraction correction, BoQ and price maintenance, calculation execution,
+workflow transition, and bid release are not yet represented as delivered UI
+operations. Production acceptance also requires role-based user testing,
+accessibility verification, and business-process qualification.
 
 ## Browser authentication
 

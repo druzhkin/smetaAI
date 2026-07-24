@@ -12,6 +12,8 @@ from tenderguard.domain.enums import (
 )
 from tenderguard.domain.models import DomainModel, ValidationFinding
 
+DEDICATED_APPROVAL_TASK_TYPES = frozenset({"CONFLICT_RESOLUTION"})
+
 
 class ApprovalSubject(DomainModel):
     entity_type: str

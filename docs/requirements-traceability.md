@@ -36,7 +36,8 @@ Status values:
 
 All eleven contours map to a named module or explicit integration boundary.
 The current API connects intake, qualified evidence/reconciliation and
-review-task-backed conflict resolution, passport,
+review-task-backed conflict resolution with a dual-version, source-provenance
+operator workflow, passport,
 BoQ/quantity, scope attestations, nomenclature/analogue decisions, governed
 pricing/RFQ, contract terms and cost impacts, risk/register reserve,
 calculation, independent validation, controlled scenario execution, expert

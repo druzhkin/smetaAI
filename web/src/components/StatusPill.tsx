@@ -27,6 +27,7 @@ const negative = new Set([
   "PROCESSING_DEAD_LETTERED",
   "SCAN_FAILED",
   "PROCESSING_FAILED",
+  "CONFLICT",
 ]);
 const warning = new Set([
   "PENDING",

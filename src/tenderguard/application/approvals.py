@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from tenderguard.application.projects import OptimisticLockError, ProjectService
 from tenderguard.config import Settings
 from tenderguard.domain.approvals import (
+    DEDICATED_APPROVAL_TASK_TYPES,
     ApprovalPlan,
     ApprovalPolicyDefinition,
     ApprovalSubject,
@@ -227,6 +228,8 @@ class ApprovalService:
         )
         if task.status != "PENDING":
             raise ValueError("Only a PENDING approval task can be decided")
+        if task.task_type in DEDICATED_APPROVAL_TASK_TYPES:
+            raise ValueError(f"Approval task {task.task_type} requires its dedicated workflow")
         if task.required and task.payload.get("created_by") == actor.actor_id:
             raise ValueError("Four-eyes violation: a task creator cannot approve it")
         change_ids = set(command.related_change_ids)

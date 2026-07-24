@@ -19,9 +19,11 @@ from tenderguard.infrastructure.database import (
 from tenderguard.infrastructure.object_store import LocalObjectStore
 from tenderguard.infrastructure.orm import (
     AdapterQualificationRow,
+    ApprovalTaskRow,
     BoqLineRow,
     CalculationSnapshotRow,
     NomenclatureMatchRow,
+    ObservationRow,
     PriceDecisionRow,
     QuantityRow,
     RiskCalculationRow,
@@ -722,6 +724,59 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             purpose="reconciliation_rules",
         )
 
+        invalid_basis_draft = {
+            "field_name": "normalized_unit_rate",
+            "value": "125.50",
+            "unit": "m",
+            "method": "TABLE_PARSER",
+            "method_version": "1.0",
+            "source_priority": 1,
+            "location": {
+                "document_id": uploaded_payload["document_id"],
+                "document_revision_id": uploaded_payload["document_revision_id"],
+                "original_object_hash": uploaded_payload["manifest"]["root_sha256"],
+                "locator_kind": "structured_region",
+                "locator": "table:prices[row=invalid]",
+            },
+            "observed_at": "2026-07-23T09:59:00Z",
+            "adapter_qualification_id": parser_adapter["version_id"],
+        }
+        reserved_basis_key = client.post(
+            f"/v1/projects/{project['id']}/evidence/observations",
+            headers=system,
+            json={
+                "draft": {
+                    **invalid_basis_draft,
+                    "basis_metadata": {
+                        "basis_type": "NORMALIZED_PRICE",
+                        "currency": "RUB",
+                        "unit": "m",
+                        "observation": "attempted-reserved-payload-overwrite",
+                    },
+                },
+                "reason": "Reserved payload keys must fail closed",
+            },
+        )
+        assert reserved_basis_key.status_code == 422
+        assert "Unsupported evidence basis metadata" in reserved_basis_key.text
+        inconsistent_basis_unit = client.post(
+            f"/v1/projects/{project['id']}/evidence/observations",
+            headers=system,
+            json={
+                "draft": {
+                    **invalid_basis_draft,
+                    "basis_metadata": {
+                        "basis_type": "NORMALIZED_PRICE",
+                        "currency": "RUB",
+                        "unit": "kg",
+                    },
+                },
+                "reason": "Commercial basis must match the observed unit",
+            },
+        )
+        assert inconsistent_basis_unit.status_code == 422
+        assert "must match the observation unit" in inconsistent_basis_unit.text
+
         observation_ids: list[str] = []
         for method, locator, adapter in (
             ("TABLE_PARSER", "table:prices[row=1]", parser_adapter),
@@ -827,17 +882,233 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         )
         assert conflicted.status_code == 200, conflicted.text
         conflict_id = conflicted.json()["conflict"]["conflict_id"]
-        resolved_conflict = client.post(
+        creator_review = client.get(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
+            headers=owner_b,
+        )
+        assert creator_review.status_code == 200, creator_review.text
+        assert creator_review.json()["resolution_allowed"] is False
+        assert "FOUR_EYES_TASK_CREATOR" in creator_review.json()["resolution_blockers"]
+        conflict_task_id = creator_review.json()["task_id"]
+        creator_resolution = client.post(
             f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
             headers=owner_b,
             json={
                 "selected_observation_id": observation_ids[0],
+                "resolution_reason": "The conflict creator must not self-resolve",
+                "expected_conflict_updated_at": creator_review.json()["conflict_updated_at"],
+                "expected_task_updated_at": creator_review.json()["task_updated_at"],
+            },
+        )
+        assert creator_resolution.status_code == 422
+        assert "conflict creator" in creator_resolution.json()["detail"]
+        generic_decision = client.post(
+            f"/v1/projects/{project['id']}/approvals/{conflict_task_id}/decision",
+            headers=operator,
+            json={
+                "decision": "APPROVED",
+                "reason": "Generic approval must not bypass conflict resolution",
+                "expected_task_updated_at": creator_review.json()["task_updated_at"],
+                "evidence_ids": [observation_ids[0]],
+            },
+        )
+        assert generic_decision.status_code == 422
+        assert "dedicated workflow" in generic_decision.json()["detail"]
+        with create_session_factory(engine).begin() as session:
+            conflict_task = session.get(ApprovalTaskRow, conflict_task_id)
+            assert conflict_task is not None
+            conflict_task.required = False
+        corrupted_task_review = client.get(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
+            headers=operator,
+        )
+        assert corrupted_task_review.status_code == 200
+        assert "CONFLICT_TASK_NOT_REQUIRED" in corrupted_task_review.json()["resolution_blockers"]
+        corrupted_task_resolution = client.post(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
+            headers=operator,
+            json={
+                "selected_observation_id": observation_ids[0],
+                "resolution_reason": "A non-mandatory conflict task must fail closed",
+                "expected_conflict_updated_at": corrupted_task_review.json()["conflict_updated_at"],
+                "expected_task_updated_at": corrupted_task_review.json()["task_updated_at"],
+            },
+        )
+        assert corrupted_task_resolution.status_code == 422
+        assert "integrity check failed" in corrupted_task_resolution.json()["detail"]
+        with create_session_factory(engine).begin() as session:
+            conflict_task = session.get(ApprovalTaskRow, conflict_task_id)
+            assert conflict_task is not None
+            conflict_task.required = True
+            parser_qualification = session.get(
+                AdapterQualificationRow,
+                parser_adapter["version_id"],
+            )
+            assert parser_qualification is not None
+            parser_qualification.status = "REVOKED"
+        revoked_qualification_review = client.get(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
+            headers=operator,
+        )
+        assert revoked_qualification_review.status_code == 200
+        assert (
+            "CONFLICT_INDEPENDENCE_INVALID"
+            in revoked_qualification_review.json()["resolution_blockers"]
+        )
+        revoked_qualification_resolution = client.post(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
+            headers=operator,
+            json={
+                "selected_observation_id": observation_ids[0],
+                "resolution_reason": "A revoked extraction qualification must fail closed",
+                "expected_conflict_updated_at": revoked_qualification_review.json()[
+                    "conflict_updated_at"
+                ],
+                "expected_task_updated_at": revoked_qualification_review.json()["task_updated_at"],
+            },
+        )
+        assert revoked_qualification_resolution.status_code == 422
+        assert "independence domains" in revoked_qualification_resolution.json()["detail"]
+        with create_session_factory(engine).begin() as session:
+            parser_qualification = session.get(
+                AdapterQualificationRow,
+                parser_adapter["version_id"],
+            )
+            assert parser_qualification is not None
+            parser_qualification.status = "APPROVED"
+            parser_observation = session.get(ObservationRow, observation_ids[0])
+            assert parser_observation is not None
+            parser_observation.payload = {
+                **parser_observation.payload,
+                "unit": "kg",
+            }
+        invalid_basis_review = client.get(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
+            headers=operator,
+        )
+        assert invalid_basis_review.status_code == 200
+        assert (
+            "CONFLICT_COMMERCIAL_BASIS_INVALID"
+            in invalid_basis_review.json()["resolution_blockers"]
+        )
+        invalid_basis_resolution = client.post(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
+            headers=operator,
+            json={
+                "selected_observation_id": conflicting_visual.json()["observation_id"],
+                "resolution_reason": "Any corrupted source basis must fail the conflict set closed",
+                "expected_conflict_updated_at": invalid_basis_review.json()["conflict_updated_at"],
+                "expected_task_updated_at": invalid_basis_review.json()["task_updated_at"],
+            },
+        )
+        assert invalid_basis_resolution.status_code == 422
+        assert "differs from its observation unit" in invalid_basis_resolution.json()["detail"]
+        with create_session_factory(engine).begin() as session:
+            parser_observation = session.get(ObservationRow, observation_ids[0])
+            assert parser_observation is not None
+            parser_observation.payload = {
+                **parser_observation.payload,
+                "unit": "m",
+            }
+        independent_review = client.get(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
+            headers=operator,
+        )
+        assert independent_review.status_code == 200, independent_review.text
+        assert independent_review.json()["resolution_allowed"] is True
+        assert len(independent_review.json()["observations"]) == 2
+        reviewed_observation = next(
+            observation
+            for observation in independent_review.json()["observations"]
+            if observation["method"] == "TABLE_PARSER"
+        )
+        assert reviewed_observation["adapter_qualification_id"] == parser_adapter["version_id"]
+        assert reviewed_observation["adapter_qualification_status"] == "APPROVED"
+        assert reviewed_observation["independence_domain"] == "deterministic-table-parser"
+        assert reviewed_observation["basis_metadata"] == {
+            "basis_type": "NORMALIZED_PRICE",
+            "currency": "RUB",
+            "unit": "m",
+        }
+        dedicated_task = client.get(
+            f"/v1/work-items/{conflict_task_id}",
+            headers=operator,
+        )
+        assert dedicated_task.status_code == 200, dedicated_task.text
+        assert dedicated_task.json()["decision_allowed"] is False
+        assert dedicated_task.json()["decision_blockers"] == ["DEDICATED_WORKFLOW_REQUIRED"]
+        stale_resolution = client.post(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
+            headers=operator,
+            json={
+                "selected_observation_id": observation_ids[0],
+                "resolution_reason": "A stale screen must not resolve the conflict",
+                "expected_conflict_updated_at": "2026-01-01T00:00:00Z",
+                "expected_task_updated_at": independent_review.json()["task_updated_at"],
+            },
+        )
+        assert stale_resolution.status_code == 409
+        stale_task_resolution = client.post(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
+            headers=operator,
+            json={
+                "selected_observation_id": observation_ids[0],
+                "resolution_reason": "A stale task version must not resolve the conflict",
+                "expected_conflict_updated_at": independent_review.json()["conflict_updated_at"],
+                "expected_task_updated_at": "2026-01-01T00:00:00Z",
+            },
+        )
+        assert stale_task_resolution.status_code == 409
+        resolved_conflict = client.post(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}/resolve",
+            headers=operator,
+            json={
+                "selected_observation_id": observation_ids[0],
                 "resolution_reason": "Reviewer checked the native table against the signed source",
+                "expected_conflict_updated_at": independent_review.json()["conflict_updated_at"],
+                "expected_task_updated_at": independent_review.json()["task_updated_at"],
             },
         )
         assert resolved_conflict.status_code == 200, resolved_conflict.text
         assert resolved_conflict.json()["conflict"]["status"] == "VERIFIED"
         assert resolved_conflict.json()["verified_observation"]["status"] == "VERIFIED"
+        resolved_observation_id = resolved_conflict.json()["verified_observation"]["observation_id"]
+        with create_session_factory(engine)() as session:
+            resolved_observation = session.get(ObservationRow, resolved_observation_id)
+            assert resolved_observation is not None
+            assert resolved_observation.payload == {
+                "observation": resolved_conflict.json()["verified_observation"],
+                "source_observation_ids": [observation_ids[0]],
+                "conflict_id": conflict_id,
+                "derivation_type": "CONFLICT_RESOLUTION",
+                "basis_type": "NORMALIZED_PRICE",
+                "unit_rate": "125.50",
+                "currency": "RUB",
+                "unit": "m",
+            }
+        resolved_review = client.get(
+            f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
+            headers=operator,
+        )
+        assert resolved_review.status_code == 200, resolved_review.text
+        assert resolved_review.json()["task_status"] == "APPROVED"
+        assert "CONFLICT_NOT_OPEN" in resolved_review.json()["resolution_blockers"]
+        workbench_after_resolution = client.get(
+            f"/v1/projects/{project['id']}/workbench",
+            headers=operator,
+        )
+        assert workbench_after_resolution.status_code == 200
+        conflict_metric = next(
+            metric
+            for metric in workbench_after_resolution.json()["metrics"]
+            if metric["code"] == "CONFLICTS"
+        )
+        assert conflict_metric == {
+            "code": "CONFLICTS",
+            "label": "Unresolved conflicts",
+            "value": 0,
+            "blocking": 0,
+        }
 
         approve_version(
             "approval_policy",

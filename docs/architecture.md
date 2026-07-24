@@ -68,9 +68,10 @@ Nothing crosses a boundary merely because a model reports high confidence.
   calibration examples; predictions are never recycled as facts.
 - `operator_ui`: OIDC Authorization Code + PKCE browser client, role-filtered
   portfolio/work-queue/workbench/record read models, visible release hard
-  stops, exact-manifest four-eyes document-set confirmation, safe same-origin
-  navigation, and backend-enforced information barriers. The UI is never a
-  policy or authorization boundary.
+  stops, exact-manifest four-eyes document-set confirmation, source-level
+  conflict resolution with dual optimistic locks, safe same-origin navigation,
+  and backend-enforced information barriers. The UI is never a policy or
+  authorization boundary.
 - `integration`: deterministic signed snapshot/audit packages; a transactional
   outbox with stable external delivery identity; qualification-bound Ed25519
   event/receipt envelopes; immutable delivery attempts and inbound messages;

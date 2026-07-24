@@ -64,8 +64,16 @@ current.
 
 Conflicting extraction values are not merged. A persisted conflict creates a
 mandatory reviewer task; resolution must select one of the conflicting source
-observations, be performed by someone other than that observation's author,
-and creates a new verified derived observation with recursive lineage.
+observations, be performed by someone other than that observation's author and
+the task creator, and bind the exact conflict and task timestamps. The generic
+approval command cannot close the dedicated task. All source adapter
+qualifications, service identities and distinct independence domains are
+revalidated at decision time. A successful resolution creates a new verified
+derived observation with recursive lineage. A normalized-price source must
+reproduce a finite positive rate, unit and ISO currency; those commercial basis
+fields remain on the derived observation while `CONFLICT_RESOLUTION` is stored
+separately as the derivation type. `VERIFIED` is also the sole status used by
+release and operator blocker counts.
 
 ## Residual risks
 

@@ -33,6 +33,8 @@ const decisionLabels: Record<ApprovalDecision, string> = {
 
 const blockerLabels: Record<string, string> = {
   TASK_NOT_PENDING: "Задача уже завершена и не может быть решена повторно.",
+  DEDICATED_WORKFLOW_REQUIRED:
+    "Для этой задачи требуется специализированная проверка исходных данных.",
   FOUR_EYES_TASK_CREATOR:
     "Создатель обязательной задачи не может принять решение по ней.",
   FOUR_EYES_CHANGE_AUTHOR:
@@ -272,6 +274,27 @@ export function TaskDetailPage({
           </div>
         </section>
       )}
+
+      {detail.item.task_type === "CONFLICT_RESOLUTION" &&
+        detail.item.entity_type === "evidence_conflict" && (
+          <section className="dedicated-workflow-callout">
+            <div>
+              <p className="eyebrow">Специализированный workflow</p>
+              <h2>Сравнить исходные наблюдения</h2>
+              <p>
+                Универсальное утверждение запрещено: нужно выбрать конкретное
+                исходное значение с проверкой его provenance и версии конфликта.
+              </p>
+            </div>
+            <Link
+              className="button button--primary"
+              to={`/projects/${encodeURIComponent(detail.item.project_id)}/conflicts/${encodeURIComponent(detail.item.entity_id)}/resolve`}
+            >
+              Открыть разрешение конфликта
+              <Icon name="arrow" size={15} />
+            </Link>
+          </section>
+        )}
 
       {detail.decision_allowed && (
         <form className="decision-form" onSubmit={submit}>

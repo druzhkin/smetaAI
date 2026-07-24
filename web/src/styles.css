@@ -972,6 +972,34 @@ kbd,
   line-height: 1.5;
 }
 
+.dedicated-workflow-callout {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px;
+  margin-top: 16px;
+  background: #edf2ef;
+  border: 1px solid #b8c7c0;
+}
+
+.dedicated-workflow-callout h2 {
+  margin-bottom: 5px;
+  font-size: 17px;
+}
+
+.dedicated-workflow-callout p:not(.eyebrow) {
+  max-width: 720px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.dedicated-workflow-callout .button {
+  flex: none;
+}
+
 .decision-form {
   padding: 20px;
   background: var(--paper);
@@ -1280,6 +1308,174 @@ kbd,
   overflow-wrap: anywhere;
   font-family: monospace;
   font-size: 9px;
+}
+
+.conflict-summary {
+  padding: 22px;
+  margin-top: 28px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+
+.conflict-summary__header {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 18px;
+}
+
+.conflict-summary__header h2 {
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+  font-family: monospace;
+  font-size: 16px;
+}
+
+.conflict-summary__header p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.conflict-resolution-result {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  margin-top: 14px;
+  background: #edf2ef;
+  border: 1px solid #b8c7c0;
+}
+
+.conflict-resolution-result strong {
+  font-size: 11px;
+}
+
+.conflict-resolution-result span {
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.conflict-resolution-result pre {
+  padding: 10px;
+  margin: 0;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.conflict-observations {
+  margin-top: 28px;
+}
+
+.conflict-observation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.conflict-observation-card {
+  display: grid;
+  min-width: 0;
+  gap: 13px;
+  padding: 16px;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+}
+
+.conflict-observation-card:hover {
+  border-color: var(--forest-bright);
+}
+
+.conflict-observation-card.is-selected {
+  background: #eef3ef;
+  border-color: var(--forest-bright);
+  box-shadow: inset 4px 0 var(--forest-bright);
+}
+
+.conflict-observation-card.is-disabled {
+  cursor: not-allowed;
+  background: #f2f0ec;
+}
+
+.conflict-observation-card__choice {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 3px 8px;
+  align-items: center;
+}
+
+.conflict-observation-card__choice input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--forest-bright);
+}
+
+.conflict-observation-card__choice span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.conflict-observation-card__choice small {
+  grid-column: 2;
+  font-size: 9px;
+  color: var(--danger-dark);
+}
+
+.conflict-observation-card__value {
+  min-height: 64px;
+  padding: 13px;
+  margin: 0;
+  overflow: auto;
+  font-family: monospace;
+  font-size: 15px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.conflict-observation-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.conflict-observation-card dl > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.conflict-observation-card dt {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.conflict-observation-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.conflict-observation-card > code {
+  overflow-wrap: anywhere;
+  font-size: 9px;
+  color: var(--ink-muted);
 }
 
 .entry-form__intro {
@@ -2715,13 +2911,25 @@ kbd,
 
   .entry-form,
   .upload-receipt,
-  .document-set-summary {
+  .document-set-summary,
+  .conflict-summary {
     padding: 15px;
   }
 
   .upload-receipt__header,
-  .document-set-summary__header {
+  .document-set-summary__header,
+  .conflict-summary__header,
+  .dedicated-workflow-callout {
     flex-direction: column;
+  }
+
+  .conflict-observation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .conflict-observation-card dl > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 
   .decision-form__actions {

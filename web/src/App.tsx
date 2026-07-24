@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "./auth";
 import { AppShell } from "./components/AppShell";
 import { LoadingBlock } from "./components/Feedback";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
+import { ConflictResolvePage } from "./pages/ConflictResolvePage";
 import { DocumentSetConfirmPage } from "./pages/DocumentSetConfirmPage";
 import { DocumentUploadPage } from "./pages/DocumentUploadPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -98,6 +99,28 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
       }
       const rawSection = parts[2];
       if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 5 &&
+        rawSection === "conflicts" &&
+        parts[4] === "resolve"
+      ) {
+        let conflictId: string | null = null;
+        try {
+          conflictId = decodeURIComponent(parts[3] ?? "");
+        } catch {
+          conflictId = null;
+        }
+        if (conflictId !== null && conflictId !== "") {
+          page = (
+            <ConflictResolvePage
+              config={config}
+              projectId={projectId}
+              conflictId={conflictId}
+            />
+          );
+        }
+      } else if (
         projectId !== null &&
         projectId !== "" &&
         parts.length === 5 &&

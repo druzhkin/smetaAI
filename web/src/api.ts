@@ -1,8 +1,10 @@
 import type {
   ApprovalDecision,
   ApprovalDecisionResult,
-  DocumentSetView,
   ApprovalState,
+  ConflictResolutionResult,
+  ConflictReview,
+  DocumentSetView,
   ProjectPortfolioPage,
   ProjectRecordPage,
   ProjectRecordSection,
@@ -263,6 +265,47 @@ export function decideWorkItem(
         expected_task_updated_at: input.expectedTaskUpdatedAt,
         evidence_ids: input.evidenceIds,
         related_change_ids: input.relatedChangeIds ?? [],
+      },
+    },
+  );
+}
+
+export function getConflictReview(
+  context: RequestContext,
+  projectId: string,
+  conflictId: string,
+  signal?: AbortSignal,
+): Promise<ConflictReview> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/evidence/conflicts/${encodeURIComponent(conflictId)}`,
+    undefined,
+    signal,
+  );
+}
+
+export function resolveConflict(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    conflictId: string;
+    selectedObservationId: string;
+    resolutionReason: string;
+    expectedConflictUpdatedAt: string;
+    expectedTaskUpdatedAt: string;
+    idempotencyKey: string;
+  },
+): Promise<ConflictResolutionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/evidence/conflicts/${encodeURIComponent(input.conflictId)}/resolve`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        selected_observation_id: input.selectedObservationId,
+        resolution_reason: input.resolutionReason,
+        expected_conflict_updated_at: input.expectedConflictUpdatedAt,
+        expected_task_updated_at: input.expectedTaskUpdatedAt,
       },
     },
   );

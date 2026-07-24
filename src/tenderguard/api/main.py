@@ -110,6 +110,7 @@ from .schemas import (
     CompareActualRequest,
     ConfirmDocumentSetRequest,
     ConflictResolutionResponse,
+    ConflictReviewResponse,
     ContractTermResponse,
     ContractTermValidationResponse,
     ContractValidationResponse,
@@ -1545,8 +1546,8 @@ def create_app(
         response_model=ConflictResolutionResponse,
     )
     def resolve_evidence_conflict(
-        project_id: str,
-        conflict_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        conflict_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: ResolveConflictRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -1561,6 +1562,23 @@ def create_app(
                 request_id=request.state.request_id,
             )
         return ConflictResolutionResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/evidence/conflicts/{conflict_id}",
+        response_model=ConflictReviewResponse,
+    )
+    def get_evidence_conflict(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        conflict_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ConflictReviewResponse:
+        result = evidence_service(session).conflict_review(
+            actor=actor,
+            project_id=project_id,
+            conflict_id=conflict_id,
+        )
+        return ConflictReviewResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/passport/facts",

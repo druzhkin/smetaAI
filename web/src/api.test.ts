@@ -4,6 +4,7 @@ import {
   confirmDocumentSet,
   createProject,
   decideWorkItem,
+  resolveConflict,
   uploadDocument,
   type RequestContext,
 } from "./api";
@@ -177,6 +178,48 @@ describe("controlled mutations", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       candidate_document_set_revision_id: "document-set-1",
       reason: "Independently reconciled the revision register",
+    });
+  });
+
+  it("binds conflict resolution to conflict and task versions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          conflict: { conflict_id: "conflict-1", status: "VERIFIED" },
+          verified_observation: { observation_id: "observation-derived" },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await resolveConflict(context, {
+      projectId: "project-1",
+      conflictId: "conflict-1",
+      selectedObservationId: "observation-2",
+      resolutionReason: "Native table checked against signed source",
+      expectedConflictUpdatedAt: "2026-07-24T18:00:00Z",
+      expectedTaskUpdatedAt: "2026-07-24T18:00:01Z",
+      idempotencyKey: "conflict-operation-1",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe(
+      "/v1/projects/project-1/evidence/conflicts/conflict-1/resolve",
+    );
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer test-token",
+      "Idempotency-Key": "conflict-operation-1",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      selected_observation_id: "observation-2",
+      resolution_reason: "Native table checked against signed source",
+      expected_conflict_updated_at: "2026-07-24T18:00:00Z",
+      expected_task_updated_at: "2026-07-24T18:00:01Z",
     });
   });
 });
