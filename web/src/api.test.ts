@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyQuantityManualChange,
   confirmDocumentSet,
   createProject,
   decideWorkItem,
+  proposeQuantityChange,
   resolveConflict,
   uploadDocument,
   type RequestContext,
@@ -220,6 +222,90 @@ describe("controlled mutations", () => {
       resolution_reason: "Native table checked against signed source",
       expected_conflict_updated_at: "2026-07-24T18:00:00Z",
       expected_task_updated_at: "2026-07-24T18:00:01Z",
+    });
+  });
+
+  it("submits and applies an exact governed quantity revision", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            change_id: "manual-change-1",
+            status: "PENDING_APPROVAL",
+          }),
+          {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            quantity: { quantity_id: "quantity-2" },
+            validation: { passed: true },
+          }),
+          {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const submission = {
+      draft: {
+        value: "101.25",
+        unit: "m",
+        source_observation_ids: ["observation-2"],
+        source_priority: 1,
+        rounding_scale: 2,
+        waste_factor: "0",
+        alternative_quantity_ids: [],
+        manual_change_id: null,
+      },
+      formula: null,
+      formula_input_observation_ids: {},
+    };
+
+    await proposeQuantityChange(context, {
+      projectId: "project/1",
+      lineId: "line/1",
+      submission,
+      reason: "Corrected from independently verified source",
+      idempotencyKey: "quantity-proposal-operation",
+    });
+    await applyQuantityManualChange(context, {
+      projectId: "project/1",
+      changeId: "manual-change/1",
+      reason: "Apply the exact independently approved after-state",
+      idempotencyKey: "quantity-apply-operation",
+    });
+
+    const [proposalUrl, proposalInit] = fetchMock.mock.calls[0] as [
+      URL,
+      RequestInit,
+    ];
+    expect(proposalUrl.pathname).toBe(
+      "/v1/projects/project%2F1/boq/lines/line%2F1/quantity-change-proposals",
+    );
+    expect(proposalInit.headers).toMatchObject({
+      "Idempotency-Key": "quantity-proposal-operation",
+    });
+    expect(JSON.parse(String(proposalInit.body))).toEqual({
+      submission,
+      reason: "Corrected from independently verified source",
+    });
+
+    const [applyUrl, applyInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(applyUrl.pathname).toBe(
+      "/v1/projects/project%2F1/manual-changes/manual-change%2F1/apply",
+    );
+    expect(applyInit.headers).toMatchObject({
+      "Idempotency-Key": "quantity-apply-operation",
+    });
+    expect(JSON.parse(String(applyInit.body))).toEqual({
+      reason: "Apply the exact independently approved after-state",
     });
   });
 });

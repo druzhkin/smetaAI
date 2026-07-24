@@ -147,6 +147,10 @@ export function TaskDetailPage({
 
   const detail = query.data;
   const entitySection = sectionForEntity(detail.item.entity_type);
+  const entityHref =
+    detail.item.entity_type === "manual_change"
+      ? `/projects/${encodeURIComponent(detail.item.project_id)}/manual-changes/${encodeURIComponent(detail.item.entity_id)}`
+      : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
   const evidenceIds = parseIdentifierList(draft.evidenceText);
   const validationError = validateDecisionDraft(draft, detail.project.code);
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -221,11 +225,10 @@ export function TaskDetailPage({
             <p className="eyebrow">Неизменяемый контекст</p>
             <h2 id="task-context-title">Что именно проверяется</h2>
           </div>
-          <Link
-            className="text-link"
-            to={`/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`}
-          >
-            Открыть связанный реестр
+          <Link className="text-link" to={entityHref}>
+            {detail.item.entity_type === "manual_change"
+              ? "Открыть точные before / after"
+              : "Открыть связанный реестр"}
             <Icon name="arrow" size={14} />
           </Link>
         </div>
@@ -291,6 +294,25 @@ export function TaskDetailPage({
               to={`/projects/${encodeURIComponent(detail.item.project_id)}/conflicts/${encodeURIComponent(detail.item.entity_id)}/resolve`}
             >
               Открыть разрешение конфликта
+              <Icon name="arrow" size={15} />
+            </Link>
+          </section>
+        )}
+
+      {detail.item.task_type === "MANUAL_CHANGE" &&
+        detail.item.entity_type === "manual_change" && (
+          <section className="dedicated-workflow-callout">
+            <div>
+              <p className="eyebrow">Обязательная сверка изменения</p>
+              <h2>Сравнить точные состояния до и после</h2>
+              <p>
+                Решение должно относиться к неизменяемой after-записи,
+                конкретной версии методики, комплекту документов и указанным
+                наблюдениям. Не утверждайте задачу только по краткому названию.
+              </p>
+            </div>
+            <Link className="button button--primary" to={entityHref}>
+              Открыть before / after
               <Icon name="arrow" size={15} />
             </Link>
           </section>

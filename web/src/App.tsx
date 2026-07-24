@@ -13,6 +13,8 @@ import { LoginPage } from "./pages/LoginPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ProjectCreatePage } from "./pages/ProjectCreatePage";
 import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
+import { QuantityChangeProposePage } from "./pages/QuantityChangeProposePage";
+import { QuantityManualChangePage } from "./pages/QuantityManualChangePage";
 import { RecordsPage } from "./pages/RecordsPage";
 import { TaskDetailPage } from "./pages/TaskDetailPage";
 import { TaskQueuePage } from "./pages/TaskQueuePage";
@@ -99,6 +101,49 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
       }
       const rawSection = parts[2];
       if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 5 &&
+        rawSection === "boq-lines" &&
+        parts[4] === "quantity-change"
+      ) {
+        let lineId: string | null = null;
+        try {
+          lineId = decodeURIComponent(parts[3] ?? "");
+        } catch {
+          lineId = null;
+        }
+        if (lineId !== null && lineId !== "") {
+          page = (
+            <QuantityChangeProposePage
+              config={config}
+              projectId={projectId}
+              lineId={lineId}
+            />
+          );
+        }
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "manual-changes"
+      ) {
+        let changeId: string | null = null;
+        try {
+          changeId = decodeURIComponent(parts[3] ?? "");
+        } catch {
+          changeId = null;
+        }
+        if (changeId !== null && changeId !== "") {
+          page = (
+            <QuantityManualChangePage
+              config={config}
+              projectId={projectId}
+              changeId={changeId}
+            />
+          );
+        }
+      } else if (
         projectId !== null &&
         projectId !== "" &&
         parts.length === 5 &&

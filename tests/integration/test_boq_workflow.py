@@ -2,6 +2,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+from sqlalchemy import select
+
+from tenderguard.application.approvals import (
+    ApprovalDecisionCommand,
+    ApprovalService,
+)
 from tenderguard.application.boq import (
     BoqLineDraft,
     BoqService,
@@ -13,6 +20,7 @@ from tenderguard.application.projects import ProjectService
 from tenderguard.config import Settings
 from tenderguard.domain.enums import (
     ActorRole,
+    ApprovalDecision,
     ApprovalState,
     CostBasisKind,
     CostCategory,
@@ -33,6 +41,7 @@ from tenderguard.infrastructure.orm import (
     ObservationRow,
     ProjectControlledVersionRow,
     ProjectRow,
+    QuantityManualChangeApplicationRow,
     QuantityRow,
 )
 from tests.integration.support import project_memberships
@@ -65,6 +74,7 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                 code="BOQ-1",
                 name="BoQ workflow",
                 state=ApprovalState.BOQ_IN_PROGRESS.value,
+                current_document_set_revision_id="document-set-boq",
                 row_version=1,
                 created_at=now,
                 updated_at=now,
@@ -107,6 +117,27 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                 approved_at=now,
             ),
             ControlledVersionRow(
+                id="manual-change-policy-v1",
+                kind="manual_change_policy",
+                version_label="1",
+                content_hash="d" * 64,
+                status="APPROVED",
+                payload={
+                    "policy": {
+                        "rules": [
+                            {
+                                "entity_type": "quantity",
+                                "field_name": "record",
+                                "critical": True,
+                                "assigned_role": "REVIEWER",
+                            }
+                        ]
+                    }
+                },
+                approved_by="methodology-owner",
+                approved_at=now,
+            ),
+            ControlledVersionRow(
                 id="scope-rules-v1",
                 kind="scope_rules",
                 version_label="1",
@@ -133,7 +164,12 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
         session.add_all(versions)
         for version, purpose in zip(
             versions,
-            ("quantity_policy", "quantity_formula_rules", "scope_rules"),
+            (
+                "quantity_policy",
+                "quantity_formula_rules",
+                "manual_change_policy",
+                "scope_rules",
+            ),
             strict=True,
         ):
             session.add(
@@ -241,27 +277,149 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
         )
         assert not invalid.validation.passed
 
-        corrected = service.record_quantity(
+        quantity_change_context = service.quantity_change_context(
             actor=estimator,
             project_id="project-boq",
             line_id=line.line_id,
-            submission=QuantitySubmission(
-                draft=QuantityDraft(
-                    value=Decimal("100"),
-                    unit="m",
-                    source_observation_ids=("observation-length",),
-                    source_priority=1,
-                    rounding_scale=2,
-                    waste_factor=Decimal("0"),
-                ),
-                formula=formula,
-                formula_input_observation_ids={"length": "observation-length"},
+        )
+        assert quantity_change_context.current_quantity_id == invalid.quantity.quantity_id
+        assert quantity_change_context.current_quantity_status is VerificationStatus.CONFLICT
+        assert quantity_change_context.quantity_formula_rules_version_id == ("quantity-formulas-v1")
+        assert quantity_change_context.critical is True
+        assert quantity_change_context.approval_role is ActorRole.REVIEWER
+
+        corrected_submission = QuantitySubmission(
+            draft=QuantityDraft(
+                value=Decimal("100"),
+                unit="m",
+                source_observation_ids=("observation-length",),
+                source_priority=1,
+                rounding_scale=2,
+                waste_factor=Decimal("0"),
             ),
+            formula=formula,
+            formula_input_observation_ids={"length": "observation-length"},
+        )
+        with pytest.raises(ValueError, match="registered manual change"):
+            service.record_quantity(
+                actor=estimator,
+                project_id="project-boq",
+                line_id=line.line_id,
+                submission=corrected_submission,
+                request_id="request-unregistered-correction",
+                reason="An unregistered correction must fail closed",
+            )
+        proposal = service.propose_quantity_manual_change(
+            actor=estimator,
+            project_id="project-boq",
+            line_id=line.line_id,
+            submission=corrected_submission,
+            request_id="request-propose-quantity-change",
+            reason="Correct after independent formula check",
+        )
+        assert proposal.status == "PENDING_APPROVAL"
+        assert proposal.critical is True
+        assert proposal.approval_task_id is not None
+        assert proposal.approval_task_updated_at is not None
+        retried_proposal = service.propose_quantity_manual_change(
+            actor=estimator,
+            project_id="project-boq",
+            line_id=line.line_id,
+            submission=corrected_submission,
+            request_id="request-retry-quantity-change",
+            reason="Correct after independent formula check",
+        )
+        assert retried_proposal.change_id == proposal.change_id
+        pending_submission = QuantitySubmission(
+            draft=corrected_submission.draft.model_copy(
+                update={"manual_change_id": proposal.change_id}
+            ),
+            formula=corrected_submission.formula,
+            formula_input_observation_ids=(corrected_submission.formula_input_observation_ids),
+        )
+        with pytest.raises(
+            ValueError,
+            match="Critical quantity change approval task is incomplete",
+        ):
+            service.record_quantity(
+                actor=estimator,
+                project_id="project-boq",
+                line_id=line.line_id,
+                submission=pending_submission,
+                request_id="request-apply-unapproved-change",
+                reason="An unapproved critical change must fail closed",
+            )
+        project = session.get(ProjectRow, "project-boq")
+        assert project is not None
+        project.current_document_set_revision_id = "superseding-document-set"
+        with pytest.raises(
+            ValueError,
+            match="no longer matches current controlled context",
+        ):
+            service.record_quantity(
+                actor=estimator,
+                project_id="project-boq",
+                line_id=line.line_id,
+                submission=pending_submission,
+                request_id="request-apply-stale-change",
+                reason="A proposal for a superseded document set must fail closed",
+            )
+        project.current_document_set_revision_id = "document-set-boq"
+        ApprovalService(
+            session=session,
+            settings=settings,
+            object_store=store,
+        ).decide(
+            actor=reviewer,
+            project_id="project-boq",
+            task_id=proposal.approval_task_id,
+            command=ApprovalDecisionCommand(
+                decision=ApprovalDecision.APPROVED,
+                reason="Checked the formula and exact source observation",
+                expected_task_updated_at=proposal.approval_task_updated_at,
+                evidence_ids=("observation-length",),
+            ),
+            request_id="request-approve-quantity-change",
+        )
+        approved = service.quantity_manual_change_review(
+            actor=reviewer,
+            project_id="project-boq",
+            change_id=proposal.change_id,
+        )
+        assert approved.status == "APPROVED"
+        corrected = service.apply_quantity_manual_change(
+            actor=estimator,
+            project_id="project-boq",
+            change_id=proposal.change_id,
             request_id="request-quantity-corrected",
             reason="Correct after independent formula check",
         )
         assert corrected.validation.passed
         assert corrected.supersedes_quantity_id == invalid.quantity.quantity_id
+        applied = service.quantity_manual_change_review(
+            actor=reviewer,
+            project_id="project-boq",
+            change_id=proposal.change_id,
+        )
+        assert applied.status == "APPLIED"
+        assert applied.applied_quantity_id == corrected.quantity.quantity_id
+        assert (
+            session.scalar(
+                select(QuantityManualChangeApplicationRow).where(
+                    QuantityManualChangeApplicationRow.manual_change_id == proposal.change_id
+                )
+            )
+            is not None
+        )
+        with pytest.raises(ValueError, match="already been applied"):
+            service.record_quantity(
+                actor=estimator,
+                project_id="project-boq",
+                line_id=line.line_id,
+                submission=pending_submission,
+                request_id="request-reuse-applied-change",
+                reason="A consumed change cannot be reused",
+            )
         current_rows = list(
             session.query(QuantityRow)
             .filter(QuantityRow.boq_line_id == line.line_id)
@@ -288,6 +446,41 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
             settings=settings,
             object_store=store,
         ).evaluate_release(actor=reviewer, project_id="project-boq")
+        manual_change_release = next(
+            record
+            for record in release_context.critical_manual_changes
+            if record.change_id == proposal.change_id
+        )
+        assert manual_change_release.changed_by == estimator.actor_id
+        assert manual_change_release.approved_by == reviewer.actor_id
+        application = session.scalar(
+            select(QuantityManualChangeApplicationRow).where(
+                QuantityManualChangeApplicationRow.manual_change_id == proposal.change_id
+            )
+        )
+        assert application is not None
+        application.payload = {
+            **application.payload,
+            "approval_id": "unrelated-approval",
+        }
+        integrity_view = service.quantity_manual_change_review(
+            actor=reviewer,
+            project_id="project-boq",
+            change_id=proposal.change_id,
+        )
+        assert integrity_view.status == "BLOCKED_INTEGRITY"
+        tampered_release_context = ProjectService(
+            session=session,
+            settings=settings,
+            object_store=store,
+        ).evaluate_release(actor=reviewer, project_id="project-boq")
+        tampered_manual_change = next(
+            record
+            for record in tampered_release_context.critical_manual_changes
+            if record.change_id == proposal.change_id
+        )
+        assert tampered_manual_change.approved_by is None
+        assert tampered_manual_change.approval_id is None
         assert set(release_context.blocking_contour_finding_ids) >= {
             finding.finding_id for finding in scope_result.evaluation.findings
         }

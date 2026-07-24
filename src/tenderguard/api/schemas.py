@@ -24,7 +24,9 @@ from tenderguard.application.audit_integrity import (
 from tenderguard.application.boq import (
     BoqLineDraft,
     BoqLineView,
+    QuantityChangeContextView,
     QuantityExecutionResult,
+    QuantityManualChangeView,
     QuantitySubmission,
     ScopeRunResult,
 )
@@ -311,6 +313,23 @@ class RecordQuantityRequest(ApiModel):
 
 
 class QuantityExecutionResponse(QuantityExecutionResult):
+    pass
+
+
+class QuantityChangeContextResponse(QuantityChangeContextView):
+    pass
+
+
+class ProposeQuantityManualChangeRequest(ApiModel):
+    submission: QuantitySubmission
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ApplyQuantityManualChangeRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class QuantityManualChangeResponse(QuantityManualChangeView):
     pass
 
 

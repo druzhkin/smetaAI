@@ -88,6 +88,7 @@ from .schemas import (
     ActualComparisonResponse,
     ActualRecordResponse,
     AdapterQualificationResponse,
+    ApplyQuantityManualChangeRequest,
     ApprovalDecisionResponse,
     ApprovalPlanResponse,
     ApproveCalibrationRequest,
@@ -150,7 +151,10 @@ from .schemas import (
     ProposeAnalogueRequest,
     ProposeCommercialCostModelRequest,
     ProposeContractCostImpactRequest,
+    ProposeQuantityManualChangeRequest,
+    QuantityChangeContextResponse,
     QuantityExecutionResponse,
+    QuantityManualChangeResponse,
     QuarantinedUploadResponse,
     ReadinessResponse,
     ReceiveIntegrationMessageRequest,
@@ -1707,6 +1711,87 @@ def create_app(
                 project_id=project_id,
                 line_id=line_id,
                 submission=payload.submission,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return QuantityExecutionResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/boq/lines/{line_id}/quantity-change-context",
+        response_model=QuantityChangeContextResponse,
+    )
+    def get_quantity_change_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        line_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuantityChangeContextResponse:
+        result = boq_service(session).quantity_change_context(
+            actor=actor,
+            project_id=project_id,
+            line_id=line_id,
+        )
+        return QuantityChangeContextResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/boq/lines/{line_id}/quantity-change-proposals",
+        response_model=QuantityManualChangeResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def propose_quantity_manual_change(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        line_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: ProposeQuantityManualChangeRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuantityManualChangeResponse:
+        with mutation_transaction(session):
+            result = boq_service(session).propose_quantity_manual_change(
+                actor=actor,
+                project_id=project_id,
+                line_id=line_id,
+                submission=payload.submission,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return QuantityManualChangeResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/manual-changes/{change_id}",
+        response_model=QuantityManualChangeResponse,
+    )
+    def get_quantity_manual_change(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        change_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuantityManualChangeResponse:
+        result = boq_service(session).quantity_manual_change_review(
+            actor=actor,
+            project_id=project_id,
+            change_id=change_id,
+        )
+        return QuantityManualChangeResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/manual-changes/{change_id}/apply",
+        response_model=QuantityExecutionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def apply_quantity_manual_change(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        change_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: ApplyQuantityManualChangeRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuantityExecutionResponse:
+        with mutation_transaction(session):
+            result = boq_service(session).apply_quantity_manual_change(
+                actor=actor,
+                project_id=project_id,
+                change_id=change_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )

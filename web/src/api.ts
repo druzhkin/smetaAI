@@ -10,6 +10,10 @@ import type {
   ProjectRecordSection,
   ProjectView,
   ProjectWorkbench,
+  QuantityChangeContext,
+  QuantityExecution,
+  QuantityManualChange,
+  QuantitySubmission,
   QuarantinedUpload,
   WorkItemPage,
   WorkItemDetail,
@@ -443,5 +447,75 @@ export function listRecords(
       limit: options.limit ?? 50,
     },
     signal,
+  );
+}
+
+export function getQuantityChangeContext(
+  context: RequestContext,
+  projectId: string,
+  lineId: string,
+  signal?: AbortSignal,
+): Promise<QuantityChangeContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/boq/lines/${encodeURIComponent(lineId)}/quantity-change-context`,
+    undefined,
+    signal,
+  );
+}
+
+export function proposeQuantityChange(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    lineId: string;
+    submission: QuantitySubmission;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<QuantityManualChange> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/lines/${encodeURIComponent(input.lineId)}/quantity-change-proposals`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        submission: input.submission,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getQuantityManualChange(
+  context: RequestContext,
+  projectId: string,
+  changeId: string,
+  signal?: AbortSignal,
+): Promise<QuantityManualChange> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/manual-changes/${encodeURIComponent(changeId)}`,
+    undefined,
+    signal,
+  );
+}
+
+export function applyQuantityManualChange(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    changeId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<QuantityExecution> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/manual-changes/${encodeURIComponent(input.changeId)}/apply`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: { reason: input.reason },
+    },
   );
 }

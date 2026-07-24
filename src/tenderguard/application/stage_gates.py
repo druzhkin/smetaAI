@@ -16,12 +16,14 @@ from tenderguard.infrastructure.orm import (
     CommercialCostModelRow,
     ContractTermRow,
     ControlledVersionRow,
+    ManualChangeRow,
     NomenclatureMatchRow,
     NormativeCalculationRow,
     PriceDecisionRow,
     ProjectControlledVersionRow,
     ProjectPassportFactRow,
     ProjectRow,
+    QuantityManualChangeApplicationRow,
     QuantityRow,
     RiskCalculationRow,
     RiskItemRow,
@@ -122,6 +124,25 @@ def boq_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:
     )
     if quantity_policy is None:
         blockers.append("quantity-policy:missing")
+    applied_manual_change_ids = set(
+        session.scalars(
+            select(QuantityManualChangeApplicationRow.manual_change_id).where(
+                QuantityManualChangeApplicationRow.project_id == project_id
+            )
+        )
+    )
+    blockers.extend(
+        f"manual-change:{change.id}:unapplied"
+        for change in session.scalars(
+            select(ManualChangeRow).where(
+                ManualChangeRow.project_id == project_id,
+                ManualChangeRow.entity_type == "quantity",
+                ManualChangeRow.field_name == "record",
+            )
+        )
+        if change.payload.get("lifecycle_version") == "quantity-manual-change-v1"
+        and change.id not in applied_manual_change_ids
+    )
     return tuple(sorted(blockers))
 
 

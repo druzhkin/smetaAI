@@ -77,6 +77,7 @@ from tenderguard.infrastructure.orm import (
     ProjectMembershipRow,
     ProjectPassportFactRow,
     ProjectRow,
+    QuantityManualChangeApplicationRow,
     QuantityRow,
     QuarantinedUploadRow,
     ReleaseDecisionRow,
@@ -1600,6 +1601,22 @@ class ProjectService:
                 )
             )
         )
+        manual_change_applications = {
+            row.manual_change_id: row
+            for row in self.session.scalars(
+                select(QuantityManualChangeApplicationRow).where(
+                    QuantityManualChangeApplicationRow.project_id == project.id
+                )
+            )
+        }
+        changes = [
+            change
+            for change in changes
+            if (
+                change.payload.get("lifecycle_version") != "quantity-manual-change-v1"
+                or change.id in manual_change_applications
+            )
+        ]
         approval_records = list(
             self.session.scalars(
                 select(ApprovalRecordRow)
@@ -1607,17 +1624,85 @@ class ProjectService:
                 .where(ApprovalTaskRow.project_id == project.id)
             )
         )
+        approval_tasks = {
+            row.id: row
+            for row in self.session.scalars(
+                select(ApprovalTaskRow).where(ApprovalTaskRow.project_id == project.id)
+            )
+        }
         four_eyes: list[FourEyesRecord] = []
         for change in changes:
-            approval = next(
-                (
-                    record
-                    for record in approval_records
-                    if change.id in record.payload.get("related_change_ids", [])
-                    and record.decision == "APPROVED"
-                ),
-                None,
-            )
+            if change.payload.get("lifecycle_version") == "quantity-manual-change-v1":
+                application = manual_change_applications.get(change.id)
+                approval_id = (
+                    application.payload.get("approval_id") if application is not None else None
+                )
+                approval = next(
+                    (
+                        record
+                        for record in approval_records
+                        if isinstance(approval_id, str) and record.id == approval_id
+                    ),
+                    None,
+                )
+                task = approval_tasks.get(approval.task_id) if approval is not None else None
+                expected_evidence_ids = change.payload.get("source_observation_ids")
+                approval_evidence_ids = (
+                    approval.payload.get("evidence_ids") if approval is not None else None
+                )
+                applied_quantity = (
+                    self.session.get(QuantityRow, application.quantity_id)
+                    if application is not None
+                    else None
+                )
+                applied_record = (
+                    applied_quantity.payload.get("record")
+                    if applied_quantity is not None
+                    and applied_quantity.boq_line_id == change.entity_id
+                    and applied_quantity.supersedes_quantity_id
+                    == change.payload.get("previous_quantity_id")
+                    else None
+                )
+                if (
+                    application is None
+                    or application.applied_by != change.changed_by
+                    or application.payload.get("manual_change_hash")
+                    != content_hash(change.payload)
+                    or application.payload.get("before_hash") != change.payload.get("before_hash")
+                    or application.payload.get("after_hash") != change.payload.get("after_hash")
+                    or application.payload.get("policy_version_id")
+                    != change.payload.get("policy_version_id")
+                    or not isinstance(applied_record, dict)
+                    or applied_record.get("manual_change_id") != change.id
+                    or approval is None
+                    or approval.decision != "APPROVED"
+                    or approval.decided_by == change.changed_by
+                    or approval.payload.get("related_change_ids") != [change.id]
+                    or not isinstance(expected_evidence_ids, list)
+                    or not all(isinstance(item, str) for item in expected_evidence_ids)
+                    or not isinstance(approval_evidence_ids, list)
+                    or not all(isinstance(item, str) for item in approval_evidence_ids)
+                    or len(approval_evidence_ids) != len(set(approval_evidence_ids))
+                    or sorted(approval_evidence_ids) != sorted(expected_evidence_ids)
+                    or task is None
+                    or task.id != change.payload.get("approval_task_id")
+                    or task.task_type != "MANUAL_CHANGE"
+                    or task.entity_type != "manual_change"
+                    or task.entity_id != change.id
+                    or not task.required
+                    or task.status != "APPROVED"
+                ):
+                    approval = None
+            else:
+                approval = next(
+                    (
+                        record
+                        for record in approval_records
+                        if change.id in record.payload.get("related_change_ids", [])
+                        and record.decision == "APPROVED"
+                    ),
+                    None,
+                )
             four_eyes.append(
                 FourEyesRecord(
                     change_id=change.id,

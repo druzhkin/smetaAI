@@ -116,6 +116,12 @@ The repository currently connects and integration-tests:
   locations, rejects the source author and conflict-task creator, binds both
   optimistic versions, preserves a validated normalized commercial basis, and
   creates a separately verified derived observation;
+- governed BoQ quantity correction that binds immutable before/after states to
+  the exact current quantity, confirmed document set, approved rules and
+  policy, and project-scoped observations; critical changes require an
+  independent policy-assigned approval, while only the original author may
+  apply the server-held after-state and every accepted application remains
+  linked to its approval and resulting quantity;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -171,7 +177,7 @@ Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
 schedulers/monitoring, remaining controlled extraction-correction,
-BoQ/pricing/calculation/reconciliation/release
+BoQ-structure/nomenclature/pricing/calculation/reconciliation/release
 surfaces, and business qualification of the operator interface remain to be
 completed.
 External verification also requires approved out-of-band

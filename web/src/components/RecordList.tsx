@@ -2,6 +2,7 @@ import {
   compactId,
   displayValue,
   formatDateTime,
+  formatDecimal,
   formatMoney,
 } from "../format";
 import type { ReactNode } from "react";
@@ -101,7 +102,7 @@ function RecordCard({
             <strong>
               {record.currency !== null
                 ? formatMoney(record.amount, record.currency)
-                : (record.amount ?? "—")}
+                : formatDecimal(record.amount)}
             </strong>
             {record.unit !== null && <span>за {record.unit}</span>}
           </div>

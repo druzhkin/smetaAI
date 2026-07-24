@@ -5,6 +5,7 @@ import {
   displayValue,
   formatBytes,
   formatDateTime,
+  formatDecimal,
   formatMoney,
 } from "./format";
 
@@ -19,6 +20,10 @@ describe("operator-safe formatting", () => {
       formatMoney("123456789012345678901234567890.123456", "RUB"),
     ).toContain("123 456 789 012 345 678 901 234 567 890,123456");
     expect(formatMoney("-10.250000000000", "USD")).toContain("-10,25");
+    expect(formatDecimal("100.000000000000")).toBe("100");
+    expect(formatDecimal("12345678901234567890.125000")).toContain(
+      "12 345 678 901 234 567 890,125",
+    );
     expect(formatBytes(524_288_000)).toBe("500 МиБ");
   });
 

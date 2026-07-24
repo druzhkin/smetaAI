@@ -47,6 +47,23 @@ export function formatMoney(
   return `${sign}${grouped}${fraction ? `,${fraction}` : ""} ${currencyLabel}`;
 }
 
+export function formatDecimal(value: string | null): string {
+  if (value === null) {
+    return "—";
+  }
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value);
+  if (match === null) {
+    return value;
+  }
+  const sign = match[1] === "-" ? "-" : "";
+  const integer = match[2] ?? "0";
+  const fraction = (match[3] ?? "").replace(/0+$/, "");
+  const grouped = new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 0,
+  }).format(BigInt(integer));
+  return `${sign}${grouped}${fraction ? `,${fraction}` : ""}`;
+}
+
 export function formatBytes(value: number): string {
   if (!Number.isSafeInteger(value) || value < 0) {
     return `${value} байт`;

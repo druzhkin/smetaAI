@@ -306,6 +306,91 @@ export interface ProjectWorkbench {
   generated_at: string;
 }
 
+export type QuantityOperation =
+  "SUM" | "PRODUCT" | "RECTANGULAR_VOLUME" | "CYLINDER_VOLUME";
+
+export interface QuantityFormula {
+  formula_id: string;
+  formula_version: string;
+  operation: QuantityOperation;
+  inputs: Record<string, string>;
+  output_unit: string;
+  display_formula: string;
+}
+
+export interface QuantityDraft {
+  value: string;
+  unit: string;
+  source_observation_ids: string[];
+  source_priority: number;
+  rounding_scale: number;
+  waste_factor: string;
+  alternative_quantity_ids: string[];
+  manual_change_id: string | null;
+}
+
+export interface QuantitySubmission {
+  draft: QuantityDraft;
+  formula: QuantityFormula | null;
+  formula_input_observation_ids: Record<string, string>;
+}
+
+export interface QuantityChangeContext {
+  project_id: string;
+  line_id: string;
+  line_key: string;
+  description: string;
+  unit: string;
+  current_quantity_id: string;
+  current_quantity_status: string;
+  current_submission: QuantitySubmission;
+  document_set_revision_id: string;
+  quantity_policy_version_id: string;
+  quantity_formula_rules_version_id: string | null;
+  manual_change_policy_version_id: string;
+  critical: boolean;
+  approval_role: ActorRole | null;
+}
+
+export interface QuantityManualChange {
+  change_id: string;
+  project_id: string;
+  line_id: string;
+  previous_quantity_id: string;
+  critical: boolean;
+  changed_by: string;
+  reason: string;
+  changed_at: string;
+  policy_version_id: string;
+  document_set_revision_id: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  approval_task_id: string | null;
+  approval_task_status: string | null;
+  approval_task_updated_at: string | null;
+  status: string;
+  applied_quantity_id: string | null;
+  applied_by: string | null;
+  applied_at: string | null;
+}
+
+export interface QuantityExecution {
+  quantity: {
+    quantity_id: string;
+    value: string;
+    unit: string;
+    status: string;
+    manual_change_id: string | null;
+  };
+  validation: {
+    quantity_id: string;
+    recalculated_value: string | null;
+    passed: boolean;
+    findings: ValidationFinding[];
+  };
+  supersedes_quantity_id: string | null;
+}
+
 export interface DevelopmentIdentity {
   actorId: string;
   organizationId: string;

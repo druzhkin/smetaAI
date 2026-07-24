@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from tenderguard.config import Settings
 from tenderguard.infrastructure.orm import Base
 
-CURRENT_SCHEMA_REVISION = "f6a9c3d2e841"
+CURRENT_SCHEMA_REVISION = "b8d2e7f4a961"
 
 
 def create_database_engine(settings: Settings) -> Engine:

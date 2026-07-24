@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import Field
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from tenderguard.application.projects import (
@@ -63,6 +63,7 @@ from tenderguard.infrastructure.orm import (
     ProjectMembershipRow,
     ProjectPassportFactRow,
     ProjectRow,
+    QuantityManualChangeApplicationRow,
     QuantityRow,
     QuarantinedUploadRow,
     ReleaseDecisionRow,
@@ -1211,6 +1212,110 @@ class ProjectReadService:
             )
             for row in self.session.scalars(evaluations.limit(limit))
         )
+        manual_change_status = case(
+            (
+                QuantityManualChangeApplicationRow.id.is_not(None),
+                "APPLIED",
+            ),
+            (
+                ManualChangeRow.critical.is_(False),
+                "APPROVED_BY_POLICY",
+            ),
+            (
+                ApprovalTaskRow.id.is_(None),
+                "BLOCKED_INTEGRITY",
+            ),
+            (
+                ApprovalTaskRow.status == "PENDING",
+                "PENDING_APPROVAL",
+            ),
+            else_=ApprovalTaskRow.status,
+        )
+        manual_changes = (
+            select(
+                ManualChangeRow,
+                ApprovalTaskRow,
+                QuantityManualChangeApplicationRow,
+                manual_change_status.label("derived_status"),
+            )
+            .outerjoin(
+                ApprovalTaskRow,
+                and_(
+                    ApprovalTaskRow.id == ManualChangeRow.payload["approval_task_id"].as_string(),
+                    ApprovalTaskRow.project_id == ManualChangeRow.project_id,
+                    ApprovalTaskRow.task_type == "MANUAL_CHANGE",
+                    ApprovalTaskRow.entity_type == "manual_change",
+                    ApprovalTaskRow.entity_id == ManualChangeRow.id,
+                ),
+            )
+            .outerjoin(
+                QuantityManualChangeApplicationRow,
+                and_(
+                    QuantityManualChangeApplicationRow.project_id == ManualChangeRow.project_id,
+                    QuantityManualChangeApplicationRow.manual_change_id == ManualChangeRow.id,
+                ),
+            )
+            .where(
+                ManualChangeRow.project_id == project_id,
+                ManualChangeRow.entity_type == "quantity",
+                ManualChangeRow.field_name == "record",
+            )
+        )
+        if current_only:
+            manual_changes = manual_changes.where(QuantityManualChangeApplicationRow.id.is_(None))
+        if statuses:
+            manual_changes = manual_changes.where(manual_change_status.in_(tuple(statuses)))
+        if query:
+            pattern = f"%{self._escape_like(query)}%"
+            manual_changes = manual_changes.where(
+                or_(
+                    ManualChangeRow.entity_id.ilike(pattern, escape="\\"),
+                    ManualChangeRow.reason.ilike(pattern, escape="\\"),
+                )
+            )
+        manual_changes = self._before(
+            manual_changes,
+            ManualChangeRow.changed_at,
+            ManualChangeRow.id,
+            cursor,
+        ).order_by(ManualChangeRow.changed_at.desc(), ManualChangeRow.id.desc())
+        for row, _task, application, status_value in self.session.execute(
+            manual_changes.limit(limit)
+        ):
+            task_id = row.payload.get("approval_task_id")
+            records.append(
+                ProjectRecord(
+                    id=row.id,
+                    section=ProjectRecordSection.BOQ_SCOPE,
+                    kind="MANUAL_CHANGE",
+                    title=f"Quantity revision · {row.entity_id}",
+                    subtitle=row.reason,
+                    status=status_value,
+                    severity=("BLOCKER" if row.critical and application is None else None),
+                    current=application is None,
+                    occurred_at=row.changed_at,
+                    attributes={
+                        "critical": row.critical,
+                        "changed_by": row.changed_by,
+                        "policy_version_id": row.payload.get("policy_version_id"),
+                        "document_set_revision_id": row.payload.get("document_set_revision_id"),
+                        "previous_quantity_id": row.payload.get("previous_quantity_id"),
+                        "approval_task_id": task_id,
+                        "before": row.payload.get("before"),
+                        "after": row.payload.get("after"),
+                        "applied_quantity_id": (
+                            application.quantity_id if application is not None else None
+                        ),
+                    },
+                    links=(
+                        ProjectRecordLink(
+                            relation="boq_line",
+                            entity_type="boq_line",
+                            entity_id=row.entity_id,
+                        ),
+                    ),
+                )
+            )
         return records
 
     def _pricing_records(

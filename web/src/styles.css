@@ -1087,16 +1087,23 @@ kbd,
 }
 
 .decision-field textarea,
-.decision-field input[type="text"] {
+.decision-field input[type="text"],
+.decision-field input[type="number"],
+.decision-field select {
   width: 100%;
   padding: 10px 11px;
   color: var(--ink);
-  resize: vertical;
   background: #fff;
   border: 1px solid var(--line-strong);
 }
 
-.decision-field input[type="text"] {
+.decision-field textarea {
+  resize: vertical;
+}
+
+.decision-field input[type="text"],
+.decision-field input[type="number"],
+.decision-field select {
   height: 42px;
   resize: none;
 }
@@ -1475,6 +1482,159 @@ kbd,
 .conflict-observation-card > code {
   overflow-wrap: anywhere;
   font-size: 9px;
+  color: var(--ink-muted);
+}
+
+.quantity-context,
+.manual-change-summary {
+  padding: 22px;
+  margin-top: 28px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+
+.quantity-context__value {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.quantity-context__value > span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.quantity-context__value strong {
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: 28px;
+  font-weight: 560;
+}
+
+.quantity-context .task-facts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.quantity-edit-grid,
+.quantity-json-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.quantity-formula {
+  padding: 16px;
+  margin-top: 18px;
+  background: #f2f4f0;
+  border: 1px solid var(--line);
+}
+
+.quantity-formula legend {
+  padding: 0 7px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+.quantity-formula .decision-acknowledgement {
+  margin-top: 0;
+}
+
+.quantity-formula__version {
+  padding-top: 10px;
+  margin: 10px 0 0;
+  font-size: 9px;
+  color: var(--ink-muted);
+  border-top: 1px solid var(--line);
+}
+
+.manual-change-reason {
+  padding: 14px;
+  margin-top: 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.manual-change-reason > span,
+.manual-change-diff section > span {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.manual-change-reason p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.manual-change-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.manual-change-diff section {
+  min-width: 0;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.manual-change-diff pre {
+  max-height: 440px;
+  padding: 12px;
+  margin: 0;
+  overflow: auto;
+  font-size: 9px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.approval-callout,
+.applied-change {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px;
+  margin-top: 20px;
+  background: #edf2ef;
+  border: 1px solid #b8c7c0;
+}
+
+.approval-callout h2,
+.applied-change h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.applied-change {
+  justify-content: flex-start;
+}
+
+.applied-change svg {
+  flex: none;
+  color: var(--forest-bright);
+}
+
+.applied-change p {
+  margin: 5px 0 0;
+  font-size: 10px;
   color: var(--ink-muted);
 }
 
@@ -2790,11 +2950,15 @@ kbd,
   .section-grid,
   .workbench-columns,
   .task-facts,
+  .quantity-context .task-facts,
   .decision-options {
     grid-template-columns: 1fr;
   }
 
   .entry-form__grid,
+  .quantity-edit-grid,
+  .quantity-json-grid,
+  .manual-change-diff,
   .upload-flags {
     grid-template-columns: 1fr;
   }
@@ -2912,14 +3076,17 @@ kbd,
   .entry-form,
   .upload-receipt,
   .document-set-summary,
-  .conflict-summary {
+  .conflict-summary,
+  .quantity-context,
+  .manual-change-summary {
     padding: 15px;
   }
 
   .upload-receipt__header,
   .document-set-summary__header,
   .conflict-summary__header,
-  .dedicated-workflow-callout {
+  .dedicated-workflow-callout,
+  .approval-callout {
     flex-direction: column;
   }
 

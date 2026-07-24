@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes five controlled mutation families:
+The current interface includes six controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -41,6 +41,16 @@ The current interface includes five controlled mutation families:
   backend revalidates all qualifications at decision time, rejects the
   conflict-task creator, and prevents the generic approval command from
   closing this task;
+- an estimator or technical expert may propose a revision of a current
+  verified BoQ quantity only against the exact current quantity, confirmed
+  document set, approved quantity/formula rules, approved manual-change policy,
+  and project-scoped source observations. Critical changes create a
+  policy-assigned four-eyes task. The author cannot approve it, the reviewer
+  sees immutable before/after states and exact evidence, and only the original
+  author may apply the approved server-held after-state. The browser never
+  resubmits the approved numeric value during application; stale context,
+  altered evidence, reused proposals, broken approval linkage, and unregistered
+  revisions fail closed;
 - an assigned expert may record an approval, rejection, or
   changes-requested decision for an existing approval task. The operation
   requires the exact task timestamp, a reason, project-scoped evidence
@@ -52,10 +62,11 @@ audit chain. An unsupported file, invalid logical key, stale task or conflict,
 stale document-set candidate, self-confirmation, self-resolution, missing
 role, or unacknowledged command fails closed.
 
-Extraction correction, BoQ and price maintenance, calculation execution,
-workflow transition, and bid release are not yet represented as delivered UI
-operations. Production acceptance also requires role-based user testing,
-accessibility verification, and business-process qualification.
+General extraction correction, BoQ structure and nomenclature maintenance,
+price maintenance, calculation execution, workflow transition, and bid release
+are not yet represented as delivered UI operations. Production acceptance also
+requires role-based user testing, accessibility verification, and
+business-process qualification.
 
 ## Browser authentication
 

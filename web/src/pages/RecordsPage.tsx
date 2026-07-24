@@ -169,6 +169,38 @@ export function RecordsPage({
               records={records}
               renderAction={(record) => {
                 if (
+                  section === "BOQ_SCOPE" &&
+                  record.kind === "BOQ_LINE" &&
+                  record.current === true &&
+                  record.attributes.quantity_status !== "MISSING" &&
+                  (auth.roles.includes("ESTIMATOR") ||
+                    auth.roles.includes("TECHNICAL_EXPERT"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/boq-lines/${encodeURIComponent(record.id)}/quantity-change`}
+                    >
+                      <Icon name="edit" size={15} />
+                      Изменить объём
+                    </Link>
+                  );
+                }
+                if (
+                  section === "BOQ_SCOPE" &&
+                  record.kind === "MANUAL_CHANGE"
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/manual-changes/${encodeURIComponent(record.id)}`}
+                    >
+                      <Icon name="trace" size={15} />
+                      Открыть изменение
+                    </Link>
+                  );
+                }
+                if (
                   section === "EVIDENCE" &&
                   record.kind === "CONFLICT" &&
                   record.status === "CONFLICT" &&

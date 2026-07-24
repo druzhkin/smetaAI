@@ -558,6 +558,37 @@ class ManualChangeRow(Base):
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class QuantityManualChangeApplicationRow(Base):
+    __tablename__ = "quantity_manual_change_applications"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    manual_change_id: Mapped[str] = mapped_column(ForeignKey("manual_changes.id"), nullable=False)
+    quantity_id: Mapped[str] = mapped_column(ForeignKey("quantities.id"), nullable=False)
+    applied_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "manual_change_id",
+            name="uq_quantity_manual_change_application_change",
+        ),
+        UniqueConstraint(
+            "quantity_id",
+            name="uq_quantity_manual_change_application_quantity",
+        ),
+        Index(
+            "ix_quantity_manual_change_applications_manual_change_id",
+            "manual_change_id",
+        ),
+        Index(
+            "ix_quantity_manual_change_applications_quantity_id",
+            "quantity_id",
+        ),
+    )
+
+
 class CostInputRow(Base):
     __tablename__ = "atomic_cost_inputs"
 

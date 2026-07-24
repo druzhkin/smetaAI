@@ -1149,6 +1149,29 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             purpose="quantity_policy",
         )
         approve_version(
+            "quantity_formula_rules",
+            "quantity-formula-rules-1",
+            {"allowed_operations": ["SUM", "PRODUCT"]},
+            purpose="quantity_formula_rules",
+        )
+        approve_version(
+            "manual_change_policy",
+            "manual-change-policy-1",
+            {
+                "policy": {
+                    "rules": [
+                        {
+                            "entity_type": "quantity",
+                            "field_name": "record",
+                            "critical": True,
+                            "assigned_role": "REVIEWER",
+                        }
+                    ]
+                }
+            },
+            purpose="manual_change_policy",
+        )
+        approve_version(
             "scope_rules",
             "scope-rules-1",
             {
@@ -1390,6 +1413,99 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         )
         assert quantity.status_code == 201, quantity.text
         assert quantity.json()["validation"]["passed"]
+        quantity_change_context = client.get(
+            (f"/v1/projects/{project['id']}/boq/lines/{line_id}/quantity-change-context"),
+            headers=operator,
+        )
+        assert quantity_change_context.status_code == 200, quantity_change_context.text
+        assert (
+            quantity_change_context.json()["current_quantity_id"]
+            == (quantity.json()["quantity"]["quantity_id"])
+        )
+        assert quantity_change_context.json()["manual_change_policy_version_id"]
+        quantity_change = client.post(
+            (f"/v1/projects/{project['id']}/boq/lines/{line_id}/quantity-change-proposals"),
+            headers=operator,
+            json={
+                "submission": {
+                    "draft": {
+                        "value": "125.50",
+                        "unit": "m",
+                        "source_observation_ids": [verified_observation_id],
+                        "source_priority": 2,
+                        "rounding_scale": 2,
+                        "waste_factor": "0",
+                    }
+                },
+                "reason": "Correct the governed source priority",
+            },
+        )
+        assert quantity_change.status_code == 201, quantity_change.text
+        quantity_change_payload = quantity_change.json()
+        assert quantity_change_payload["status"] == "PENDING_APPROVAL"
+        quantity_change_id = quantity_change_payload["change_id"]
+        quantity_change_task_id = quantity_change_payload["approval_task_id"]
+        pending_change_transition = client.post(
+            f"/v1/projects/{project['id']}/transitions",
+            headers=operator,
+            json={
+                "to_state": "BOQ_REVIEW",
+                "expected_row_version": current["row_version"],
+                "reason": "A pending quantity correction must block the BoQ gate",
+            },
+        )
+        assert pending_change_transition.status_code == 422
+        assert f"manual-change:{quantity_change_id}:unapplied" in pending_change_transition.text
+        premature_apply = client.post(
+            (f"/v1/projects/{project['id']}/manual-changes/{quantity_change_id}/apply"),
+            headers=operator,
+            json={"reason": "An unapproved change must fail closed"},
+        )
+        assert premature_apply.status_code == 422
+        assert "approval task is incomplete" in premature_apply.text
+        quantity_change_task = client.get(
+            f"/v1/work-items/{quantity_change_task_id}",
+            headers=owner_b,
+        )
+        assert quantity_change_task.status_code == 200, quantity_change_task.text
+        quantity_change_approval = client.post(
+            (f"/v1/projects/{project['id']}/approvals/{quantity_change_task_id}/decision"),
+            headers=owner_b,
+            json={
+                "decision": "APPROVED",
+                "reason": "Verified the exact source observation and proposed record",
+                "expected_task_updated_at": quantity_change_task.json()["item"]["updated_at"],
+                "evidence_ids": [verified_observation_id],
+            },
+        )
+        assert quantity_change_approval.status_code == 200, quantity_change_approval.text
+        applied_quantity_change = client.post(
+            (f"/v1/projects/{project['id']}/manual-changes/{quantity_change_id}/apply"),
+            headers=operator,
+            json={"reason": "Apply the independently approved exact revision"},
+        )
+        assert applied_quantity_change.status_code == 201, applied_quantity_change.text
+        assert applied_quantity_change.json()["validation"]["passed"] is True
+        reviewed_quantity_change = client.get(
+            f"/v1/projects/{project['id']}/manual-changes/{quantity_change_id}",
+            headers=owner_b,
+        )
+        assert reviewed_quantity_change.status_code == 200
+        assert reviewed_quantity_change.json()["status"] == "APPLIED"
+        boq_records = client.get(
+            f"/v1/projects/{project['id']}/records",
+            headers=operator,
+            params={"section": "BOQ_SCOPE", "statuses": "APPLIED"},
+        )
+        assert boq_records.status_code == 200, boq_records.text
+        manual_change_record = next(
+            record for record in boq_records.json()["items"] if record["id"] == quantity_change_id
+        )
+        assert manual_change_record["kind"] == "MANUAL_CHANGE"
+        assert (
+            manual_change_record["attributes"]["applied_quantity_id"]
+            == (applied_quantity_change.json()["quantity"]["quantity_id"])
+        )
 
         for state in ("BOQ_REVIEW",):
             response = client.post(

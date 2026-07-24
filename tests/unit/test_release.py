@@ -59,6 +59,7 @@ def good_context() -> ReleaseContext:
         "scope_rules",
         "quantity_policy",
         "quantity_formula_rules",
+        "manual_change_policy",
         "price_policy",
         "approval_policy",
         "document_requirements",
