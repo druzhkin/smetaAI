@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tenderguard.application.projects import ProjectService
+from tenderguard.application.projects import OptimisticLockError, ProjectService
 from tenderguard.config import Settings
 from tenderguard.domain.approvals import (
     ApprovalPlan,
@@ -15,7 +16,7 @@ from tenderguard.domain.approvals import (
     ApprovalSubject,
     build_approval_plan,
 )
-from tenderguard.domain.common import content_hash, utc_now
+from tenderguard.domain.common import content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import (
     ActorRole,
     ApprovalDecision,
@@ -29,6 +30,7 @@ from tenderguard.infrastructure.orm import (
     ApprovalTaskRow,
     ControlledVersionRow,
     ManualChangeRow,
+    ObservationRow,
     ProjectControlledVersionRow,
     VerificationFindingRow,
 )
@@ -48,9 +50,34 @@ class ApprovalPlanResult(DomainModel):
 
 class ApprovalDecisionCommand(DomainModel):
     decision: ApprovalDecision
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=4000)
+    expected_task_updated_at: datetime
     related_change_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+
+    @field_validator("expected_task_updated_at")
+    @classmethod
+    def timestamp_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Expected task timestamp must include a timezone")
+        return value
+
+    @field_validator("related_change_ids", "evidence_ids")
+    @classmethod
+    def identifiers_are_bounded_and_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) > 100:
+            raise ValueError("No more than 100 identifiers may be supplied")
+        if len(values) != len(set(values)):
+            raise ValueError("Identifiers must be unique")
+        if any(
+            not value
+            or value != value.strip()
+            or len(value) > 128
+            or any(character.isspace() for character in value)
+            for value in values
+        ):
+            raise ValueError("An identifier is invalid")
+        return values
 
 
 class ApprovalService:
@@ -187,6 +214,12 @@ class ApprovalService:
         )
         if task is None:
             raise LookupError(task_id)
+        expected_task_updated_at = ensure_utc(command.expected_task_updated_at)
+        assert expected_task_updated_at is not None
+        if ensure_utc(task.updated_at) != expected_task_updated_at:
+            raise OptimisticLockError(
+                "Approval task changed after it was loaded; reload before deciding"
+            )
         project_service.get_project(
             actor=actor,
             project_id=project_id,
@@ -211,15 +244,27 @@ class ApprovalService:
             raise ValueError("One or more related manual changes do not exist")
         if any(change.changed_by == actor.actor_id for change in changes):
             raise ValueError("Four-eyes violation: a change author cannot approve it")
+        evidence_ids = set(command.evidence_ids)
+        evidence = list(
+            self.session.scalars(
+                select(ObservationRow).where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.id.in_(evidence_ids),
+                )
+            )
+        )
+        if len(evidence) != len(evidence_ids):
+            raise ValueError("One or more approval evidence observations do not exist")
         if command.decision is ApprovalDecision.APPROVED and task.required:
             if task.entity_type == "manual_change" and not changes:
                 raise ValueError("Critical manual-change approval lacks the change record")
-            if not command.evidence_ids:
+            if not evidence:
                 raise ValueError("Required approval needs explicit evidence identifiers")
         now = utc_now()
         approval_id = f"approval-{uuid4()}"
         record_payload: dict[str, Any] = {
             "project_id": project_id,
+            "expected_task_updated_at": expected_task_updated_at.isoformat(),
             "related_change_ids": sorted(change_ids),
             "evidence_ids": list(command.evidence_ids),
             "policy_version_id": task.payload.get("policy_version_id"),

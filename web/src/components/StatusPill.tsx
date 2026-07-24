@@ -32,6 +32,20 @@ const warning = new Set([
   "EXPERT_REVIEW",
   "OPEN",
 ]);
+const genericLabels: Record<string, string> = {
+  APPROVED: "Утверждено",
+  REJECTED: "Отклонено",
+  CHANGES_REQUESTED: "На доработку",
+  PENDING: "Ожидает решения",
+  COMPLETED: "Завершено",
+  CANCELLED: "Отменено",
+  VALIDATED: "Проверено",
+  VERIFIED: "Подтверждено",
+  UNVERIFIED: "Не подтверждено",
+  PASSED: "Пройдено",
+  FAILED: "Ошибка",
+  REVIEW_REQUIRED: "Требует проверки",
+};
 
 export function statusTone(
   value: string | null,
@@ -55,7 +69,11 @@ export function statusLabel(value: string | null): string {
   if (value === null) {
     return "Без статуса";
   }
-  return stateLabels[value as ApprovalState] ?? value.replaceAll("_", " ");
+  return (
+    stateLabels[value as ApprovalState] ??
+    genericLabels[value] ??
+    value.replaceAll("_", " ")
+  );
 }
 
 export function StatusPill({

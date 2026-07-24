@@ -101,6 +101,10 @@ The repository currently connects and integration-tests:
   Code + PKCE, role-filtered portfolio/task/workbench/record views, visible
   hard stops, exact monetary rendering, safe same-origin navigation, restrictive
   browser security headers, and fail-closed production asset configuration;
+- a controlled expert-decision surface that binds the exact task revision,
+  validates project-scoped evidence, enforces four-eyes eligibility, requires
+  explicit high-impact confirmation, persists idempotently, and refreshes the
+  immutable decision/audit history;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -155,8 +159,9 @@ backup/disaster-recovery evidence, trained users, and named process owners.
 Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
-schedulers/monitoring, controlled operator mutation/review/release surfaces,
-and business qualification of the read interface remain to be completed.
+schedulers/monitoring, remaining controlled data-entry/reconciliation/release
+surfaces, and business qualification of the operator interface remain to be
+completed.
 External verification also requires approved out-of-band
 signing-key registries and real endpoint conformance evidence. A successful
 local test run cannot substitute for the required historical,

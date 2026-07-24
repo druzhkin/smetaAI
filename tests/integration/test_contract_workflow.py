@@ -30,7 +30,7 @@ from tenderguard.infrastructure.orm import (
     ProjectControlledVersionRow,
     ProjectRow,
 )
-from tests.integration.support import project_memberships
+from tests.integration.support import approval_task_updated_at, project_memberships
 
 
 def test_contract_term_cost_impact_requires_four_eyes_approval(
@@ -186,6 +186,10 @@ def test_contract_term_cost_impact_requires_four_eyes_approval(
             command=ApprovalDecisionCommand(
                 decision=ApprovalDecision.APPROVED,
                 reason="Cost treatment agrees with the controlled risk methodology",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    proposal.approval_task_ids[0],
+                ),
                 evidence_ids=("observation-penalties",),
             ),
             request_id="request-approve-impact",

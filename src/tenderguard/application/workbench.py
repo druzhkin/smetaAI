@@ -45,6 +45,7 @@ from tenderguard.infrastructure.orm import (
     DocumentRevisionRow,
     DocumentRow,
     ExportArtifactRow,
+    ManualChangeRow,
     NomenclatureMatchRow,
     NormalizedPriceRow,
     ObservationRow,
@@ -192,6 +193,27 @@ class WorkItemView(DomainModel):
 class WorkItemPage(DomainModel):
     items: tuple[WorkItemView, ...]
     next_cursor: str | None
+
+
+class WorkItemDecisionView(DomainModel):
+    approval_id: str
+    decision: str
+    decided_by: str
+    reason: str
+    evidence_ids: tuple[str, ...]
+    related_change_ids: tuple[str, ...]
+    decided_at: datetime
+
+
+class WorkItemDetail(DomainModel):
+    item: WorkItemView
+    project: ProjectView
+    policy_version_id: str | None = None
+    task_key: str | None = None
+    candidate_evidence_ids: tuple[str, ...] = ()
+    decisions: tuple[WorkItemDecisionView, ...] = ()
+    decision_allowed: bool
+    decision_blockers: tuple[str, ...] = ()
 
 
 class ProjectRecordLink(DomainModel):
@@ -406,24 +428,7 @@ class ProjectReadService:
             if ActorRole(task.assigned_role) in accessible_roles[task.project_id]
         ]
         selected = visible[:limit]
-        items = tuple(
-            WorkItemView(
-                task_id=task.id,
-                project_id=project.id,
-                project_code=project.code,
-                project_name=project.name,
-                task_type=task.task_type,
-                entity_type=task.entity_type,
-                entity_id=task.entity_id,
-                assigned_role=ActorRole(task.assigned_role),
-                status=task.status,
-                required=task.required,
-                created_by=self._string(task.payload.get("created_by")),
-                created_at=task.created_at,
-                updated_at=task.updated_at,
-            )
-            for task, project in selected
-        )
+        items = tuple(self._work_item_view(task, project) for task, project in selected)
         return WorkItemPage(
             items=items,
             next_cursor=(
@@ -435,6 +440,86 @@ class ProjectReadService:
                 if len(visible) > limit and selected
                 else None
             ),
+        )
+
+    def get_work_item(self, *, actor: Actor, task_id: str) -> WorkItemDetail:
+        self._require_human(actor)
+        task = self.session.get(ApprovalTaskRow, task_id)
+        if task is None:
+            raise LookupError(task_id)
+        assigned_role = ActorRole(task.assigned_role)
+        project = self.projects.get_project(
+            actor=actor,
+            project_id=task.project_id,
+            required_roles=(assigned_role,),
+        )
+        candidate_ids = tuple(
+            value for value in task.payload.get("observation_ids", []) if isinstance(value, str)
+        )
+        if candidate_ids:
+            existing = frozenset(
+                self.session.scalars(
+                    select(ObservationRow.id).where(
+                        ObservationRow.project_id == task.project_id,
+                        ObservationRow.id.in_(candidate_ids),
+                    )
+                )
+            )
+            candidate_ids = tuple(value for value in candidate_ids if value in existing)
+        decision_rows = tuple(
+            self.session.scalars(
+                select(ApprovalRecordRow)
+                .where(ApprovalRecordRow.task_id == task.id)
+                .order_by(
+                    ApprovalRecordRow.decided_at.desc(),
+                    ApprovalRecordRow.id.desc(),
+                )
+            )
+        )
+        blockers: list[str] = []
+        if task.status != "PENDING":
+            blockers.append("TASK_NOT_PENDING")
+        if task.required and task.payload.get("created_by") == actor.actor_id:
+            blockers.append("FOUR_EYES_TASK_CREATOR")
+        if task.entity_type == "manual_change":
+            change = self.session.scalar(
+                select(ManualChangeRow).where(
+                    ManualChangeRow.project_id == task.project_id,
+                    ManualChangeRow.id == task.entity_id,
+                )
+            )
+            if change is None:
+                blockers.append("MANUAL_CHANGE_MISSING")
+            elif change.changed_by == actor.actor_id:
+                blockers.append("FOUR_EYES_CHANGE_AUTHOR")
+        return WorkItemDetail(
+            item=self._work_item_view(task, project),
+            project=self._project_view(project),
+            policy_version_id=self._string(task.payload.get("policy_version_id")),
+            task_key=self._string(task.payload.get("task_key")),
+            candidate_evidence_ids=candidate_ids,
+            decisions=tuple(
+                WorkItemDecisionView(
+                    approval_id=row.id,
+                    decision=row.decision,
+                    decided_by=row.decided_by,
+                    reason=row.reason,
+                    evidence_ids=tuple(
+                        value
+                        for value in row.payload.get("evidence_ids", [])
+                        if isinstance(value, str)
+                    ),
+                    related_change_ids=tuple(
+                        value
+                        for value in row.payload.get("related_change_ids", [])
+                        if isinstance(value, str)
+                    ),
+                    decided_at=self._required_utc(row.decided_at),
+                )
+                for row in decision_rows
+            ),
+            decision_allowed=not blockers,
+            decision_blockers=tuple(blockers),
         )
 
     def workbench(self, *, actor: Actor, project_id: str) -> ProjectWorkbench:
@@ -2283,6 +2368,30 @@ class ProjectReadService:
             row_version=project.row_version,
             current_document_set_revision_id=project.current_document_set_revision_id,
         )
+
+    def _work_item_view(self, task: ApprovalTaskRow, project: ProjectRow) -> WorkItemView:
+        return WorkItemView(
+            task_id=task.id,
+            project_id=project.id,
+            project_code=project.code,
+            project_name=project.name,
+            task_type=task.task_type,
+            entity_type=task.entity_type,
+            entity_id=task.entity_id,
+            assigned_role=ActorRole(task.assigned_role),
+            status=task.status,
+            required=task.required,
+            created_by=self._string(task.payload.get("created_by")),
+            created_at=self._required_utc(task.created_at),
+            updated_at=self._required_utc(task.updated_at),
+        )
+
+    @staticmethod
+    def _required_utc(value: datetime) -> datetime:
+        normalized = ensure_utc(value)
+        if normalized is None:
+            raise RuntimeError("Required timestamp is missing")
+        return normalized
 
     @staticmethod
     def _decimal(value: object) -> Decimal | None:

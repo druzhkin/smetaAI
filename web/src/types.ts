@@ -91,6 +91,36 @@ export interface WorkItemPage {
   next_cursor: string | null;
 }
 
+export type ApprovalDecision = "APPROVED" | "REJECTED" | "CHANGES_REQUESTED";
+
+export interface WorkItemDecision {
+  approval_id: string;
+  decision: ApprovalDecision;
+  decided_by: string;
+  reason: string;
+  evidence_ids: string[];
+  related_change_ids: string[];
+  decided_at: string;
+}
+
+export interface WorkItemDetail {
+  item: WorkItem;
+  project: ProjectView;
+  policy_version_id: string | null;
+  task_key: string | null;
+  candidate_evidence_ids: string[];
+  decisions: WorkItemDecision[];
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface ApprovalDecisionResult {
+  approval_id: string;
+  task_id: string;
+  decision: ApprovalDecision;
+  decided_by: string;
+}
+
 export interface ValidationFinding {
   code: string;
   severity: string;

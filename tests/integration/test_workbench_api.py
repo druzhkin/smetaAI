@@ -79,6 +79,7 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
     owner = _headers("portfolio-owner")
     outsider = _headers("same-tenant-outsider")
     technical_user = _headers("technical-reader", "TECHNICAL_EXPERT")
+    independent_reviewer = _headers("independent-reviewer", "REVIEWER")
 
     with TestClient(app) as client:
         project_ids = [
@@ -101,6 +102,17 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
             },
         )
         assert membership.status_code == 200, membership.text
+        reviewer_membership = client.post(
+            f"/v1/projects/{primary_id}/members",
+            headers=owner,
+            json={
+                "principal_id": "independent-reviewer",
+                "roles": ["REVIEWER"],
+                "access_level": "MEMBER",
+                "reason": "Independent approval duty for operator workflow testing",
+            },
+        )
+        assert reviewer_membership.status_code == 200, reviewer_membership.text
         now = datetime.now(UTC)
         with create_session_factory(engine).begin() as session:
             session.add_all(
@@ -471,6 +483,26 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
         tasks = client.get("/v1/work-items", headers=owner)
         assert tasks.status_code == 200, tasks.text
         assert [item["task_id"] for item in tasks.json()["items"]] == ["approval-task-workbench"]
+        owner_task = client.get(
+            "/v1/work-items/approval-task-workbench",
+            headers=owner,
+        )
+        assert owner_task.status_code == 200, owner_task.text
+        assert owner_task.json()["decision_allowed"] is False
+        assert owner_task.json()["decision_blockers"] == ["FOUR_EYES_TASK_CREATOR"]
+        reviewer_task = client.get(
+            "/v1/work-items/approval-task-workbench",
+            headers=independent_reviewer,
+        )
+        assert reviewer_task.status_code == 200, reviewer_task.text
+        assert reviewer_task.json()["decision_allowed"] is True
+        assert (
+            client.get(
+                "/v1/work-items/approval-task-workbench",
+                headers=outsider,
+            ).status_code
+            == 404
+        )
 
         workbench = client.get(
             f"/v1/projects/{primary_id}/workbench",
@@ -568,5 +600,62 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
         )
         assert wrong_cursor.status_code == 422
         assert "another query" in wrong_cursor.json()["detail"]
+
+        decision_path = f"/v1/projects/{primary_id}/approvals/approval-task-workbench/decision"
+        stale_decision = client.post(
+            decision_path,
+            headers=independent_reviewer,
+            json={
+                "decision": "APPROVED",
+                "reason": "Reviewed the underlying quantity and source location",
+                "expected_task_updated_at": "2000-01-01T00:00:00Z",
+                "evidence_ids": ["observation-workbench"],
+            },
+        )
+        assert stale_decision.status_code == 409, stale_decision.text
+        missing_evidence = client.post(
+            decision_path,
+            headers=independent_reviewer,
+            json={
+                "decision": "APPROVED",
+                "reason": "A typed but nonexistent evidence identifier cannot be accepted",
+                "expected_task_updated_at": reviewer_task.json()["item"]["updated_at"],
+                "evidence_ids": ["invented-observation"],
+            },
+        )
+        assert missing_evidence.status_code == 422, missing_evidence.text
+        assert "do not exist" in missing_evidence.json()["detail"]
+        decision_headers = {
+            **independent_reviewer,
+            "Idempotency-Key": "workbench-approval-decision-1",
+        }
+        decision_payload = {
+            "decision": "APPROVED",
+            "reason": "Reviewed the underlying quantity and exact source observation",
+            "expected_task_updated_at": reviewer_task.json()["item"]["updated_at"],
+            "evidence_ids": ["observation-workbench"],
+        }
+        decision = client.post(
+            decision_path,
+            headers=decision_headers,
+            json=decision_payload,
+        )
+        assert decision.status_code == 200, decision.text
+        replay = client.post(
+            decision_path,
+            headers=decision_headers,
+            json=decision_payload,
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == decision.json()
+        decided_task = client.get(
+            "/v1/work-items/approval-task-workbench",
+            headers=independent_reviewer,
+        )
+        assert decided_task.status_code == 200, decided_task.text
+        assert decided_task.json()["decision_allowed"] is False
+        assert decided_task.json()["decision_blockers"] == ["TASK_NOT_PENDING"]
+        assert decided_task.json()["decisions"][0]["decision"] == "APPROVED"
+        assert decided_task.json()["decisions"][0]["evidence_ids"] == ["observation-workbench"]
 
     engine.dispose()

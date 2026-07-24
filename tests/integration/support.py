@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from tenderguard.domain.common import content_hash
+from sqlalchemy.orm import Session
+
+from tenderguard.domain.common import content_hash, ensure_utc
 from tenderguard.domain.enums import ActorRole, ProjectAccessLevel, ProjectMembershipStatus
 from tenderguard.infrastructure.auth import Actor
-from tenderguard.infrastructure.orm import ProjectMembershipRow
+from tenderguard.infrastructure.orm import ApprovalTaskRow, ProjectMembershipRow
+
+
+def approval_task_updated_at(session: Session, task_id: str) -> datetime:
+    task = session.get(ApprovalTaskRow, task_id)
+    assert task is not None
+    updated_at = ensure_utc(task.updated_at)
+    assert updated_at is not None
+    return updated_at
 
 
 def project_memberships(

@@ -16,10 +16,19 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface is read-only. Controlled create, change, approval, and
-release operations are intentionally not represented as delivered. Production
-acceptance also requires role-based user testing, accessibility verification,
-and business-process qualification.
+The current interface includes one controlled mutation: an assigned expert may
+record an approval, rejection, or changes-requested decision for an existing
+approval task. The operation requires the exact task timestamp, a reason,
+project-scoped evidence identifiers, an idempotency key, and backend four-eyes
+eligibility. Approval additionally requires explicit project-code
+confirmation in the browser. The backend remains authoritative and records the
+decision in the audit chain.
+
+Project/document creation, extraction correction, conflict resolution, BoQ and
+price maintenance, calculation execution, workflow transition, and bid release
+are not yet represented as delivered UI operations. Production acceptance also
+requires role-based user testing, accessibility verification, and
+business-process qualification.
 
 ## Browser authentication
 
@@ -129,7 +138,7 @@ Before production use, retain:
 - desktop/mobile browser compatibility and accessibility results;
 - dependency and image vulnerability scans tied to the released digest;
 - CSP violation monitoring and authentication-failure alerts;
-- controlled-action workflow tests once mutation surfaces are implemented;
+- controlled-action workflow tests for every additional mutation surface;
 - user training and named process-owner approval.
 
 Successful local screenshots or a technical demo do not satisfy these gates.

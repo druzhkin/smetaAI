@@ -10,6 +10,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
 import { RecordsPage } from "./pages/RecordsPage";
+import { TaskDetailPage } from "./pages/TaskDetailPage";
 import { TaskQueuePage } from "./pages/TaskQueuePage";
 import { Link, NavigationProvider, useNavigation } from "./navigation";
 import type { ProjectRecordSection, RuntimeConfig } from "./types";
@@ -73,7 +74,17 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
     page = <TaskQueuePage config={config} />;
   } else {
     const parts = pathname.split("/").filter(Boolean);
-    if (parts[0] === "projects" && parts.length >= 2) {
+    if (parts[0] === "tasks" && parts.length === 2) {
+      let taskId: string | null = null;
+      try {
+        taskId = decodeURIComponent(parts[1] ?? "");
+      } catch {
+        taskId = null;
+      }
+      if (taskId !== null && taskId !== "") {
+        page = <TaskDetailPage config={config} taskId={taskId} />;
+      }
+    } else if (parts[0] === "projects" && parts.length >= 2) {
       let projectId: string | null = null;
       try {
         projectId = decodeURIComponent(parts[1] ?? "");

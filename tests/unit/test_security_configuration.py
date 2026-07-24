@@ -444,6 +444,7 @@ def test_operator_ui_serves_only_declared_spa_routes_and_assets(tmp_path: Path) 
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
         assert client.get("/tasks").status_code == 200
+        assert client.get("/tasks/approval-task-1").status_code == 200
         assert client.get("/projects/project-1/BOQ_SCOPE").status_code == 200
         assert client.get("/auth/callback").status_code == 200
         assert client.get("/assets/app.js").text == "export {};"

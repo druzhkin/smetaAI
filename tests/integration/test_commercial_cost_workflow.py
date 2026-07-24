@@ -55,7 +55,7 @@ from tenderguard.infrastructure.orm import (
     ProjectRow,
     QuantityRow,
 )
-from tests.integration.support import project_memberships
+from tests.integration.support import approval_task_updated_at, project_memberships
 
 
 def test_commercial_cost_model_requires_evidence_independent_recalculation_and_four_eyes(
@@ -596,6 +596,10 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             command=ApprovalDecisionCommand(
                 decision=ApprovalDecision.APPROVED,
                 reason="Routes, capacity, trip count, and rates reproduce evidence",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    proposal.model.approval_task_ids[0],
+                ),
                 evidence_ids=("obs-route", "obs-cargo", "obs-rate"),
             ),
             request_id="request-commercial-approval",
@@ -629,6 +633,10 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             command=ApprovalDecisionCommand(
                 decision=ApprovalDecision.CHANGES_REQUESTED,
                 reason="Supplier basis must be re-submitted",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    rejected_revision.model.approval_task_ids[0],
+                ),
             ),
             request_id="request-logistics-changes",
         )
@@ -658,6 +666,10 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             command=ApprovalDecisionCommand(
                 decision=ApprovalDecision.APPROVED,
                 reason="Corrected supplier basis is acceptable",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    corrected_revision.model.approval_task_ids[0],
+                ),
                 evidence_ids=("obs-route", "obs-cargo", "obs-rate"),
             ),
             request_id="request-logistics-correction-approval",
@@ -734,6 +746,10 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             command=ApprovalDecisionCommand(
                 decision=ApprovalDecision.APPROVED,
                 reason="Cash-flow dates and funding rate reproduce contract evidence",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    finance_proposal.model.approval_task_ids[0],
+                ),
                 evidence_ids=(
                     "obs-direct-cost",
                     "obs-customer-payment",
@@ -783,6 +799,10 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             command=ApprovalDecisionCommand(
                 decision=ApprovalDecision.APPROVED,
                 reason="Finance model is the approved treatment of this term",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    impact.approval_task_ids[0],
+                ),
                 evidence_ids=("obs-term-advance", "obs-funding-rate"),
             ),
             request_id="request-contract-impact-approval",

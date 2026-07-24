@@ -187,6 +187,7 @@ from .schemas import (
     VerifyContractTermRequest,
     VerifyPassportFactRequest,
     VerifyRiskItemRequest,
+    WorkItemDetailResponse,
     WorkItemPageResponse,
 )
 from .security import RequestSizeLimitMiddleware, SecurityHeadersMiddleware
@@ -1034,6 +1035,18 @@ def create_app(
             cursor=cursor,
         )
         return WorkItemPageResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/work-items/{task_id}",
+        response_model=WorkItemDetailResponse,
+    )
+    def get_work_item(
+        task_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> WorkItemDetailResponse:
+        result = read_service(session).get_work_item(actor=actor, task_id=task_id)
+        return WorkItemDetailResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects",
@@ -2357,6 +2370,7 @@ def create_app(
             "/auth/callback",
             "/auth/signout-callback",
             "/tasks",
+            "/tasks/{ui_path:path}",
             "/projects/{ui_path:path}",
         ):
             application.add_api_route(

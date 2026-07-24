@@ -82,7 +82,7 @@ export function TaskQueuePage({ config }: { config: RuntimeConfig }) {
           {items.map((item) => (
             <Link
               key={item.task_id}
-              to={`/projects/${encodeURIComponent(item.project_id)}/APPROVALS`}
+              to={`/tasks/${encodeURIComponent(item.task_id)}`}
               className="task-row"
             >
               <span

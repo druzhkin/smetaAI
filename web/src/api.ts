@@ -1,4 +1,6 @@
 import type {
+  ApprovalDecision,
+  ApprovalDecisionResult,
   ApprovalState,
   ProjectPortfolioPage,
   ProjectRecordPage,
@@ -6,6 +8,7 @@ import type {
   ProjectView,
   ProjectWorkbench,
   WorkItemPage,
+  WorkItemDetail,
 } from "./types";
 
 export class ApiError extends Error {
@@ -72,6 +75,54 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+async function mutate<T>(
+  context: RequestContext,
+  path: string,
+  options: {
+    body: unknown;
+    idempotencyKey: string;
+  },
+): Promise<T> {
+  const url = new URL(`${context.apiBasePath}${path}`, window.location.origin);
+  const response = await fetch(url, {
+    method: "POST",
+    credentials: "omit",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": options.idempotencyKey,
+      ...context.authorizationHeaders(),
+    },
+    body: JSON.stringify(options.body),
+  });
+  if (!response.ok) {
+    let detail = `Запрос завершился с кодом ${response.status}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      }
+    } catch {
+      // Do not reflect an arbitrary non-JSON response into the interface.
+    }
+    throw new ApiError(
+      detail,
+      response.status,
+      response.headers.get("x-request-id"),
+    );
+  }
+  return (await response.json()) as T;
+}
+
+export function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID !== "function") {
+    throw new Error(
+      "Браузер не поддерживает безопасный идентификатор операции; действие заблокировано",
+    );
+  }
+  return crypto.randomUUID();
+}
+
 export function listProjects(
   context: RequestContext,
   options: {
@@ -113,6 +164,48 @@ export function listWorkItems(
       limit: options.limit ?? 50,
     },
     signal,
+  );
+}
+
+export function getWorkItem(
+  context: RequestContext,
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<WorkItemDetail> {
+  return request(
+    context,
+    `/work-items/${encodeURIComponent(taskId)}`,
+    undefined,
+    signal,
+  );
+}
+
+export function decideWorkItem(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    taskId: string;
+    decision: ApprovalDecision;
+    reason: string;
+    expectedTaskUpdatedAt: string;
+    evidenceIds: string[];
+    relatedChangeIds?: string[];
+    idempotencyKey: string;
+  },
+): Promise<ApprovalDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/approvals/${encodeURIComponent(input.taskId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        decision: input.decision,
+        reason: input.reason,
+        expected_task_updated_at: input.expectedTaskUpdatedAt,
+        evidence_ids: input.evidenceIds,
+        related_change_ids: input.relatedChangeIds ?? [],
+      },
+    },
   );
 }
 

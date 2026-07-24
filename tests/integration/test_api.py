@@ -932,12 +932,19 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         assert approval_plan.status_code == 200, approval_plan.text
         task_ids = approval_plan.json()["task_ids_by_key"]
         assert len(task_ids) == 1
+        approval_task_id = next(iter(task_ids.values()))
+        approval_task = client.get(
+            f"/v1/work-items/{approval_task_id}",
+            headers=owner_b,
+        )
+        assert approval_task.status_code == 200, approval_task.text
         approval = client.post(
-            (f"/v1/projects/{project['id']}/approvals/{next(iter(task_ids.values()))}/decision"),
+            f"/v1/projects/{project['id']}/approvals/{approval_task_id}/decision",
             headers=owner_b,
             json={
                 "decision": "APPROVED",
                 "reason": "Independent evidence reviewed",
+                "expected_task_updated_at": approval_task.json()["item"]["updated_at"],
                 "evidence_ids": observation_ids,
             },
         )

@@ -86,6 +86,7 @@ from tenderguard.application.workbench import (
     ProjectPortfolioPage,
     ProjectRecordPage,
     ProjectWorkbench,
+    WorkItemDetail,
     WorkItemPage,
 )
 from tenderguard.domain.approvals import ApprovalSubject
@@ -464,6 +465,10 @@ class ProjectPortfolioResponse(ProjectPortfolioPage):
 
 
 class WorkItemPageResponse(WorkItemPage):
+    pass
+
+
+class WorkItemDetailResponse(WorkItemDetail):
     pass
 
 
