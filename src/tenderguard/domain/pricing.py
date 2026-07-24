@@ -24,6 +24,7 @@ class PriceAdjustment(DomainModel):
 
 
 class NormalizationRequest(DomainModel):
+    policy_version_id: str = Field(min_length=1)
     target_basis: CommercialBasis
     source_units_per_target_unit: Decimal = Field(gt=0)
     unit_conversion_id: str | None = None
@@ -46,14 +47,16 @@ class TriangulationResult(DomainModel):
 
 def _vat_exclusive(amount: Decimal, basis: CommercialBasis) -> Decimal:
     if basis.vat_basis is VatBasis.INCLUSIVE:
-        assert basis.vat_rate is not None
+        if basis.vat_rate is None:
+            raise ValueError("Inclusive source VAT basis has no VAT rate")
         return amount / (Decimal("1") + basis.vat_rate)
     return amount
 
 
 def _apply_target_vat(amount: Decimal, basis: CommercialBasis) -> Decimal:
     if basis.vat_basis is VatBasis.INCLUSIVE:
-        assert basis.vat_rate is not None
+        if basis.vat_rate is None:
+            raise ValueError("Inclusive target VAT basis has no VAT rate")
         return amount * (Decimal("1") + basis.vat_rate)
     return amount
 
@@ -125,14 +128,20 @@ def normalize_quote(
     normalized_exclusive = converted + delivery + unloading + other
     normalized_amount = _apply_target_vat(normalized_exclusive, target)
     formula_record = {
+        "policy_version_id": request.policy_version_id,
         "source_quote_id": quote.quote_id,
         "source_amount": quote.amount,
         "source_package_quantity": source.package_quantity,
         "source_vat_basis": source.vat_basis,
         "source_vat_rate": source.vat_rate,
         "source_units_per_target_unit": request.source_units_per_target_unit,
+        "unit_conversion_id": request.unit_conversion_id,
         "fx_rate": request.target_currency_per_source_currency,
+        "fx_rate_id": request.fx_rate_id,
         "adjustments": request.adjustments,
+        "region_adjustment_id": request.region_adjustment_id,
+        "party_adjustment_id": request.party_adjustment_id,
+        "payment_adjustment_id": request.payment_adjustment_id,
         "target_vat_basis": target.vat_basis,
         "target_vat_rate": target.vat_rate,
     }
@@ -164,8 +173,11 @@ def evaluate_triangulation(
         for quote in quotes
         if quote.item_id == item_id
         and quote.status in {PriceStatus.NORMALIZED, PriceStatus.VERIFIED}
-        and quote.available is not False
-        and (quote.valid_until is None or quote.valid_until >= as_of)
+        and quote.available is True
+        and quote.lead_time_days is not None
+        and quote.quote_date <= as_of
+        and quote.valid_until is not None
+        and quote.valid_until >= as_of
     )
     present = {quote.evidence_class for quote in eligible}
     required = {

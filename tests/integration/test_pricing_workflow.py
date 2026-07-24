@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from tenderguard.application.pricing import (
     NomenclatureAssessmentDraft,
     NormalizePriceCommand,
@@ -32,6 +34,7 @@ from tenderguard.infrastructure.orm import (
     AdapterQualificationRow,
     BoqLineRow,
     ControlledVersionRow,
+    NormalizedPriceRow,
     ObservationRow,
     ProjectControlledVersionRow,
     ProjectRow,
@@ -525,6 +528,7 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         )
         assert match.status is VerificationStatus.VERIFIED
 
+        normalized_ids: list[str] = []
         for draft in drafts[:2]:
             quote = service.record_quote(
                 actor=procurement,
@@ -533,13 +537,28 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 request_id=f"request-{draft.evidence_class.value}",
                 reason="Record independently extracted price source",
             )
-            service.normalize_price(
+            normalized = service.normalize_price(
                 actor=procurement,
                 project_id="project-pricing",
                 command=NormalizePriceCommand(quote_id=quote.quote.quote_id),
                 request_id=f"request-normalize-{quote.quote.quote_id}",
                 reason="Normalize to the approved commercial basis",
             )
+            normalized_ids.append(normalized.normalized_price_id)
+        tampered_normalized = session.get(NormalizedPriceRow, normalized_ids[0])
+        assert tampered_normalized is not None
+        original_amount = tampered_normalized.amount_per_unit
+        tampered_normalized.amount_per_unit = original_amount + Decimal("1")
+        with pytest.raises(ValueError, match="integrity validation"):
+            service.evaluate_item_price(
+                actor=procurement,
+                project_id="project-pricing",
+                item_id="pipe-source",
+                as_of=date(2026, 7, 23),
+                request_id="request-tampered-evaluation",
+                reason="Tampered normalization must fail closed",
+            )
+        tampered_normalized.amount_per_unit = original_amount
         first_decision = service.evaluate_item_price(
             actor=procurement,
             project_id="project-pricing",

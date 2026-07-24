@@ -71,7 +71,9 @@ The repository currently connects and integration-tests:
 - revisioned project-passport facts, BoQ lines, quantity verification, planned
   cost components, and attested scope-completeness evaluations;
 - deterministic critical-attribute nomenclature matching, governed analogues,
-  quote normalization, source triangulation, price decisions, and RFQ state;
+  policy-versioned quote normalization with deterministic integrity replay,
+  commercially complete/independent source triangulation, price decisions,
+  and RFQ state;
 - revisioned contract terms and approved contract-cost impacts;
 - governed capacity-based logistics, component-based mobilisation, and dated
   contract-finance models with exact observation-value binding, independent

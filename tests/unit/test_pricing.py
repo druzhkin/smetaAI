@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from tenderguard.application.pricing import NormalizePriceCommand, PriceQuoteDraft
 from tenderguard.domain.enums import (
     PriceEvidenceClass,
     PriceStatus,
@@ -60,6 +61,7 @@ def quote(identifier: str, evidence: PriceEvidenceClass) -> PriceQuote:
 def test_price_normalization_requires_explicit_region_adjustment() -> None:
     target = basis(region="Kazan", delivery=True)
     request = NormalizationRequest(
+        policy_version_id="price-policy-v1",
         target_basis=target,
         source_units_per_target_unit=Decimal("1"),
         target_currency_per_source_currency=Decimal("1"),
@@ -84,6 +86,7 @@ def test_price_normalization_requires_explicit_region_adjustment() -> None:
 def test_price_normalization_reproduces_commercial_basis_formula() -> None:
     target = basis(region="Kazan", delivery=True)
     request = NormalizationRequest(
+        policy_version_id="price-policy-v1",
         target_basis=target,
         source_units_per_target_unit=Decimal("1"),
         target_currency_per_source_currency=Decimal("1"),
@@ -108,6 +111,20 @@ def test_price_normalization_reproduces_commercial_basis_formula() -> None:
     assert normalized.normalization_formula.startswith("sha256:")
     assert normalized.status is PriceStatus.NORMALIZED
 
+    changed_policy = normalize_quote(
+        quote("q1", PriceEvidenceClass.OFFICIAL_OR_PRIMARY),
+        request.model_copy(
+            update={
+                "policy_version_id": "price-policy-v2",
+                "region_adjustment_id": "logistics-rule-v2",
+            }
+        ),
+        normalized_at=datetime(2026, 7, 23, tzinfo=UTC),
+    )
+    assert changed_policy.amount_per_unit == normalized.amount_per_unit
+    assert changed_policy.normalized_price_id != normalized.normalized_price_id
+    assert changed_policy.normalization_formula != normalized.normalization_formula
+
 
 def test_critical_price_requires_three_way_triangulation() -> None:
     two_sources = (
@@ -131,3 +148,62 @@ def test_critical_price_requires_three_way_triangulation() -> None:
     )
     assert result.passed
     assert result.resulting_status is PriceStatus.VERIFIED
+
+
+def test_triangulation_excludes_commercially_incomplete_or_future_quotes() -> None:
+    complete = quote("q1", PriceEvidenceClass.OFFICIAL_OR_PRIMARY)
+    incomplete = quote("q2", PriceEvidenceClass.INDEPENDENT_MARKET).model_copy(
+        update={"available": None, "valid_until": None, "lead_time_days": None}
+    )
+    future = quote("q3", PriceEvidenceClass.COMMERCIAL_QUOTE).model_copy(
+        update={"quote_date": date(2026, 7, 24)}
+    )
+    result = evaluate_triangulation(
+        item_id="pipe-1",
+        quotes=(complete, incomplete, future),
+        as_of=date(2026, 7, 23),
+        critical=True,
+    )
+    assert result.quote_ids == ("q1",)
+    assert not result.passed
+    assert set(result.missing_evidence_classes) == {
+        PriceEvidenceClass.INDEPENDENT_MARKET,
+        PriceEvidenceClass.COMMERCIAL_QUOTE,
+    }
+
+
+def test_quote_and_normalization_commands_reject_ambiguous_commercial_inputs() -> None:
+    with pytest.raises(ValueError, match="supplier identity"):
+        PriceQuoteDraft(
+            item_id="pipe-1",
+            evidence_class=PriceEvidenceClass.COMMERCIAL_QUOTE,
+            source_observation_id="observation-quote",
+            technical_attributes={"diameter": "DN100"},
+            amount=Decimal("100"),
+            basis=basis(region="Moscow"),
+            quote_date=date(2026, 7, 20),
+            valid_until=date(2026, 8, 20),
+            lead_time_days=10,
+            available=True,
+            source_reliability=Decimal("0.9"),
+        )
+    with pytest.raises(ValueError, match="cannot end before"):
+        PriceQuoteDraft(
+            item_id="pipe-1",
+            supplier_id="supplier-1",
+            evidence_class=PriceEvidenceClass.COMMERCIAL_QUOTE,
+            source_observation_id="observation-quote",
+            technical_attributes={"diameter": "DN100"},
+            amount=Decimal("100"),
+            basis=basis(region="Moscow"),
+            quote_date=date(2026, 7, 20),
+            valid_until=date(2026, 7, 19),
+            lead_time_days=10,
+            available=True,
+            source_reliability=Decimal("0.9"),
+        )
+    with pytest.raises(ValueError, match="must be unique"):
+        NormalizePriceCommand(
+            quote_id="quote-1",
+            adjustment_ids=("delivery-1", "delivery-1"),
+        )

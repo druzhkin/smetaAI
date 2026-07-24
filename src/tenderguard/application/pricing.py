@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from tenderguard.domain.models import (
     CommercialBasis,
     DomainModel,
     NomenclatureMatch,
+    NormalizedPrice,
     Observation,
     PriceQuote,
 )
@@ -93,6 +94,17 @@ class PriceQuoteDraft(DomainModel):
     available: bool | None
     source_reliability: Decimal = Field(ge=0, le=1)
 
+    @model_validator(mode="after")
+    def validity_and_source_identity_are_consistent(self) -> PriceQuoteDraft:
+        if self.valid_until is not None and self.valid_until < self.quote_date:
+            raise ValueError("Price quote validity cannot end before the quote date")
+        if (
+            self.evidence_class is PriceEvidenceClass.COMMERCIAL_QUOTE
+            and not self.supplier_id
+        ):
+            raise ValueError("A commercial quote requires a supplier identity")
+        return self
+
     def evidence_value(self) -> dict[str, Any]:
         return self.model_dump(
             mode="json",
@@ -114,6 +126,12 @@ class NormalizePriceCommand(DomainModel):
     region_adjustment_id: str | None = None
     party_adjustment_id: str | None = None
     payment_adjustment_id: str | None = None
+
+    @model_validator(mode="after")
+    def adjustment_references_are_unique(self) -> NormalizePriceCommand:
+        if len(self.adjustment_ids) != len(set(self.adjustment_ids)):
+            raise ValueError("Normalization adjustment references must be unique")
+        return self
 
 
 class NormalizedPriceView(DomainModel):
@@ -553,11 +571,14 @@ class PricingService:
         )
         if row is None:
             raise LookupError(command.quote_id)
-        quote = PriceQuote.model_validate(row.payload["quote"]).model_copy(
-            update={"status": PriceStatus(row.status)}
+        match = self._verified_match_for_item(project.id, row.item_id)
+        quote = self._validated_quote_row(
+            project_id=project.id,
+            row=row,
+            match=match,
         )
         policy = self._bound_version(project.id, "price_policy", "price_policy")
-        request = self._normalization_request(quote, command, policy)
+        request = self._normalization_request(project.id, quote, command, policy)
         normalized = normalize_quote(quote, request, normalized_at=utc_now())
         existing = self.session.get(NormalizedPriceRow, normalized.normalized_price_id)
         if existing is None:
@@ -575,6 +596,14 @@ class PricingService:
                     },
                     created_at=normalized.normalized_at,
                 )
+            )
+        else:
+            self._require_normalized_row_integrity(
+                project_id=project.id,
+                row=existing,
+                quote=quote,
+                policy=policy,
+                expected_command=command,
             )
         row.status = PriceStatus.NORMALIZED.value
         row.updated_at = utc_now()
@@ -654,11 +683,25 @@ class PricingService:
                 )
             )
         }
-        quotes = tuple(
-            PriceQuote.model_validate(quote_rows[row.quote_id].payload["quote"]).model_copy(
-                update={"status": PriceStatus.NORMALIZED}
+        validated_quotes: dict[str, PriceQuote] = {}
+        for normalized_row in normalized_rows:
+            quote_row = quote_rows.get(normalized_row.quote_id)
+            if quote_row is None:
+                raise ValueError("Normalized price has no project-scoped source quote")
+            quote = self._validated_quote_row(
+                project_id=project.id,
+                row=quote_row,
+                match=match,
             )
-            for row in normalized_rows
+            self._require_normalized_row_integrity(
+                project_id=project.id,
+                row=normalized_row,
+                quote=quote,
+                policy=policy,
+            )
+            validated_quotes[normalized_row.quote_id] = quote
+        quotes = tuple(
+            validated_quotes[normalized_row.quote_id] for normalized_row in normalized_rows
         )
         triangulation = evaluate_triangulation(
             item_id=item_id,
@@ -845,6 +888,7 @@ class PricingService:
 
     def _normalization_request(
         self,
+        project_id: str,
         quote: PriceQuote,
         command: NormalizePriceCommand,
         policy: ControlledVersionRow,
@@ -894,14 +938,70 @@ class PricingService:
             )
             for adjustment_id in command.adjustment_ids
         )
-        for section, reference_id in (
-            ("region_adjustments", command.region_adjustment_id),
-            ("party_adjustments", command.party_adjustment_id),
-            ("payment_adjustments", command.payment_adjustment_id),
-        ):
-            if reference_id is not None:
-                self._policy_reference(policy, section, reference_id)
+        for adjustment in adjustments:
+            evidence = self._verified_observation(project_id, adjustment.evidence_id)
+            evidence_model = Observation.model_validate(evidence.payload["observation"])
+            try:
+                evidenced_amount = Decimal(str(evidence_model.value))
+            except (InvalidOperation, TypeError, ValueError) as error:
+                raise ValueError(
+                    f"Normalization adjustment evidence is not decimal: {adjustment.adjustment_id}"
+                ) from error
+            if (
+                evidenced_amount != adjustment.amount_per_target_unit
+                or evidence_model.unit != target.unit
+                or evidence.payload.get("currency") != target.currency
+            ):
+                raise ValueError(
+                    f"Normalization adjustment evidence does not reproduce the "
+                    f"approved amount/basis: {adjustment.adjustment_id}"
+                )
+        if quote.basis.region != target.region:
+            reference = self._policy_reference(
+                policy,
+                "region_adjustments",
+                command.region_adjustment_id,
+            )
+            if (
+                reference.get("source_region") != quote.basis.region
+                or reference.get("target_region") != target.region
+            ):
+                raise ValueError("Region adjustment does not match quote and target regions")
+        elif command.region_adjustment_id is not None:
+            raise ValueError("Region adjustment reference is extraneous")
+        if quote.basis.party_quantity != target.party_quantity:
+            reference = self._policy_reference(
+                policy,
+                "party_adjustments",
+                command.party_adjustment_id,
+            )
+            try:
+                source_party_quantity = Decimal(str(reference["source_party_quantity"]))
+                target_party_quantity = Decimal(str(reference["target_party_quantity"]))
+            except (KeyError, InvalidOperation, TypeError, ValueError) as error:
+                raise ValueError("Party adjustment quantities are invalid") from error
+            if (
+                source_party_quantity != quote.basis.party_quantity
+                or target_party_quantity != target.party_quantity
+            ):
+                raise ValueError("Party adjustment does not match quote and target quantities")
+        elif command.party_adjustment_id is not None:
+            raise ValueError("Party adjustment reference is extraneous")
+        if quote.basis.payment_terms != target.payment_terms:
+            reference = self._policy_reference(
+                policy,
+                "payment_adjustments",
+                command.payment_adjustment_id,
+            )
+            if (
+                reference.get("source_payment_terms") != quote.basis.payment_terms
+                or reference.get("target_payment_terms") != target.payment_terms
+            ):
+                raise ValueError("Payment adjustment does not match quote and target terms")
+        elif command.payment_adjustment_id is not None:
+            raise ValueError("Payment adjustment reference is extraneous")
         return NormalizationRequest(
+            policy_version_id=policy.id,
             target_basis=target,
             source_units_per_target_unit=conversion_rate,
             unit_conversion_id=conversion_id,
@@ -912,6 +1012,83 @@ class PricingService:
             party_adjustment_id=command.party_adjustment_id,
             payment_adjustment_id=command.payment_adjustment_id,
         )
+
+    def _validated_quote_row(
+        self,
+        *,
+        project_id: str,
+        row: PriceQuoteRow,
+        match: NomenclatureMatchRow,
+    ) -> PriceQuote:
+        raw_quote = row.payload.get("quote")
+        if not isinstance(raw_quote, dict):
+            raise ValueError("Price quote payload is not reproducible")
+        quote = PriceQuote.model_validate(raw_quote).model_copy(
+            update={"status": PriceStatus(row.status)}
+        )
+        if (
+            quote.quote_id != row.id
+            or quote.item_id != row.item_id
+            or quote.source_observation_id != row.source_observation_id
+            or quote.amount != row.amount
+            or quote.basis.currency != row.currency
+            or quote.quote_date != row.quote_date
+            or quote.valid_until != row.valid_until
+        ):
+            raise ValueError("Price quote row differs from its immutable evidence payload")
+        self._validate_quote_technical_attributes(match, quote.technical_attributes)
+        observation = self._verified_observation(project_id, quote.source_observation_id)
+        reproduced_draft = PriceQuoteDraft.model_validate(
+            quote.model_dump(mode="json", exclude={"quote_id", "status"})
+        )
+        if content_hash(observation.payload.get("observation", {}).get("value")) != content_hash(
+            reproduced_draft.evidence_value()
+        ):
+            raise ValueError("Price quote no longer reproduces its verified source observation")
+        source_origin_id = self._validate_price_evidence_class(
+            project_id,
+            observation,
+            quote.evidence_class,
+        )
+        if row.payload.get("source_origin_id") != source_origin_id:
+            raise ValueError("Price quote source origin differs from qualified evidence")
+        return quote
+
+    def _require_normalized_row_integrity(
+        self,
+        *,
+        project_id: str,
+        row: NormalizedPriceRow,
+        quote: PriceQuote,
+        policy: ControlledVersionRow,
+        expected_command: NormalizePriceCommand | None = None,
+    ) -> None:
+        raw_command = row.payload.get("normalization_command")
+        raw_normalized = row.payload.get("normalized_price")
+        if not isinstance(raw_command, dict) or not isinstance(raw_normalized, dict):
+            raise ValueError("Normalized price lacks reproducible inputs or output")
+        command = NormalizePriceCommand.model_validate(raw_command)
+        if expected_command is not None and command != expected_command:
+            raise ValueError("Normalized price identity collides with a different command")
+        if command.quote_id != row.quote_id or quote.quote_id != row.quote_id:
+            raise ValueError("Normalized price command does not match its source quote")
+        normalized_at = ensure_utc(row.created_at)
+        if normalized_at is None:
+            raise ValueError("Normalized price timestamp is missing")
+        request = self._normalization_request(project_id, quote, command, policy)
+        recalculated = normalize_quote(quote, request, normalized_at=normalized_at)
+        stored = NormalizedPrice.model_validate(raw_normalized)
+        if (
+            row.payload.get("policy_version_id") != policy.id
+            or stored != recalculated
+            or row.id != recalculated.normalized_price_id
+            or row.quote_id != recalculated.quote_id
+            or row.amount_per_unit != recalculated.amount_per_unit
+            or row.currency != recalculated.target_basis.currency
+            or row.formula_hash
+            != recalculated.normalization_formula.removeprefix("sha256:")
+        ):
+            raise ValueError("Normalized price failed deterministic integrity validation")
 
     def _record_verified_rate_observation(
         self,
