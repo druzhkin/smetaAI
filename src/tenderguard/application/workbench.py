@@ -1866,6 +1866,9 @@ class ProjectReadService:
                 attributes={
                     "snapshot_id": row.snapshot_id,
                     "decided_by": row.decided_by,
+                    "gate_hash": row.payload.get("gate_hash"),
+                    "release_context_hash": row.payload.get("release_context_hash"),
+                    "project_row_version": row.payload.get("project_row_version"),
                     "findings": row.payload.get("findings", []),
                 },
             )

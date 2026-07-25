@@ -30,7 +30,10 @@ from tenderguard.application.boq import (
     QuantitySubmission,
     ScopeRunResult,
 )
-from tenderguard.application.calculations import CalculationExecutionResult
+from tenderguard.application.calculations import (
+    CalculationContextView,
+    CalculationExecutionResult,
+)
 from tenderguard.application.commercial_costs import (
     CommercialCostModelView,
     CommercialCostProposalResult,
@@ -183,6 +186,7 @@ class DocumentSetResponse(DocumentSetView):
 
 class ReleaseRequest(ApiModel):
     expected_row_version: int = Field(ge=1)
+    gate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -200,7 +204,11 @@ class RequeueDocumentProcessingRequest(ApiModel):
 
 
 class ReleaseGateResponse(ApiModel):
+    project: ProjectView
     decision: GateDecision
+    gate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    internal_decision: GateDecision
+    internal_gate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ReleaseAttemptResponse(ApiModel):
@@ -606,6 +614,16 @@ class CalculationExecutionRequest(ApiModel):
     inputs: tuple[AtomicCostInput, ...] = Field(min_length=1)
     policy: CalculationPolicy
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class CurrentCalculationExecutionRequest(ApiModel):
+    expected_row_version: int = Field(ge=1)
+    candidate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class CalculationContextResponse(CalculationContextView):
+    pass
 
 
 class ControlledVersionResponse(ControlledVersion):

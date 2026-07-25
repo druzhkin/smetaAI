@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyQuantityManualChange,
+  attemptRelease,
   confirmDocumentSet,
   createProject,
   decideWorkItem,
   evaluatePriceItem,
+  executeCurrentCalculation,
+  getCalculationContext,
+  getReleaseGates,
   getPriceQuoteCandidate,
   normalizePriceQuote,
   proposeQuantityChange,
@@ -425,6 +429,135 @@ describe("controlled mutations", () => {
     expect(JSON.parse(String(evaluateInit.body))).toEqual({
       as_of: "2026-07-24",
       reason: "Run exact triangulation",
+    });
+  });
+
+  it("executes only the exact server-generated calculation candidate", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project: { id: "project/1" },
+            candidate: { candidate_hash: "a".repeat(64) },
+            blockers: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project: { id: "project/1", state: "INDEPENDENT_VALIDATION" },
+            primary: { grand_total: "1250.00", currency: "RUB" },
+          }),
+          {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getCalculationContext(context, "project/1");
+    await executeCurrentCalculation(context, {
+      projectId: "project/1",
+      expectedRowVersion: 17,
+      candidateHash: "a".repeat(64),
+      reason: "Fix the exact server-generated candidate",
+      idempotencyKey: "calculation-operation",
+    });
+
+    const [contextUrl, contextInit] = fetchMock.mock.calls[0] as [
+      URL,
+      RequestInit,
+    ];
+    expect(contextUrl.pathname).toBe(
+      "/v1/projects/project%2F1/calculation-context",
+    );
+    expect(contextInit.method).toBe("GET");
+
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [
+      URL,
+      RequestInit,
+    ];
+    expect(executeUrl.pathname).toBe(
+      "/v1/projects/project%2F1/calculations/current",
+    );
+    expect(executeInit.headers).toMatchObject({
+      "Idempotency-Key": "calculation-operation",
+    });
+    expect(JSON.parse(String(executeInit.body))).toEqual({
+      expected_row_version: 17,
+      candidate_hash: "a".repeat(64),
+      reason: "Fix the exact server-generated candidate",
+    });
+  });
+
+  it("binds release to the exact server gate hash and project version", async () => {
+    const gateHash = "b".repeat(64);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project: { id: "project/1", row_version: 23 },
+            decision: { allowed: true, findings: [] },
+            gate_hash: gateHash,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project: { id: "project/1", state: "APPROVED_FOR_BID" },
+            decision: { allowed: true, findings: [] },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getReleaseGates(context, "project/1");
+    await attemptRelease(context, {
+      projectId: "project/1",
+      target: "bid",
+      expectedRowVersion: 23,
+      gateHash,
+      reason: "Independent complete hard-stop review",
+      idempotencyKey: "release-operation",
+    });
+
+    const [gateUrl, gateInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(gateUrl.pathname).toBe(
+      "/v1/projects/project%2F1/release-gates",
+    );
+    expect(gateInit.method).toBe("GET");
+
+    const [releaseUrl, releaseInit] = fetchMock.mock.calls[1] as [
+      URL,
+      RequestInit,
+    ];
+    expect(releaseUrl.pathname).toBe(
+      "/v1/projects/project%2F1/release/bid",
+    );
+    expect(releaseInit.headers).toMatchObject({
+      "Idempotency-Key": "release-operation",
+    });
+    expect(JSON.parse(String(releaseInit.body))).toEqual({
+      expected_row_version: 23,
+      gate_hash: gateHash,
+      reason: "Independent complete hard-stop review",
     });
   });
 });

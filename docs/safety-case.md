@@ -28,6 +28,7 @@ all operational qualification evidence remain open.
 | Logistics/finance | typed capacity/cash-flow models, exact observation-value binding, controlled completeness and dual recalculation | blocked model; no derived cost basis |
 | Calculation | exact planned-component coverage and deterministic primary build-up | no release on missing, duplicate, or unplanned components |
 | Independent validation | separate recalculation from atomic inputs | arithmetic mismatch hard stop |
+| Release decision | complete server-derived context, legal state, row version and target-specific gate hash rebuilt under lock | stale review or any hard stop rejects approval |
 | Scenario | approved definitions over a fixed base snapshot plus independent recalculation | reject unknown or unsupported overrides |
 | Export | fixed released snapshot, mandatory content hashes, Ed25519 signature, immutable artifact metadata | refuse generation or verification |
 | Audit integrity | per-key hash chains, WORM checkpoint, independent Ed25519 receipt, full current-history verification | readiness 503; investigate tampering or stale anchor |
@@ -59,6 +60,20 @@ inputs, median, spread, triangulation, source origins, approval/RFQ lineage and
 derived rate observation before display and again before calculation.
 PostgreSQL prevents in-place mutation of normalized prices and decision
 history; a mismatch blocks use of the price.
+
+The calculation browser submits no amount, quantity, rate, factor or policy.
+The server reconstructs the full candidate before execution and commits its
+hash to the project row version, document set, approved model, policy and
+atomic inputs. Fixed snapshot reads compare the content-addressed object with
+the calculation-run record before exposing a total. PostgreSQL rejects
+in-place mutation or deletion of calculation runs, atomic inputs, scenario
+runs and release decisions.
+
+Release review is also time-of-check/time-of-use bound. The displayed bid and
+internal decisions have separate hashes over the exact project state/version,
+document set, complete release context and decision. The server rebuilds that
+hash while holding the project lock; a stale review cannot authorize a newer
+or different context.
 
 In staging and production, release also re-verifies the configured WORM policy
 and fresh external audit checkpoint. Failure adds

@@ -40,6 +40,7 @@ from tenderguard.domain.intake import IntakeManifest
 from tenderguard.domain.models import (
     CalculationSnapshot,
     ControlledVersion,
+    GateDecision,
     IndependentValidationResult,
     WorkflowTransition,
 )
@@ -989,6 +990,33 @@ class ProjectService:
         )
         return self._build_release_context(project)
 
+    def evaluate_release_gates(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+    ) -> tuple[ProjectView, GateDecision, str, GateDecision, str]:
+        project = self.get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.REVIEWER,
+                ActorRole.APPROVER,
+                ActorRole.AUDITOR,
+            ),
+        )
+        context = self._build_release_context(project)
+        bid_decision = evaluate_bid_release(context)
+        internal_decision = evaluate_internal_release(context)
+        return (
+            self._view(project),
+            bid_decision,
+            self._release_gate_hash(project, context, bid_decision),
+            internal_decision,
+            self._release_gate_hash(project, context, internal_decision),
+        )
+
     def normative_engine_qualified(self) -> bool:
         return self._qualified_normative_adapter() is not None
 
@@ -998,6 +1026,7 @@ class ProjectService:
         actor: Actor,
         project_id: str,
         expected_row_version: int,
+        expected_gate_hash: str,
         request_id: str,
         reason: str,
     ) -> tuple[ProjectView, Any]:
@@ -1005,6 +1034,7 @@ class ProjectService:
             actor=actor,
             project_id=project_id,
             expected_row_version=expected_row_version,
+            expected_gate_hash=expected_gate_hash,
             request_id=request_id,
             reason=reason,
             requested_state=ApprovalState.APPROVED_FOR_BID,
@@ -1016,6 +1046,7 @@ class ProjectService:
         actor: Actor,
         project_id: str,
         expected_row_version: int,
+        expected_gate_hash: str,
         request_id: str,
         reason: str,
     ) -> tuple[ProjectView, Any]:
@@ -1023,6 +1054,7 @@ class ProjectService:
             actor=actor,
             project_id=project_id,
             expected_row_version=expected_row_version,
+            expected_gate_hash=expected_gate_hash,
             request_id=request_id,
             reason=reason,
             requested_state=ApprovalState.APPROVED_FOR_INTERNAL_USE,
@@ -1034,6 +1066,7 @@ class ProjectService:
         actor: Actor,
         project_id: str,
         expected_row_version: int,
+        expected_gate_hash: str,
         request_id: str,
         reason: str,
         requested_state: ApprovalState,
@@ -1063,6 +1096,10 @@ class ProjectService:
             if requested_state is ApprovalState.APPROVED_FOR_BID
             else evaluate_internal_release(context)
         )
+        gate_hash = self._release_gate_hash(project, context, decision)
+        if gate_hash != expected_gate_hash:
+            raise ValueError("Release gate changed; reload the complete server evaluation")
+        release_context_hash = content_hash(context)
         now = utc_now()
         decision_id = f"release-decision-{uuid4()}"
         self.session.add(
@@ -1073,7 +1110,12 @@ class ProjectService:
                 requested_state=decision.requested_state.value,
                 resulting_state=decision.resulting_state.value,
                 allowed=decision.allowed,
-                payload=decision.model_dump(mode="json"),
+                payload={
+                    **decision.model_dump(mode="json"),
+                    "gate_hash": gate_hash,
+                    "release_context_hash": release_context_hash,
+                    "project_row_version": expected_row_version,
+                },
                 decided_by=actor.actor_id,
                 decided_at=now,
             )
@@ -1099,12 +1141,33 @@ class ProjectService:
             reason=reason,
             payload={
                 "decision_id": decision_id,
+                "gate_hash": gate_hash,
+                "release_context_hash": release_context_hash,
+                "project_row_version": expected_row_version,
+                "snapshot_id": context.snapshot.snapshot_id if context.snapshot else None,
                 "allowed": decision.allowed,
                 "resulting_state": decision.resulting_state,
                 "finding_codes": [item.code for item in decision.findings],
             },
         )
         return self._view(project), decision
+
+    @staticmethod
+    def _release_gate_hash(
+        project: ProjectRow,
+        context: ReleaseContext,
+        decision: GateDecision,
+    ) -> str:
+        return content_hash(
+            {
+                "project_id": project.id,
+                "project_state": project.state,
+                "project_row_version": project.row_version,
+                "current_document_set_revision_id": (project.current_document_set_revision_id),
+                "release_context": context,
+                "decision": decision,
+            }
+        )
 
     def _change_state(
         self,

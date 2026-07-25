@@ -241,9 +241,23 @@ export interface ValidationFinding {
 }
 
 export interface GateDecision {
+  requested_state: ApprovalState;
   allowed: boolean;
   resulting_state: ApprovalState;
   findings: ValidationFinding[];
+}
+
+export interface ReleaseGateSet {
+  project: ProjectView;
+  decision: GateDecision;
+  gate_hash: string;
+  internal_decision: GateDecision;
+  internal_gate_hash: string;
+}
+
+export interface ReleaseAttempt {
+  project: ProjectView;
+  decision: GateDecision;
 }
 
 export interface WorkbenchMetric {
@@ -524,6 +538,115 @@ export interface PriceDecision {
   approval_task_ids: string[];
   rfq_request_id: string | null;
   project_state: string;
+}
+
+export interface AppliedCalculationFactor {
+  factor_id: string;
+  version_id: string;
+  value: string;
+  evidence_or_rule_id: string;
+}
+
+export interface AtomicCostInput {
+  cost_input_id: string;
+  line_id: string;
+  wbs_node_id: string;
+  semantic_key: string;
+  category: string;
+  quantity: string;
+  unit: string;
+  unit_rate: string;
+  currency: string;
+  factors: AppliedCalculationFactor[];
+  sign: -1 | 1;
+  source_observation_id: string | null;
+  approved_assumption_id: string | null;
+  normative_rate_id: string | null;
+  risk_reserve_id: string | null;
+  derived_cost_model_id: string | null;
+}
+
+export interface CalculationPolicy {
+  policy_version: string;
+  currency: string;
+  line_rounding_scale: number;
+  total_rounding_scale: number;
+  rounding_mode: string;
+  independent_tolerance: string;
+  expected_semantic_keys: string[];
+}
+
+export interface CalculationCandidate {
+  candidate_hash: string;
+  project_id: string;
+  project_row_version: number;
+  document_set_revision_id: string;
+  calculation_model_version_id: string;
+  policy: CalculationPolicy;
+  inputs: AtomicCostInput[];
+}
+
+export interface FixedCalculation {
+  snapshot_id: string;
+  calculation_run_id: string;
+  document_set_revision_id: string;
+  calculation_model_version_id: string | null;
+  status: string;
+  currency: string | null;
+  grand_total: string | null;
+  independent_validation_passed: boolean | null;
+  snapshot_hash: string;
+  created_by: string;
+  created_at: string;
+  integrity_valid: boolean;
+  integrity_error: string | null;
+}
+
+export interface CalculationContext {
+  project: ProjectView;
+  candidate: CalculationCandidate | null;
+  latest_fixed_calculation: FixedCalculation | null;
+  blockers: string[];
+}
+
+export interface CalculationLineResult {
+  line_id: string;
+  category: string;
+  amount: string;
+  currency: string;
+}
+
+export interface CalculationExecution {
+  project: ProjectView;
+  primary: {
+    engine_version: string;
+    currency: string;
+    lines: CalculationLineResult[];
+    category_totals: Record<string, string>;
+    grand_total: string;
+    calculated_at: string;
+  };
+  independent: {
+    validator_version: string;
+    passed: boolean;
+    independently_calculated_total: string;
+    primary_total: string;
+    difference: string;
+    tolerance: string;
+    findings: ValidationFinding[];
+    validated_at: string;
+  };
+  snapshot: {
+    snapshot_id: string;
+    project_id: string;
+    document_set_revision_id: string;
+    input_hash: string;
+    output_hash: string;
+    snapshot_hash: string;
+    created_by: string;
+    created_at: string;
+    fixed: boolean;
+  };
 }
 
 export interface DevelopmentIdentity {

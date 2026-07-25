@@ -67,7 +67,6 @@ from tenderguard.domain.integration import (
     load_integration_signing_material,
     validate_integration_public_key,
 )
-from tenderguard.domain.release import evaluate_bid_release
 from tenderguard.infrastructure.auth import Actor, Authenticator
 from tenderguard.infrastructure.database import (
     CURRENT_SCHEMA_REVISION,
@@ -102,6 +101,7 @@ from .schemas import (
     BuildApprovalPlanRequest,
     CalculateRiskReserveRequest,
     CalculateScenarioRequest,
+    CalculationContextResponse,
     CalculationExecutionRequest,
     CalculationExecutionResponse,
     CalibrationApprovalResponse,
@@ -120,6 +120,7 @@ from .schemas import (
     CreateBoqLineRequest,
     CreateControlledVersionRequest,
     CreateProjectRequest,
+    CurrentCalculationExecutionRequest,
     DecideApprovalRequest,
     DocumentSetResponse,
     EvaluateItemPriceRequest,
@@ -1366,8 +1367,17 @@ def create_app(
             ActorRole.APPROVER,
             ActorRole.AUDITOR,
         )
-        context = service(session).evaluate_release(actor=actor, project_id=project_id)
-        return ReleaseGateResponse(decision=evaluate_bid_release(context))
+        project, bid, bid_hash, internal, internal_hash = service(session).evaluate_release_gates(
+            actor=actor,
+            project_id=project_id,
+        )
+        return ReleaseGateResponse(
+            project=project,
+            decision=bid,
+            gate_hash=bid_hash,
+            internal_decision=internal,
+            internal_gate_hash=internal_hash,
+        )
 
     @application.post(
         "/v1/projects/{project_id}/release/bid",
@@ -1385,6 +1395,7 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 expected_row_version=payload.expected_row_version,
+                expected_gate_hash=payload.gate_hash,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -1406,6 +1417,7 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 expected_row_version=payload.expected_row_version,
+                expected_gate_hash=payload.gate_hash,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2408,6 +2420,52 @@ def create_app(
                 expected_row_version=payload.expected_row_version,
                 inputs=payload.inputs,
                 policy=payload.policy,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return CalculationExecutionResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/calculation-context",
+        response_model=CalculationContextResponse,
+    )
+    def calculation_context(
+        project_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CalculationContextResponse:
+        context = CalculationService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        ).context(
+            actor=actor,
+            project_id=project_id,
+        )
+        return CalculationContextResponse.model_validate(context.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/calculations/current",
+        response_model=CalculationExecutionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def execute_current_calculation(
+        project_id: str,
+        payload: CurrentCalculationExecutionRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CalculationExecutionResponse:
+        with mutation_transaction(session):
+            result = CalculationService(
+                session=session,
+                settings=resolved_settings,
+                object_store=resolved_store,
+            ).execute_current(
+                actor=actor,
+                project_id=project_id,
+                expected_row_version=payload.expected_row_version,
+                candidate_hash=payload.candidate_hash,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )

@@ -46,8 +46,9 @@ does.
 
 See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
 [requirements traceability](docs/requirements-traceability.md),
-[governed commercial cost models](docs/commercial-cost-models.md), and the
-[signed export package specification](docs/signed-export-package.md). The
+[governed commercial cost models](docs/commercial-cost-models.md), the
+[controlled calculation and release contract](docs/calculation-release-control.md),
+and the [signed export package specification](docs/signed-export-package.md). The
 [signed integration contract](docs/integration-delivery.md) defines the
 transport trust boundary. The [operator UI contract](docs/operator-ui.md)
 defines browser authentication, information barriers, deployment, and the
@@ -132,6 +133,13 @@ The repository currently connects and integration-tests:
   RFQ/expert review when evidence is insufficient; verified price decisions
   are replayed again before calculation, while PostgreSQL guards protect quote
   inputs, normalized prices, and decision history from in-place mutation;
+- governed calculation and release surfaces: the browser displays a
+  server-generated candidate and submits only its hash, project version and
+  reason; the server rebuilds all atomic inputs and policy before fixing the
+  independently validated snapshot. Separate internal/bid release decisions
+  expose every hard stop and a context-bound gate hash; the approver must
+  attest the exact project and target, while PostgreSQL prevents in-place
+  mutation of calculation runs, atomic inputs, scenarios and release records;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -187,7 +195,7 @@ Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
 schedulers/monitoring, remaining controlled extraction-correction,
-BoQ-structure/nomenclature/calculation/reconciliation/release
+BoQ-structure/nomenclature/reconciliation
 surfaces, and business qualification of the operator interface remain to be
 completed.
 External verification also requires approved out-of-band

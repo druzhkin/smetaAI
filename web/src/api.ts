@@ -2,6 +2,8 @@ import type {
   ApprovalDecision,
   ApprovalDecisionResult,
   ApprovalState,
+  CalculationContext,
+  CalculationExecution,
   ConflictResolutionResult,
   ConflictReview,
   DocumentSetView,
@@ -20,6 +22,8 @@ import type {
   QuantityManualChange,
   QuantitySubmission,
   QuarantinedUpload,
+  ReleaseAttempt,
+  ReleaseGateSet,
   WorkItemPage,
   WorkItemDetail,
 } from "./types";
@@ -630,6 +634,81 @@ export function evaluatePriceItem(
       idempotencyKey: input.idempotencyKey,
       body: {
         as_of: input.asOf,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getCalculationContext(
+  context: RequestContext,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<CalculationContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/calculation-context`,
+    undefined,
+    signal,
+  );
+}
+
+export function executeCurrentCalculation(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    expectedRowVersion: number;
+    candidateHash: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<CalculationExecution> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/calculations/current`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        expected_row_version: input.expectedRowVersion,
+        candidate_hash: input.candidateHash,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getReleaseGates(
+  context: RequestContext,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ReleaseGateSet> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/release-gates`,
+    undefined,
+    signal,
+  );
+}
+
+export function attemptRelease(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    target: "bid" | "internal";
+    expectedRowVersion: number;
+    gateHash: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ReleaseAttempt> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/release/${input.target}`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        expected_row_version: input.expectedRowVersion,
+        gate_hash: input.gateHash,
         reason: input.reason,
       },
     },

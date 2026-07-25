@@ -1,8 +1,20 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
 
 from tenderguard.application.projects import ProjectService
-from tenderguard.domain.enums import ApprovalState, VersionStatus
+from tenderguard.config import Settings
+from tenderguard.domain.access import project_role_mask
+from tenderguard.domain.enums import (
+    ActorRole,
+    ApprovalState,
+    ProjectAccessLevel,
+    ProjectMembershipStatus,
+    VersionStatus,
+)
 from tenderguard.domain.models import (
     CalculationSnapshot,
     ControlledVersion,
@@ -13,6 +25,18 @@ from tenderguard.domain.release import (
     ReleaseContext,
     evaluate_bid_release,
     evaluate_internal_release,
+)
+from tenderguard.infrastructure.auth import Actor
+from tenderguard.infrastructure.database import (
+    create_database_engine,
+    create_schema_for_tests,
+    create_session_factory,
+)
+from tenderguard.infrastructure.object_store import LocalObjectStore
+from tenderguard.infrastructure.orm import (
+    ProjectMembershipRow,
+    ProjectRow,
+    ReleaseDecisionRow,
 )
 
 NOW = datetime(2026, 7, 23, tzinfo=UTC)
@@ -107,6 +131,96 @@ def test_internal_release_is_a_formal_conservative_decision() -> None:
     assert decision.allowed
     assert decision.requested_state is ApprovalState.APPROVED_FOR_INTERNAL_USE
     assert decision.resulting_state is ApprovalState.APPROVED_FOR_INTERNAL_USE
+
+
+def test_release_command_rejects_a_stale_complete_gate_evaluation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        local_object_store_path=tmp_path / "objects",
+        audit_signing_key="test-audit-signing-key-at-least-32-bytes",
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    factory = create_session_factory(engine)
+    actor = Actor("approver-1", "org-1", frozenset({ActorRole.APPROVER}))
+    project = ProjectRow(
+        id="project-1",
+        organization_id="org-1",
+        code="REL-1",
+        name="Release hash binding",
+        state=ApprovalState.EXPERT_REVIEW.value,
+        current_document_set_revision_id="docs-v2",
+        row_version=1,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    context_holder = {"value": good_context()}
+
+    def current_context(
+        _service: ProjectService,
+        _project: ProjectRow,
+    ) -> ReleaseContext:
+        return context_holder["value"]
+
+    monkeypatch.setattr(ProjectService, "_build_release_context", current_context)
+
+    with factory.begin() as session:
+        session.add(project)
+        session.add(
+            ProjectMembershipRow(
+                id="membership-release-approver",
+                project_id=project.id,
+                principal_id=actor.actor_id,
+                roles=[ActorRole.APPROVER.value],
+                role_mask=project_role_mask((ActorRole.APPROVER,)),
+                access_level=ProjectAccessLevel.OWNER.value,
+                status=ProjectMembershipStatus.ACTIVE.value,
+                version=1,
+                supersedes_membership_id=None,
+                changed_by="test-fixture",
+                reason="Explicit project release authority",
+                created_at=NOW,
+            )
+        )
+        session.flush()
+        service = ProjectService(
+            session=session,
+            settings=settings,
+            object_store=LocalObjectStore(tmp_path / "objects"),
+        )
+        (
+            project_view,
+            decision,
+            gate_hash,
+            _internal_decision,
+            _internal_hash,
+        ) = service.evaluate_release_gates(
+            actor=actor,
+            project_id=project.id,
+        )
+        assert project_view.row_version == 1
+        assert decision.allowed
+
+        context_holder["value"] = context_holder["value"].model_copy(
+            update={"production_qualification_complete": False}
+        )
+        with pytest.raises(
+            ValueError,
+            match="Release gate changed",
+        ):
+            service.attempt_bid_release(
+                actor=actor,
+                project_id=project.id,
+                expected_row_version=1,
+                expected_gate_hash=gate_hash,
+                request_id="request-stale-release",
+                reason="Approve only the exact independently reviewed gate result",
+            )
+        assert session.scalars(select(ReleaseDecisionRow)).all() == []
 
     blocked = evaluate_internal_release(
         good_context().model_copy(update={"current_document_set_confirmed": False})

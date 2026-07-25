@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes seven controlled mutation families:
+The current interface includes nine controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -66,7 +66,21 @@ The current interface includes seven controlled mutation families:
   changes-requested decision for an existing approval task. The operation
   requires the exact task timestamp, a reason, project-scoped evidence
   identifiers, an idempotency key, and backend four-eyes eligibility. Approval
-  additionally requires explicit project-code confirmation in the browser.
+  additionally requires explicit project-code confirmation in the browser;
+- an estimator may fix a calculation only from the complete server-generated
+  candidate. The browser shows the exact evidence bases, controlled policy,
+  quantities, rates, factors and candidate hash but submits only that hash,
+  project row version, reason, project-code confirmation and acknowledgement.
+  The server rebuilds the candidate under lock, performs the primary and
+  independent calculations, stores a content-addressed snapshot and hides any
+  later amount whose snapshot/run integrity check fails;
+- an approver may select internal or bid release only when the target decision
+  has no hard-stop findings and the workflow state permits the transition.
+  The screen renders every finding and a target-specific gate hash. Submission
+  requires the exact project code, exact target state and an explicit
+  four-eyes acknowledgement; the server rebuilds the complete gate and rejects
+  stale hashes before persisting the immutable release decision and audited
+  transition.
 
 The backend remains authoritative and records every accepted mutation in the
 audit chain. An unsupported file, invalid logical key, stale task or conflict,
@@ -74,8 +88,8 @@ stale document-set candidate, self-confirmation, self-resolution, missing
 role, or unacknowledged command fails closed.
 
 General extraction correction, BoQ structure and nomenclature maintenance,
-calculation execution, workflow transition, and bid release are not yet
-represented as delivered UI operations. Production acceptance also requires
+reconciliation maintenance, and general-purpose workflow transitions are not
+yet represented as delivered UI operations. Production acceptance also requires
 role-based user testing, accessibility verification, and business-process
 qualification.
 

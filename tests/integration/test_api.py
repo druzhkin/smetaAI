@@ -235,6 +235,7 @@ def test_api_scopes_projects_and_exposes_fail_closed_release_gates(tmp_path: Pat
             },
             json={
                 "expected_row_version": project["row_version"],
+                "gate_hash": gates.json()["gate_hash"],
                 "reason": "Infrastructure administrator must not release a bid",
             },
         )
@@ -676,8 +677,13 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             "calculation_model",
             "calc-1",
             {
-                "rounding_mode": "ROUND_HALF_UP",
-                "line_rounding_scale": 2,
+                "policy": {
+                    "currency": "RUB",
+                    "line_rounding_scale": 2,
+                    "total_rounding_scale": 2,
+                    "rounding_mode": "ROUND_HALF_UP",
+                    "independent_tolerance": "0",
+                }
             },
             purpose="calculation_model",
         )
@@ -1268,7 +1274,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                         "name": "Supplier stress case",
                         "overrides": [
                             {
-                                "cost_input_id": "pipe-cost",
+                                "semantic_key": "pipe",
                                 "unit_rate": "150",
                                 "factor_values": {},
                                 "evidence_or_assumption_id": "BOUND_SCENARIO_POLICY",
@@ -1890,53 +1896,41 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         assert response.status_code == 200, response.text
         current = response.json()
 
+        calculation_context = client.get(
+            f"/v1/projects/{project['id']}/calculation-context",
+            headers=operator,
+        )
+        assert calculation_context.status_code == 200, calculation_context.text
+        context_payload = calculation_context.json()
+        assert context_payload["blockers"] == []
+        candidate = context_payload["candidate"]
+        assert candidate is not None
+        assert candidate["project_row_version"] == current["row_version"]
+        assert candidate["calculation_model_version_id"] == version["version_id"]
+        assert {item["semantic_key"] for item in candidate["inputs"]} == {
+            "pipe",
+            "risk-reserve",
+        }
         calculation_payload = {
             "expected_row_version": current["row_version"],
-            "inputs": [
-                {
-                    "cost_input_id": "pipe-cost",
-                    "line_id": line_id,
-                    "wbs_node_id": "wbs-1",
-                    "semantic_key": "pipe",
-                    "category": "MATERIAL",
-                    "quantity": "125.50",
-                    "unit": "m",
-                    "unit_rate": "125.50",
-                    "currency": "RUB",
-                    "source_observation_id": verified_price_observation_id,
-                },
-                {
-                    "cost_input_id": "risk-reserve-cost",
-                    "line_id": "boq-line-risk-test",
-                    "wbs_node_id": "wbs-risk",
-                    "semantic_key": "risk-reserve",
-                    "category": "RISK",
-                    "quantity": "1",
-                    "unit": "project",
-                    "unit_rate": "10",
-                    "currency": "RUB",
-                    "risk_reserve_id": "risk-calculation-test",
-                },
-            ],
-            "policy": {
-                "policy_version": version["version_id"],
-                "currency": "RUB",
-                "line_rounding_scale": 2,
-                "total_rounding_scale": 2,
-                "rounding_mode": "ROUND_HALF_UP",
-                "independent_tolerance": "0",
-                "expected_semantic_keys": ["pipe", "risk-reserve"],
-            },
+            "inputs": candidate["inputs"],
+            "policy": candidate["policy"],
             "reason": "Calculate reviewed atomic inputs",
         }
+        pipe_input = next(
+            item for item in calculation_payload["inputs"] if item["semantic_key"] == "pipe"
+        )
+        risk_input = next(
+            item for item in calculation_payload["inputs"] if item["semantic_key"] == "risk-reserve"
+        )
         fake_source_payload = {
             **calculation_payload,
             "inputs": [
                 {
-                    **calculation_payload["inputs"][0],
+                    **pipe_input,
                     "source_observation_id": "invented-source",
                 },
-                calculation_payload["inputs"][1],
+                risk_input,
             ],
         }
         rejected = client.post(
@@ -1945,16 +1939,16 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             json=fake_source_payload,
         )
         assert rejected.status_code == 422
-        assert "no verified observation" in rejected.json()["detail"]
+        assert "server-generated evidence candidate" in rejected.json()["detail"]
 
         mismatched_quantity_payload = {
             **calculation_payload,
             "inputs": [
                 {
-                    **calculation_payload["inputs"][0],
+                    **pipe_input,
                     "quantity": "10",
                 },
-                calculation_payload["inputs"][1],
+                risk_input,
             ],
         }
         rejected_quantity = client.post(
@@ -1963,12 +1957,42 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             json=mismatched_quantity_payload,
         )
         assert rejected_quantity.status_code == 422
-        assert "current verified BoQ quantity" in rejected_quantity.json()["detail"]
+        assert "server-generated evidence candidate" in rejected_quantity.json()["detail"]
 
-        calculated = client.post(
+        tampered_policy = client.post(
             f"/v1/projects/{project['id']}/calculations",
             headers=operator,
-            json=calculation_payload,
+            json={
+                **calculation_payload,
+                "policy": {
+                    **calculation_payload["policy"],
+                    "independent_tolerance": "999999",
+                },
+            },
+        )
+        assert tampered_policy.status_code == 422
+        assert "current approved calculation model" in tampered_policy.json()["detail"]
+
+        stale_candidate = client.post(
+            f"/v1/projects/{project['id']}/calculations/current",
+            headers=operator,
+            json={
+                "expected_row_version": current["row_version"],
+                "candidate_hash": "f" * 64,
+                "reason": "A stale candidate hash must fail closed",
+            },
+        )
+        assert stale_candidate.status_code == 422
+        assert "candidate changed" in stale_candidate.json()["detail"]
+
+        calculated = client.post(
+            f"/v1/projects/{project['id']}/calculations/current",
+            headers=operator,
+            json={
+                "expected_row_version": current["row_version"],
+                "candidate_hash": candidate["candidate_hash"],
+                "reason": "Calculate the exact server-generated evidence candidate",
+            },
         )
         assert calculated.status_code == 201, calculated.text
         result = calculated.json()
@@ -1976,6 +2000,28 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         assert result["independent"]["passed"] is True
         assert result["snapshot"]["fixed"] is True
         assert result["project"]["state"] == "INDEPENDENT_VALIDATION"
+
+        fixed_context = client.get(
+            f"/v1/projects/{project['id']}/calculation-context",
+            headers=operator,
+        )
+        assert fixed_context.status_code == 200, fixed_context.text
+        fixed_payload = fixed_context.json()
+        assert fixed_payload["candidate"] is None
+        fixed = fixed_payload["latest_fixed_calculation"]
+        assert fixed["snapshot_id"] == result["snapshot"]["snapshot_id"]
+        assert fixed["calculation_run_id"].startswith("calculation-run-")
+        assert fixed["document_set_revision_id"] == candidate_id
+        assert fixed["calculation_model_version_id"] == version["version_id"]
+        assert fixed["status"] == "VALIDATED"
+        assert fixed["currency"] == "RUB"
+        assert fixed["grand_total"] == "15760.25"
+        assert fixed["independent_validation_passed"] is True
+        assert fixed["snapshot_hash"] == result["snapshot"]["snapshot_hash"]
+        assert fixed["created_by"] == "operator-1"
+        assert fixed["created_at"] == result["snapshot"]["created_at"]
+        assert fixed["integrity_valid"] is True
+        assert fixed["integrity_error"] is None
 
         lineage = client.get(
             (f"/v1/projects/{project['id']}/snapshots/{result['snapshot']['snapshot_id']}/lineage"),

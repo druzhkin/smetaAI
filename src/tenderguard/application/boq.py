@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import Field, model_validator
@@ -61,6 +61,19 @@ class CostComponentDraft(DomainModel):
     semantic_key: str = Field(min_length=1, max_length=200)
     category: CostCategory
     basis_kind: CostBasisKind
+    sign: Literal[-1, 1] = 1
+    factor_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def controlled_factor_ids_are_valid(self) -> CostComponentDraft:
+        if len(self.factor_ids) != len(set(self.factor_ids)):
+            raise ValueError("Cost component factor IDs must be unique")
+        if any(
+            not factor_id or factor_id != factor_id.strip() or len(factor_id) > 200
+            for factor_id in self.factor_ids
+        ):
+            raise ValueError("Cost component factor ID is invalid")
+        return self
 
 
 class BoqLineDraft(DomainModel):

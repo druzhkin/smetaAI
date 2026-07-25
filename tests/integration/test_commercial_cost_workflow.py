@@ -146,7 +146,15 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             version_label="commercial-1",
             content_hash="c" * 64,
             status="APPROVED",
-            payload={},
+            payload={
+                "policy": {
+                    "currency": "RUB",
+                    "line_rounding_scale": 2,
+                    "total_rounding_scale": 2,
+                    "rounding_mode": "ROUND_HALF_UP",
+                    "independent_tolerance": "0.00",
+                }
+            },
             approved_by="methodology-owner",
             approved_at=now,
         ),
@@ -911,12 +919,17 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             )
         project.current_document_set_revision_id = "document-set-commercial"
         session.flush()
-        result = calculation.execute(
+        context = calculation.context(
+            actor=estimator,
+            project_id=project.id,
+        )
+        assert context.candidate is not None
+        assert not context.blockers
+        result = calculation.execute_current(
             actor=estimator,
             project_id=project.id,
             expected_row_version=project.row_version,
-            inputs=inputs,
-            policy=policy,
+            candidate_hash=context.candidate.candidate_hash,
             request_id="request-project-calculation",
             reason="Include validated logistics as an atomic project cost",
         )

@@ -125,6 +125,21 @@ content-addressed snapshot, complete every planned expert task, and use the
 release evaluation; a UI badge or manually edited state is not release
 authority.
 
+On the calculation screen, review every server-provided component, source
+identifier, quantity, rate, factor and controlled policy. The execution
+command must contain only the current candidate hash, project row version,
+reason and idempotency key; never add a client-calculated total. After
+execution, confirm that the fixed snapshot passes object/run integrity and the
+independent result is `passed`.
+
+On the release screen, select internal or bid explicitly and review the full
+hard-stop register. The approver must enter the project code and exact target
+state. The request must carry the target-specific gate hash and row version
+shown by the same server response. A stale-gate error requires reloading and
+reviewing the entire result; it must not be retried with a substituted hash or
+worked around by a direct workflow transition. See
+`docs/calculation-release-control.md`.
+
 When upstream evidence changes, create a new revision and repeat the affected
 verification. Do not reuse an earlier scope attestation, price decision, risk
 calculation, validation result, or snapshot when its signed input set is stale.

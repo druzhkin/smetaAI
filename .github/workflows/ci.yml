@@ -44,11 +44,13 @@ jobs:
           uv run alembic upgrade head
           uv run alembic downgrade base
           uv run alembic upgrade head
-      - name: PostgreSQL pricing evidence guards
+      - name: PostgreSQL evidence immutability guards
         env:
           APP_ENV: test
           AUDIT_SIGNING_KEY: pricing-guard-ci-signing-key-at-least-32-bytes
           DATABASE_URL: postgresql+psycopg://tenderguard_ci:tenderguard_ci_only@localhost:5432/tenderguard_ci
         run: |
           uv run alembic upgrade head
-          uv run pytest tests/integration/test_pricing_integrity_postgresql.py
+          uv run pytest \
+            tests/integration/test_pricing_integrity_postgresql.py \
+            tests/integration/test_calculation_integrity_postgresql.py

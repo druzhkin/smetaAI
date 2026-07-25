@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from tenderguard.domain.calculation import (
     AppliedFactor,
     AtomicCostInput,
@@ -104,6 +106,24 @@ def test_double_counting_and_missing_basis_are_blockers() -> None:
     messages = {finding.message for finding in validation.findings}
     assert any("double counting" in message for message in messages)
     assert any("without source" in message for message in messages)
+
+
+def test_calculation_rejects_totals_outside_persisted_decimal_range() -> None:
+    inputs = (
+        input_line(
+            "overflow",
+            "pipe",
+            quantity="100000000000000000000",
+            rate="10000000000",
+        ),
+    )
+    with pytest.raises(ValueError, match="supported financial decimal range"):
+        calculate_primary(
+            inputs,
+            policy(),
+            engine_version="primary-v1",
+            calculated_at=NOW,
+        )
 
 
 def test_snapshot_hash_is_independent_of_input_and_version_order() -> None:

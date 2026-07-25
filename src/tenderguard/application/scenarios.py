@@ -125,9 +125,16 @@ class ScenarioService:
         raw_definition = raw_scenarios.get(command.scenario_key)
         if not isinstance(raw_definition, dict):
             raise LookupError(command.scenario_key)
+        raw_inputs = snapshot_payload.get("inputs")
+        raw_calculation_policy = snapshot_payload.get("policy")
+        if not isinstance(raw_inputs, list) or not isinstance(raw_calculation_policy, dict):
+            raise RuntimeError("Base snapshot lacks atomic inputs or calculation policy")
+        inputs = tuple(AtomicCostInput.model_validate(item) for item in raw_inputs)
+        calculation_policy = CalculationPolicy.model_validate(raw_calculation_policy)
         definition_payload = self._bind_policy_evidence(
             raw_definition,
             policy_version_id=policy_row.id,
+            inputs=inputs,
         )
         definition = ScenarioDefinition.model_validate(
             {
@@ -136,12 +143,6 @@ class ScenarioService:
                 "scenario_version": policy_row.id,
             }
         )
-        raw_inputs = snapshot_payload.get("inputs")
-        raw_calculation_policy = snapshot_payload.get("policy")
-        if not isinstance(raw_inputs, list) or not isinstance(raw_calculation_policy, dict):
-            raise RuntimeError("Base snapshot lacks atomic inputs or calculation policy")
-        inputs = tuple(AtomicCostInput.model_validate(item) for item in raw_inputs)
-        calculation_policy = CalculationPolicy.model_validate(raw_calculation_policy)
         self._validate_override_evidence(
             project_id=project.id,
             definition=definition,
@@ -211,6 +212,7 @@ class ScenarioService:
         raw_definition: dict[str, Any],
         *,
         policy_version_id: str,
+        inputs: tuple[AtomicCostInput, ...],
     ) -> dict[str, Any]:
         raw_overrides = raw_definition.get("overrides")
         if not isinstance(raw_overrides, list):
@@ -219,10 +221,42 @@ class ScenarioService:
         for item in raw_overrides:
             if not isinstance(item, dict):
                 raise ValueError("Scenario override must be an object")
+            cost_input_id = item.get("cost_input_id")
+            semantic_key = item.get("semantic_key")
+            line_id = item.get("line_id")
+            if cost_input_id is not None and (semantic_key is not None or line_id is not None):
+                raise ValueError(
+                    "Scenario override cannot combine a technical cost-input ID "
+                    "with a stable component selector"
+                )
+            if cost_input_id is None:
+                if not isinstance(semantic_key, str) or not semantic_key:
+                    raise ValueError("Scenario override requires cost_input_id or semantic_key")
+                if line_id is not None and (not isinstance(line_id, str) or not line_id):
+                    raise ValueError("Scenario override line_id is invalid")
+                candidates = [
+                    candidate
+                    for candidate in inputs
+                    if candidate.semantic_key == semantic_key
+                    and (line_id is None or candidate.line_id == line_id)
+                ]
+                if len(candidates) != 1:
+                    raise ValueError(
+                        "Scenario component selector must resolve to exactly one "
+                        f"snapshot input: {line_id or '*'}:{semantic_key}"
+                    )
+                cost_input_id = candidates[0].cost_input_id
+            elif not isinstance(cost_input_id, str) or not cost_input_id:
+                raise ValueError("Scenario override cost_input_id is invalid")
             evidence_id = item.get("evidence_or_assumption_id")
             overrides.append(
                 {
-                    **item,
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"line_id", "semantic_key"}
+                    },
+                    "cost_input_id": cost_input_id,
                     "evidence_or_assumption_id": (
                         policy_version_id if evidence_id == "BOUND_SCENARIO_POLICY" else evidence_id
                     ),

@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "./auth";
 import { AppShell } from "./components/AppShell";
 import { LoadingBlock } from "./components/Feedback";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
+import { CalculationPage } from "./pages/CalculationPage";
 import { ConflictResolvePage } from "./pages/ConflictResolvePage";
 import { DocumentSetConfirmPage } from "./pages/DocumentSetConfirmPage";
 import { DocumentUploadPage } from "./pages/DocumentUploadPage";
@@ -17,6 +18,7 @@ import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
 import { QuantityChangeProposePage } from "./pages/QuantityChangeProposePage";
 import { QuantityManualChangePage } from "./pages/QuantityManualChangePage";
 import { RecordsPage } from "./pages/RecordsPage";
+import { ReleasePage } from "./pages/ReleasePage";
 import { TaskDetailPage } from "./pages/TaskDetailPage";
 import { TaskQueuePage } from "./pages/TaskQueuePage";
 import { Link, NavigationProvider, useNavigation } from "./navigation";
@@ -218,6 +220,34 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
         parts[3] === "new"
       ) {
         page = <DocumentUploadPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 3 &&
+        rawSection === "release"
+      ) {
+        page = <ReleasePage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 3 &&
+        rawSection === "CALCULATION"
+      ) {
+        page = <CalculationPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "CALCULATION" &&
+        parts[3] === "records"
+      ) {
+        page = (
+          <RecordsPage
+            config={config}
+            projectId={projectId}
+            section="CALCULATION"
+          />
+        );
       } else if (projectId !== null && projectId !== "" && parts.length === 2) {
         page = <ProjectWorkbenchPage config={config} projectId={projectId} />;
       } else if (

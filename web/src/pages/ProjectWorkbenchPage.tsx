@@ -106,7 +106,15 @@ export function ProjectWorkbenchPage({
               : `${release.findings.length} причин требуют доказательства, исправления или независимого согласования.`}
           </p>
         </div>
-        <StatusPill value={release.resulting_state} />
+        <div className="release-banner__actions">
+          <StatusPill value={release.resulting_state} />
+          <Link
+            className="button button--secondary"
+            to={`/projects/${encodeURIComponent(projectId)}/release`}
+          >
+            Полная оценка <Icon name="arrow" size={15} />
+          </Link>
+        </div>
       </section>
 
       {release.findings.length > 0 && (

@@ -8,6 +8,8 @@ from decimal import (
     ROUND_HALF_UP,
     ROUND_UP,
     Decimal,
+    InvalidOperation,
+    localcontext,
 )
 from functools import reduce
 from operator import mul
@@ -38,7 +40,7 @@ ROUNDING_MODES = {
 class AppliedFactor(DomainModel):
     factor_id: str
     version_id: str
-    value: Decimal = Field(gt=0)
+    value: Decimal = Field(gt=0, max_digits=38, decimal_places=12)
     evidence_or_rule_id: str
 
 
@@ -48,9 +50,9 @@ class AtomicCostInput(DomainModel):
     wbs_node_id: str
     semantic_key: str
     category: CostCategory
-    quantity: Decimal = Field(ge=0)
+    quantity: Decimal = Field(ge=0, max_digits=38, decimal_places=12)
     unit: str
-    unit_rate: Decimal = Field(ge=0)
+    unit_rate: Decimal = Field(ge=0, max_digits=38, decimal_places=12)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     factors: tuple[AppliedFactor, ...] = ()
     sign: Literal[-1, 1] = 1
@@ -93,7 +95,7 @@ class CalculationPolicy(DomainModel):
     line_rounding_scale: int = Field(ge=0, le=8)
     total_rounding_scale: int = Field(ge=0, le=8)
     rounding_mode: str
-    independent_tolerance: Decimal = Field(ge=0)
+    independent_tolerance: Decimal = Field(ge=0, max_digits=38, decimal_places=12)
     expected_semantic_keys: frozenset[str] = frozenset()
 
     @model_validator(mode="after")
@@ -105,6 +107,15 @@ class CalculationPolicy(DomainModel):
 
 def _quantizer(scale: int) -> Decimal:
     return Decimal(1).scaleb(-scale)
+
+
+_MAX_STORED_DECIMAL = Decimal("99999999999999999999999999.999999999999")
+
+
+def _require_storable_decimal(value: Decimal, label: str) -> Decimal:
+    if not value.is_finite() or abs(value) > _MAX_STORED_DECIMAL:
+        raise ValueError(f"{label} exceeds the supported financial decimal range")
+    return value
 
 
 def calculate_primary(
@@ -122,33 +133,50 @@ def calculate_primary(
     lines: list[CalculationLineResult] = []
     category_totals: dict[CostCategory, Decimal] = defaultdict(Decimal)
 
-    for item in sorted(inputs, key=lambda value: value.cost_input_id):
-        if item.currency != policy.currency:
-            raise ValueError(
-                f"Input {item.cost_input_id} is {item.currency}; expected {policy.currency}"
-            )
-        amount = item.quantity * item.unit_rate
-        for factor in item.factors:
-            amount *= factor.value
-        amount = (amount * item.sign).quantize(line_quantum, rounding=rounding)
-        lines.append(
-            CalculationLineResult(
-                line_id=item.line_id,
-                category=item.category,
-                amount=amount,
-                currency=policy.currency,
-            )
-        )
-        category_totals[item.category] += amount
+    try:
+        with localcontext() as context:
+            context.prec = 160
+            for item in sorted(inputs, key=lambda value: value.cost_input_id):
+                if item.currency != policy.currency:
+                    raise ValueError(
+                        f"Input {item.cost_input_id} is {item.currency}; expected {policy.currency}"
+                    )
+                amount = item.quantity * item.unit_rate
+                for factor in item.factors:
+                    amount *= factor.value
+                amount = _require_storable_decimal(
+                    (amount * item.sign).quantize(line_quantum, rounding=rounding),
+                    f"Calculated line {item.cost_input_id}",
+                )
+                lines.append(
+                    CalculationLineResult(
+                        line_id=item.line_id,
+                        category=item.category,
+                        amount=amount,
+                        currency=policy.currency,
+                    )
+                )
+                category_totals[item.category] += amount
 
-    rounded_categories = {
-        category: amount.quantize(total_quantum, rounding=rounding)
-        for category, amount in sorted(category_totals.items(), key=lambda item: item[0].value)
-    }
-    grand_total = sum(rounded_categories.values(), start=Decimal("0")).quantize(
-        total_quantum,
-        rounding=rounding,
-    )
+            rounded_categories = {
+                category: _require_storable_decimal(
+                    amount.quantize(total_quantum, rounding=rounding),
+                    f"Calculated category {category.value}",
+                )
+                for category, amount in sorted(
+                    category_totals.items(),
+                    key=lambda item: item[0].value,
+                )
+            }
+            grand_total = _require_storable_decimal(
+                sum(rounded_categories.values(), start=Decimal("0")).quantize(
+                    total_quantum,
+                    rounding=rounding,
+                ),
+                "Calculated project total",
+            )
+    except InvalidOperation as error:
+        raise ValueError("Calculation cannot be represented with the approved precision") from error
     return CalculationResult(
         engine_version=engine_version,
         currency=policy.currency,
@@ -248,21 +276,34 @@ def validate_independently(
     rounding = ROUNDING_MODES[policy.rounding_mode]
 
     independent_category_totals: dict[CostCategory, Decimal] = defaultdict(Decimal)
-    for item in inputs:
-        factors = [factor.value for factor in item.factors]
-        multiplier = reduce(mul, factors, Decimal("1"))
-        independently_rounded_line = (
-            item.unit_rate * item.quantity * multiplier * Decimal(item.sign)
-        ).quantize(line_quantum, rounding=rounding)
-        independent_category_totals[item.category] += independently_rounded_line
+    try:
+        with localcontext() as context:
+            context.prec = 160
+            for item in inputs:
+                factors = [factor.value for factor in item.factors]
+                multiplier = reduce(mul, factors, Decimal("1"))
+                independently_rounded_line = _require_storable_decimal(
+                    (item.unit_rate * item.quantity * multiplier * Decimal(item.sign)).quantize(
+                        line_quantum, rounding=rounding
+                    ),
+                    f"Independently calculated line {item.cost_input_id}",
+                )
+                independent_category_totals[item.category] += independently_rounded_line
 
-    independent_total = sum(
-        (
-            subtotal.quantize(total_quantum, rounding=rounding)
-            for subtotal in independent_category_totals.values()
-        ),
-        start=Decimal("0"),
-    ).quantize(total_quantum, rounding=rounding)
+            independent_total = _require_storable_decimal(
+                sum(
+                    (
+                        subtotal.quantize(total_quantum, rounding=rounding)
+                        for subtotal in independent_category_totals.values()
+                    ),
+                    start=Decimal("0"),
+                ).quantize(total_quantum, rounding=rounding),
+                "Independently calculated project total",
+            )
+    except InvalidOperation as error:
+        raise ValueError(
+            "Independent calculation cannot be represented with the approved precision"
+        ) from error
 
     difference = abs(independent_total - primary.grand_total)
     if difference > policy.independent_tolerance:
