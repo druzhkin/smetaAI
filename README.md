@@ -205,6 +205,8 @@ blind-comparison, parallel-operation, security, load, and recovery evidence.
 
 The current gate-by-gate status is maintained in the
 [production readiness register](docs/production-readiness-register.md).
+Approved-profile load and restore verification are specified in the
+[operational qualification contract](docs/operational-qualification.md).
 Open security findings are in
 [the security review](security_best_practices_report.md).
 The untrusted-file boundary is specified in the

@@ -519,6 +519,7 @@ def create_app(
             oidc_scope=resolved_settings.oidc_web_scope,
             api_base_path="/v1",
             application_version=__version__,
+            application_build_reference=resolved_settings.application_build_reference,
             max_upload_bytes=resolved_settings.max_upload_bytes,
         )
 
@@ -697,6 +698,9 @@ def create_app(
                 "Ed25519 integration signing key or receipt receiver identity is not configured"
             )
         integration_connectors_qualified = False
+        build_identified = bool(resolved_settings.application_build_reference)
+        if not build_identified:
+            notes.append("immutable application build reference is not configured")
         if schema_current and resolved_settings.integration_operator_organization_id:
             try:
                 qualifications = tuple(
@@ -770,7 +774,8 @@ def create_app(
         if not integration_connectors_qualified:
             notes.append("qualified integration delivery/source/handler set is unavailable")
         ready = bool(
-            database_ok
+            build_identified
+            and database_ok
             and schema_current
             and store_ok
             and store_worm_ok
@@ -790,6 +795,7 @@ def create_app(
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadinessResponse(
             ready=ready,
+            build_identified=build_identified,
             database=database_ok,
             schema_current=schema_current,
             object_store=store_ok,

@@ -2,14 +2,31 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import text
 
 from tenderguard.application.audit_integrity import AuditIntegrityService
+from tenderguard.application.load_qualification import LoadQualificationService
+from tenderguard.application.operational_qualification import (
+    build_result_envelope,
+    load_approved_profile,
+    read_json_object,
+    write_result_exclusive,
+)
 from tenderguard.application.projects import ProjectService
+from tenderguard.application.recovery_verification import RecoveryVerificationService
 from tenderguard.config import get_settings
+from tenderguard.domain.common import utc_now
 from tenderguard.domain.jobs import DispatchDisposition
+from tenderguard.domain.operational_qualification import (
+    LoadProfile,
+    QualificationFinding,
+    QualificationResultEnvelope,
+    RecoveryExerciseManifest,
+    RecoveryProfile,
+)
 from tenderguard.infrastructure.database import (
     CURRENT_SCHEMA_REVISION,
     create_database_engine,
@@ -25,6 +42,7 @@ def doctor() -> int:
     settings = get_settings()
     checks: dict[str, bool | str] = {
         "environment": settings.app_env,
+        "build_identified": bool(settings.application_build_reference),
         "database": False,
         "schema_current": False,
         "object_store": False,
@@ -94,6 +112,7 @@ def doctor() -> int:
             checks[key] is True
             for key in (
                 "database",
+                "build_identified",
                 "schema_current",
                 "object_store",
                 "object_store_worm",
@@ -231,6 +250,144 @@ def dispatch_document_intake(max_events: int) -> int:
         engine.dispose()
 
 
+def verify_restored_system(
+    *,
+    profile_version_id: str,
+    expected_profile_hash: str,
+    exercise_manifest_path: Path,
+    output_path: Path | None,
+) -> int:
+    settings = get_settings()
+    started_at = utc_now()
+    engine = create_database_engine(settings)
+    try:
+        with create_session_factory(engine)() as session:
+            profile, _ = load_approved_profile(
+                session=session,
+                settings=settings,
+                version_id=profile_version_id,
+                expected_content_hash=expected_profile_hash,
+                expected_kind="recovery_profile",
+                profile_type=RecoveryProfile,
+            )
+            exercise = RecoveryExerciseManifest.model_validate(
+                read_json_object(exercise_manifest_path)
+            )
+            result = RecoveryVerificationService(
+                session=session,
+                settings=settings,
+                object_store=build_object_store(settings),
+                quarantine_store=build_quarantine_store(settings),
+            ).verify(
+                profile_version_id=profile_version_id,
+                profile_content_hash=expected_profile_hash,
+                profile=profile,
+                exercise=exercise,
+            )
+    except Exception as error:
+        result = _blocked_qualification_result(
+            qualification_type="RECOVERY",
+            profile_version_id=profile_version_id,
+            profile_content_hash=expected_profile_hash,
+            started_at=started_at,
+            error=error,
+            traffic_started=False,
+        )
+    finally:
+        engine.dispose()
+    _emit_qualification_result(result, output_path)
+    return 0 if result.status == "TECHNICAL_VERIFICATION_PASSED" else 2
+
+
+def run_load_qualification(
+    *,
+    profile_version_id: str,
+    expected_profile_hash: str,
+    output_path: Path | None,
+) -> int:
+    settings = get_settings()
+    started_at = utc_now()
+    engine = create_database_engine(settings)
+    try:
+        with create_session_factory(engine)() as session:
+            profile, _ = load_approved_profile(
+                session=session,
+                settings=settings,
+                version_id=profile_version_id,
+                expected_content_hash=expected_profile_hash,
+                expected_kind="load_test_profile",
+                profile_type=LoadProfile,
+            )
+    except Exception as error:
+        result = _blocked_qualification_result(
+            qualification_type="LOAD",
+            profile_version_id=profile_version_id,
+            profile_content_hash=expected_profile_hash,
+            started_at=started_at,
+            error=error,
+            traffic_started=False,
+        )
+        _emit_qualification_result(result, output_path)
+        return 2
+    finally:
+        engine.dispose()
+    try:
+        result = LoadQualificationService().run(
+            profile_version_id=profile_version_id,
+            profile_content_hash=expected_profile_hash,
+            profile=profile,
+        )
+    except Exception as error:
+        result = _blocked_qualification_result(
+            qualification_type="LOAD",
+            profile_version_id=profile_version_id,
+            profile_content_hash=expected_profile_hash,
+            started_at=started_at,
+            error=error,
+            traffic_started=None,
+        )
+    _emit_qualification_result(result, output_path)
+    return 0 if result.status == "TECHNICAL_VERIFICATION_PASSED" else 2
+
+
+def _blocked_qualification_result(
+    *,
+    qualification_type: str,
+    profile_version_id: str,
+    profile_content_hash: str,
+    started_at: object,
+    error: Exception,
+    traffic_started: bool | None,
+) -> QualificationResultEnvelope:
+    message = str(error).strip() or type(error).__name__
+    return build_result_envelope(
+        qualification_type=qualification_type,
+        status="BLOCKED",
+        profile_version_id=profile_version_id,
+        profile_content_hash=profile_content_hash,
+        started_at=started_at,
+        completed_at=utc_now(),
+        findings=(
+            QualificationFinding(
+                code="QUALIFICATION_PREFLIGHT",
+                passed=False,
+                message=message[:2000],
+                details={"error_type": type(error).__name__},
+            ),
+        ),
+        evidence={"traffic_started": traffic_started},
+    )
+
+
+def _emit_qualification_result(
+    result: QualificationResultEnvelope,
+    output_path: Path | None,
+) -> None:
+    if output_path is not None:
+        write_result_exclusive(result, output_path)
+    print(result.model_dump_json(indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="tenderguard")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -245,6 +402,25 @@ def main() -> None:
         help="Claim and deliver pending clean-upload outbox events",
     )
     dispatch_parser.add_argument("--max-events", type=int, default=1)
+    recovery_parser = subcommands.add_parser(
+        "verify-restored-system",
+        help="Verify a restored database/object-store pair against an approved profile",
+    )
+    recovery_parser.add_argument("--profile-version-id", required=True)
+    recovery_parser.add_argument("--expected-profile-hash", required=True)
+    recovery_parser.add_argument(
+        "--exercise-manifest",
+        required=True,
+        type=Path,
+    )
+    recovery_parser.add_argument("--output", type=Path)
+    load_parser = subcommands.add_parser(
+        "run-load-qualification",
+        help="Run approved read-only load traffic and emit a tamper-evident result",
+    )
+    load_parser.add_argument("--profile-version-id", required=True)
+    load_parser.add_argument("--expected-profile-hash", required=True)
+    load_parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         raise SystemExit(doctor())
@@ -252,6 +428,23 @@ def main() -> None:
         raise SystemExit(process_quarantined_upload(arguments.upload_id))
     if arguments.command == "dispatch-document-intake":
         raise SystemExit(dispatch_document_intake(arguments.max_events))
+    if arguments.command == "verify-restored-system":
+        raise SystemExit(
+            verify_restored_system(
+                profile_version_id=arguments.profile_version_id,
+                expected_profile_hash=arguments.expected_profile_hash,
+                exercise_manifest_path=arguments.exercise_manifest,
+                output_path=arguments.output,
+            )
+        )
+    if arguments.command == "run-load-qualification":
+        raise SystemExit(
+            run_load_qualification(
+                profile_version_id=arguments.profile_version_id,
+                expected_profile_hash=arguments.expected_profile_hash,
+                output_path=arguments.output,
+            )
+        )
 
 
 if __name__ == "__main__":

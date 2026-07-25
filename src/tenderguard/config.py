@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -12,6 +13,9 @@ from tenderguard.domain.audit_anchor import validate_anchor_public_key
 
 DEVELOPMENT_AUDIT_SIGNING_KEY = "development-only-not-for-production"
 DEVELOPMENT_AUDIT_SIGNING_KEY_ID = "legacy"
+APPLICATION_BUILD_REFERENCE_PATTERN = re.compile(
+    r"^(?:sha256:[0-9a-f]{64}|git:[0-9a-f]{40}(?:[0-9a-f]{24})?)$"
+)
 
 
 class Settings(BaseSettings):
@@ -22,6 +26,7 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "test", "staging", "production"] = "development"
+    application_build_reference: str | None = None
     database_url: str = "sqlite+pysqlite:///./var/tenderguard.db"
     object_store_backend: Literal["local", "s3"] = "local"
     local_object_store_path: Path = Path("./var/objects")
@@ -113,6 +118,7 @@ class Settings(BaseSettings):
             if not key.get_secret_value():
                 raise ValueError("An audit verification key is empty")
         for field_name, value, max_length in (
+            ("application build reference", self.application_build_reference, 200),
             ("audit anchor provider ID", self.audit_anchor_provider_id, 200),
             ("audit anchor provider key ID", self.audit_anchor_provider_key_id, 200),
             ("audit operator organization ID", self.audit_operator_organization_id, 64),
@@ -128,6 +134,14 @@ class Settings(BaseSettings):
                 not value.strip() or value != value.strip() or len(value) > max_length
             ):
                 raise ValueError(f"{field_name} is invalid")
+        if (
+            self.application_build_reference is not None
+            and APPLICATION_BUILD_REFERENCE_PATTERN.fullmatch(self.application_build_reference)
+            is None
+        ):
+            raise ValueError(
+                "Application build reference must be an immutable SHA-256 or Git digest"
+            )
         current_verification_key = self.audit_verification_keys.get(self.audit_signing_key_id)
         if (
             current_verification_key is not None
@@ -141,6 +155,8 @@ class Settings(BaseSettings):
             problems: list[str] = []
             if self.allow_insecure_dev_auth:
                 problems.append("insecure development authentication is enabled")
+            if not self.application_build_reference:
+                problems.append("immutable application build reference is not configured")
             if not all((self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)):
                 problems.append("OIDC configuration is incomplete")
             for label, value in (

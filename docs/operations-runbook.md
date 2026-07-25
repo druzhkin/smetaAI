@@ -254,13 +254,26 @@ Restore acceptance:
 
 1. Restore PostgreSQL to the declared point in time.
 2. Restore/attach the exact object-store versions.
-3. Run migrations in read-only rehearsal mode.
-4. Verify the audit chain and snapshot hashes.
-5. Recalculate a golden set from atomic inputs.
-6. Confirm OIDC, connector, and secrets-manager bindings.
-7. Record achieved RPO/RTO and independent reviewer sign-off.
+3. Select a four-eyes-approved `recovery_profile`; obtain its content hash from
+   the independent change record and confirm it names the exact immutable
+   application build being restored.
+4. Prepare a timezone-explicit recovery exercise manifest with exact database,
+   object-store, identity, connector, secrets-manager, executor, and change
+   references.
+5. Run `tenderguard verify-restored-system` against the isolated environment.
+   It verifies the exact schema, all governed payloads and object references,
+   audit/checkpoint/anchor integrity, signed exports, and deterministically
+   replays every calculation plus the profile's golden set.
+6. Preserve the exclusive, content-hashed result and infrastructure telemetry.
+7. Have a different reviewer validate the declared external evidence and
+   achieved RPO/RTO before registering the `backup_restore` gate evidence.
 
-No restore test has yet been performed for this repository.
+The exact command, schemas, blocking semantics, and evidence contract are in
+`docs/operational-qualification.md`.
+
+The verifier and negative tests exist. No real organisation backup, isolated
+restore, failover, or independently signed exercise has yet been performed, so
+the production backup/DR gate remains open.
 
 ## Release incident
 

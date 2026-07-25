@@ -119,6 +119,11 @@ qualification evidence are external controls and remain production blockers.
 - Fix: configure independent ingress body limits, timeouts, connection limits,
   per-actor and per-organisation distributed rate limits, and upload
   concurrency quotas; verify with load and abuse tests.
+- Repository control added: a four-eyes governed, read-only, bounded load
+  qualification runner enforces owner-defined overall and per-endpoint SLOs
+  and emits a tamper-evident result. It can measure deployed controls once they
+  exist, but it does not provide those independent edge controls or replace
+  upload, abuse, or soak testing.
 - Status: **APPLICATION BODY LIMIT REMEDIATED; distributed/edge controls
   OPEN**.
 
@@ -148,6 +153,9 @@ qualification evidence are external controls and remain production blockers.
 ## Remediated during review
 
 - Production OpenAPI/docs are disabled.
+- Staging/production startup requires an immutable application build reference;
+  readiness and runtime configuration expose it so recovery/load profiles can
+  bind and reject a different deployed image before qualification.
 - Trusted hosts are mandatory and wildcard hosts are rejected.
 - The development audit signing key is rejected in staging/production.
 - JWT signature, algorithm allowlist, issuer, audience, expiry, issued-at, and
@@ -182,8 +190,8 @@ qualification evidence are external controls and remain production blockers.
   quality gates require structured, hashed, owned, environment-specific
   evidence.
 - Docker installation uses the lock file; `pip-audit` found no known
-  third-party vulnerabilities in the resolved environment on 2026-07-24
-  (the local proprietary package is naturally not present on PyPI).
+  third-party vulnerabilities in the built Linux API environment on
+  2026-07-24 (the local proprietary package is naturally not present on PyPI).
 - Approved releases can be exported only as deterministic content-addressed
   packages whose mandatory section hashes are covered by an Ed25519 signature.
   Production readiness now requires a valid signing key configuration;
@@ -213,3 +221,16 @@ qualification evidence are external controls and remain production blockers.
   independently selectable for verification, and migration refuses damaged or
   wrongly keyed legacy history. WORM policy and a fresh externally signed
   checkpoint are now mandatory readiness conditions.
+- Recovery qualification rechecks the exact schema, content-addressed
+  originals/snapshots/exports/checkpoints, complete audit chains, controlled
+  profile hashes, atomic-input evidence bases, deterministic primary and
+  independent calculation replay, and owner-approved RPO/RTO. Corrupt objects
+  and modified profiles fail closed. Real backups, restore/failover execution,
+  external identity/secrets evidence, and independent reviewer sign-off remain
+  operational blockers.
+- CI runs frontend format/tests/build/dependency audit, both production
+  container targets, Python dependency audit, migration/immutability tests,
+  and scheduled CodeQL analysis for Python and JavaScript/TypeScript.
+  Repository automation does not replace an organisation security review,
+  runtime scanner, penetration test, infrastructure configuration review, or
+  signed remediation acceptance.

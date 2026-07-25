@@ -8,6 +8,7 @@ export interface RuntimeConfig {
   oidc_scope: string;
   api_base_path: string;
   application_version: string;
+  application_build_reference: string | null;
   max_upload_bytes: number;
 }
 

@@ -81,15 +81,11 @@ describe("controlled release workflow", () => {
   });
 
   it("models the only release-state transitions exposed by the UI", () => {
-    expect(releaseTargetState("internal")).toBe(
-      "APPROVED_FOR_INTERNAL_USE",
-    );
+    expect(releaseTargetState("internal")).toBe("APPROVED_FOR_INTERNAL_USE");
     expect(releaseStateEligible("EXPERT_REVIEW", "internal")).toBe(true);
     expect(releaseStateEligible("APPROVED_FOR_INTERNAL_USE", "internal")).toBe(
       false,
     );
-    expect(releaseStateEligible("APPROVED_FOR_INTERNAL_USE", "bid")).toBe(
-      true,
-    );
+    expect(releaseStateEligible("APPROVED_FOR_INTERNAL_USE", "bid")).toBe(true);
   });
 });

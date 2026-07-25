@@ -114,6 +114,12 @@ release and operator blocker counts.
   Ed25519 receipt validation. Production assurance still depends on an
   independently operated provider, protected keys, monitoring, and tested
   backup/restore and tamper response.
+- Recovery/load runners bind a four-eyes profile and immutable application
+  build, use unrounded measurements for pass/fail, and fail closed on damaged
+  restored evidence. Their result hashes only become tamper evidence when
+  recorded independently; they do not prove that declared backup, identity,
+  secrets, workload, or infrastructure references are authentic without the
+  required reviewer and external records.
 - Market evidence may be technically comparable yet commercially unavailable;
   availability and validity are mandatory price attributes.
 - Model behaviour can change; exact model/prompt/rule versions and regression

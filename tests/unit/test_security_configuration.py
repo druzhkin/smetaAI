@@ -76,6 +76,15 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "qualified malware scanner binding" in message
     assert "qualified isolated document processor binding" in message
     assert "OIDC web client ID" in message
+    assert "immutable application build reference" in message
+
+
+def test_application_build_reference_must_be_immutable_digest() -> None:
+    with pytest.raises(ValidationError, match="immutable SHA-256 or Git digest"):
+        Settings(
+            app_env="test",
+            application_build_reference="latest",
+        )
 
 
 @pytest.mark.parametrize(
@@ -132,6 +141,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
     ).decode("ascii")
     settings = Settings(
         app_env="production",
+        application_build_reference="sha256:" + "a" * 64,
         database_url="postgresql+psycopg://example.invalid/tenderguard",
         object_store_backend="s3",
         oidc_issuer="https://id.example/realm",
@@ -335,6 +345,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         ready = client.get("/health/ready")
         assert ready.status_code == 200
         assert ready.json()["ready"] is True
+        assert ready.json()["build_identified"] is True
         assert ready.json()["schema_current"] is True
         assert ready.json()["quarantine_store"] is True
         assert ready.json()["operator_ui"] is True
@@ -366,6 +377,7 @@ def test_readiness_returns_503_when_authentication_is_not_configured(
 ) -> None:
     settings = Settings(
         app_env="test",
+        application_build_reference="git:" + "b" * 40,
         database_url="sqlite+pysqlite://",
     )
     engine = create_database_engine(settings)
@@ -388,6 +400,7 @@ def test_runtime_config_exposes_only_public_browser_authentication_settings(
 ) -> None:
     settings = Settings(
         app_env="test",
+        application_build_reference="git:" + "b" * 40,
         database_url="sqlite+pysqlite://",
         oidc_issuer="https://identity.example/realms/tenderguard",
         oidc_audience="tenderguard-api",
@@ -413,6 +426,7 @@ def test_runtime_config_exposes_only_public_browser_authentication_settings(
             "oidc_scope": "openid profile email",
             "api_base_path": "/v1",
             "application_version": "0.1.0",
+            "application_build_reference": "git:" + "b" * 40,
             "max_upload_bytes": 524288000,
         }
         assert "private-test-value" not in response.text

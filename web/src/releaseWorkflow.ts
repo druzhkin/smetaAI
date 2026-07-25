@@ -11,9 +11,7 @@ export interface ReleaseDraft {
 }
 
 export function releaseTargetState(target: ReleaseTarget): ApprovalState {
-  return target === "bid"
-    ? "APPROVED_FOR_BID"
-    : "APPROVED_FOR_INTERNAL_USE";
+  return target === "bid" ? "APPROVED_FOR_BID" : "APPROVED_FOR_INTERNAL_USE";
 }
 
 export function releaseStateEligible(

@@ -122,6 +122,7 @@ class RuntimeConfigResponse(ApiModel):
     oidc_scope: str
     api_base_path: str
     application_version: str
+    application_build_reference: str | None
     max_upload_bytes: int = Field(gt=0)
 
 
@@ -658,6 +659,7 @@ class ExportVerificationResponse(ExportVerificationResult):
 
 class ReadinessResponse(ApiModel):
     ready: bool
+    build_identified: bool
     database: bool
     schema_current: bool
     object_store: bool

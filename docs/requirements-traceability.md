@@ -58,5 +58,11 @@ contour passed.
 ## Acceptance and readiness
 
 The acceptance criteria are represented in the production-readiness register.
-They remain open until backed by named evidence, owner, date, environment, and
-approval. Repository tests are necessary but not sufficient evidence.
+Governed recovery/load profiles, immutable build binding, deterministic
+snapshot replay, object/audit/export verification, exact unrounded SLO
+decisions, and content-hashed result envelopes provide the repository-side
+qualification mechanism (`APPLICATION_CORE`). Real workloads, backups,
+alternate infrastructure, external telemetry, and independent decisions remain
+`QUALIFICATION`. Gates remain open until backed by named evidence, owner, date,
+environment, and approval. Repository tests are necessary but not sufficient
+evidence.

@@ -54,3 +54,28 @@ jobs:
           uv run pytest \
             tests/integration/test_pricing_integrity_postgresql.py \
             tests/integration/test_calculation_integrity_postgresql.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.11.1"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --audit-level=high
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target api --tag tenderguard-api:ci .
+      - run: docker build --target document-worker --tag tenderguard-worker:ci .

@@ -539,18 +539,14 @@ describe("controlled mutations", () => {
     });
 
     const [gateUrl, gateInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
-    expect(gateUrl.pathname).toBe(
-      "/v1/projects/project%2F1/release-gates",
-    );
+    expect(gateUrl.pathname).toBe("/v1/projects/project%2F1/release-gates");
     expect(gateInit.method).toBe("GET");
 
     const [releaseUrl, releaseInit] = fetchMock.mock.calls[1] as [
       URL,
       RequestInit,
     ];
-    expect(releaseUrl.pathname).toBe(
-      "/v1/projects/project%2F1/release/bid",
-    );
+    expect(releaseUrl.pathname).toBe("/v1/projects/project%2F1/release/bid");
     expect(releaseInit.headers).toMatchObject({
       "Idempotency-Key": "release-operation",
     });

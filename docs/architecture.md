@@ -120,6 +120,9 @@ Production deployment requires:
   endpoint allowlists, and service identities under independent rotation and
   qualification procedures;
 - tested backup restoration and documented RPO/RTO.
+- immutable build identity exposed by runtime/readiness and bound by governed
+  load/recovery profiles; qualification refuses a different environment or
+  image before accepting evidence.
 
 ## Data invariants
 
