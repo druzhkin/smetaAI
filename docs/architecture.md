@@ -66,6 +66,10 @@ Nothing crosses a boundary merely because a model reports high confidence.
 - `audit`: append-only hash-chained events and immutable snapshots.
 - `actuals`: forecast-to-actual comparisons, reason taxonomy, and approved
   calibration examples; predictions are never recycled as facts.
+- `business_qualification`: four-eyes controlled profile and closed dataset,
+  forecast locking, post-lock blind/parallel evidence, verified historical
+  facts, exact unrounded accuracy metrics, material-discrepancy review, and an
+  immutable approval package consumed by production qualification.
 - `operator_ui`: OIDC Authorization Code + PKCE browser client, role-filtered
   portfolio/work-queue/workbench/record read models, visible release hard
   stops, exact-manifest four-eyes document-set confirmation, source-level
@@ -180,6 +184,11 @@ Production deployment requires:
   revisions and locators and rejects cycles or missing nodes.
 - Actuals enter calibration only after verified source reproduction, variance
   classification, and a separate methodology-owner approval.
+- Historical/blind/parallel qualification cannot use caller-supplied forecast
+  totals or rounded pass/fail comparisons. The exact fixed predictions are
+  locked before professional references, every population exclusion is
+  explicit, and the release gate re-verifies the passed campaign package and
+  audit chain rather than trusting a declared evidence hash.
 - State transitions and critical reads/writes carry actor, request, reason, and
   prior/new values in audit events.
 - `BLOCKED` is a first-class state and cannot be bypassed through API or direct

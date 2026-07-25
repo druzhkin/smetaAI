@@ -120,6 +120,13 @@ release and operator blocker counts.
   recorded independently; they do not prove that declared backup, identity,
   secrets, workload, or infrastructure references are authentic without the
   required reviewer and external records.
+- The business qualification engine locks fixed predictions before
+  blind/parallel references, uses a closed population and exact unrounded
+  metrics, and requires independent discrepancy review. This prevents several
+  leakage and cherry-picking paths, but cannot prove that the declared
+  population is representative, that a professional was truly blinded, or
+  that the organisation supplied enough real projects. Those claims require
+  out-of-system records and process-owner review.
 - Market evidence may be technically comparable yet commercially unavailable;
   availability and validity are mandatory price attributes.
 - Model behaviour can change; exact model/prompt/rule versions and regression

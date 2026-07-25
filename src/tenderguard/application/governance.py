@@ -45,6 +45,11 @@ class GovernanceService:
         reason: str,
     ) -> ControlledVersion:
         self._require_owner(actor, kind)
+        if (
+            kind == "production_qualification"
+            and not ProjectService._production_qualification_evidence_complete(payload)
+        ):
+            raise ValueError("Production qualification payload lacks complete governed evidence")
         now = utc_now()
         version_id = f"version-{uuid4()}"
         governed_payload = {
@@ -114,6 +119,18 @@ class GovernanceService:
             raise ValueError("Controlled version requires four-eyes approval")
         if row.status != VersionStatus.DRAFT.value:
             raise ValueError("Only DRAFT controlled versions can be approved")
+        if row.kind == "production_qualification" and not ProjectService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        )._production_qualification_evidence_valid(
+            row.payload,
+            organization_id=actor.organization_id,
+        ):
+            raise ValueError(
+                "Production qualification evidence does not verify against "
+                "immutable qualification records"
+            )
         row.status = VersionStatus.APPROVED.value
         row.approved_by = actor.actor_id
         row.approved_at = utc_now()

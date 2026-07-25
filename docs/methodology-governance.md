@@ -20,6 +20,9 @@ The methodology owner must version and approve:
 - risk method, correlations, reserve treatment, and scenario definitions;
 - calculation rounding/tax/currency policy and independent tolerance;
 - actual-vs-forecast reason taxonomy and calibration eligibility.
+- historical/blind/parallel population rules, exclusion policy, minimum sample
+  sizes and independence domains, exact accuracy/materiality thresholds,
+  parallel duration, reporting rounding, and discrepancy reason taxonomy.
 
 The application currently binds the following governed content directly into
 stage gates or calculation lineage:
@@ -71,3 +74,10 @@ quality gate under `gates`; each gate must be `PASSED` and include a SHA-256
 `evidence_hash`, `owner_id`, independent `approved_by`, `approved_at`, and
 `environment`. A boolean without this complete evidence map is ignored by the
 release engine.
+
+Historical, blind-comparison, parallel-operation, and variance-resolution
+gates must additionally point to one `PASSED` business qualification campaign
+and its immutable approval package. Controlled-version approval and bid
+release both revalidate the campaign, evaluation, discrepancy reviews,
+segregation of duties, package hash, and audit chain. See
+[business qualification](business-qualification.md).

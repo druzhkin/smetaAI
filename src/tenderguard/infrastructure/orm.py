@@ -1420,3 +1420,230 @@ class ExportArtifactRow(Base):
             postgresql_where=text("signature_algorithm = 'Ed25519'"),
         ),
     )
+
+
+class BusinessQualificationCampaignRow(Base):
+    __tablename__ = "business_qualification_campaigns"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    profile_version_id: Mapped[str] = mapped_column(
+        ForeignKey("controlled_versions.id"), nullable=False
+    )
+    dataset_version_id: Mapped[str] = mapped_column(
+        ForeignKey("controlled_versions.id"), nullable=False
+    )
+    profile_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    application_build_reference: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evaluated_by: Mapped[str | None] = mapped_column(String(128))
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalized_by: Mapped[str | None] = mapped_column(String(128))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('INPUTS_LOCKED', 'EXPERT_REVIEW', 'FAILED', 'PASSED')",
+            name="ck_business_qualification_campaign_status",
+        ),
+        CheckConstraint(
+            "("
+            "status = 'INPUTS_LOCKED' AND evaluated_by IS NULL "
+            "AND evaluated_at IS NULL AND finalized_by IS NULL "
+            "AND finalized_at IS NULL AND result_hash IS NULL"
+            ") OR ("
+            "status IN ('EXPERT_REVIEW', 'FAILED') AND evaluated_by IS NOT NULL "
+            "AND evaluated_at IS NOT NULL AND finalized_by IS NULL "
+            "AND finalized_at IS NULL AND result_hash IS NOT NULL"
+            ") OR ("
+            "status = 'PASSED' AND evaluated_by IS NOT NULL "
+            "AND evaluated_at IS NOT NULL AND finalized_by IS NOT NULL "
+            "AND finalized_at IS NOT NULL AND result_hash IS NOT NULL"
+            ")",
+            name="ck_business_qualification_campaign_lifecycle",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "input_hash",
+            name="uq_business_qualification_campaign_input",
+        ),
+        Index(
+            "ix_business_qualification_campaign_org_status",
+            "organization_id",
+            "status",
+        ),
+    )
+
+
+class BusinessQualificationCaseRow(Base):
+    __tablename__ = "business_qualification_cases"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_campaigns.id"), nullable=False, index=True
+    )
+    case_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("calculation_snapshots.id"), nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    prediction_total: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    prediction_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    stratum: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('HISTORICAL', 'BLIND', 'PARALLEL')",
+            name="ck_business_qualification_case_mode",
+        ),
+        CheckConstraint(
+            "prediction_total > 0",
+            name="ck_business_qualification_case_prediction_positive",
+        ),
+        UniqueConstraint(
+            "campaign_id",
+            "case_key",
+            name="uq_business_qualification_case_key",
+        ),
+        UniqueConstraint(
+            "campaign_id",
+            "snapshot_id",
+            name="uq_business_qualification_case_snapshot",
+        ),
+    )
+
+
+class BusinessQualificationReferenceRow(Base):
+    __tablename__ = "business_qualification_references"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_campaigns.id"), nullable=False, index=True
+    )
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_cases.id"), nullable=False, unique=True
+    )
+    reference_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_entity_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    reference_total: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    independence_domain: Mapped[str] = mapped_column(String(200), nullable=False)
+    professional_estimator_id: Mapped[str | None] = mapped_column(String(200))
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    registered_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "reference_kind IN ('VERIFIED_ACTUAL', 'PROFESSIONAL_ESTIMATE', 'PARALLEL_ESTIMATE')",
+            name="ck_business_qualification_reference_kind",
+        ),
+        CheckConstraint(
+            "source_entity_type IN ('ACTUAL_RECORD', 'OBSERVATION')",
+            name="ck_business_qualification_reference_source_type",
+        ),
+        CheckConstraint(
+            "reference_total > 0",
+            name="ck_business_qualification_reference_total_positive",
+        ),
+        UniqueConstraint(
+            "campaign_id",
+            "source_entity_type",
+            "source_entity_id",
+            name="uq_business_qualification_reference_source",
+        ),
+    )
+
+
+class BusinessQualificationEvaluationRow(Base):
+    __tablename__ = "business_qualification_evaluations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_campaigns.id"), nullable=False, unique=True
+    )
+    metrics_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    evaluated_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class BusinessQualificationDiscrepancyRow(Base):
+    __tablename__ = "business_qualification_discrepancies"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_campaigns.id"), nullable=False, index=True
+    )
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_evaluations.id"), nullable=False
+    )
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_cases.id"), nullable=False, unique=True
+    )
+    absolute_error: Mapped[Decimal] = mapped_column(Numeric(38, 12), nullable=False)
+    exact_ratio_numerator: Mapped[str] = mapped_column(Text, nullable=False)
+    exact_ratio_denominator: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "absolute_error >= 0",
+            name="ck_business_qualification_discrepancy_absolute_error",
+        ),
+    )
+
+
+class BusinessQualificationDiscrepancyReviewRow(Base):
+    __tablename__ = "business_qualification_discrepancy_reviews"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    discrepancy_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_discrepancies.id"),
+        nullable=False,
+        unique=True,
+    )
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    root_cause: Mapped[str] = mapped_column(Text, nullable=False)
+    corrective_action: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_observation_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    reviewed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('ACCEPTED', 'REJECTED')",
+            name="ck_business_qualification_discrepancy_review_decision",
+        ),
+    )
+
+
+class BusinessQualificationApprovalRow(Base):
+    __tablename__ = "business_qualification_approvals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_campaigns.id"), nullable=False, unique=True
+    )
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("business_qualification_evaluations.id"), nullable=False, unique=True
+    )
+    package_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

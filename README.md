@@ -142,6 +142,12 @@ The repository currently connects and integration-tests:
   mutation of calculation runs, atomic inputs, scenarios and release records;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
+- governed historical/blind/parallel business qualification with a
+  closed-population dataset, pre-reference forecast locking, two-step
+  professional evidence, exact unrounded metrics, independent material
+  discrepancy review, PostgreSQL append-only guards, and a package whose
+  campaign and audit chain are revalidated before production qualification can
+  satisfy release.
 
 These are application workflows, not a claim that the complete target system
 or its external operational environment has been delivered.
@@ -188,7 +194,8 @@ engine, OCR/visual
 extraction and market/RFQ adapters, approved
 methodology and financial thresholds, production identity and infrastructure,
 an approved external audit-anchor provider and verified WORM policy, enterprise
-integrations, historical validation set, operating procedures,
+integrations, a completed organisation-approved historical/blind/parallel
+qualification campaign, operating procedures,
 backup/disaster-recovery evidence, trained users, and named process owners.
 
 Production route/rate/treasury feeds and qualification for the implemented
@@ -200,13 +207,16 @@ surfaces, and business qualification of the operator interface remain to be
 completed.
 External verification also requires approved out-of-band
 signing-key registries and real endpoint conformance evidence. A successful
-local test run cannot substitute for the required historical,
-blind-comparison, parallel-operation, security, load, and recovery evidence.
+local test run or an empty qualification campaign cannot substitute for
+representative historical, blind-comparison, parallel-operation, security,
+load, and recovery evidence.
 
 The current gate-by-gate status is maintained in the
 [production readiness register](docs/production-readiness-register.md).
 Approved-profile load and restore verification are specified in the
 [operational qualification contract](docs/operational-qualification.md).
+Historical, blind and parallel controls are specified in the
+[business qualification contract](docs/business-qualification.md).
 Open security findings are in
 [the security review](security_best_practices_report.md).
 The untrusted-file boundary is specified in the

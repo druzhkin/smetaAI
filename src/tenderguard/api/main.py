@@ -32,6 +32,9 @@ from tenderguard.application.actuals import ActualsService
 from tenderguard.application.approvals import ApprovalService
 from tenderguard.application.audit_integrity import AuditIntegrityService
 from tenderguard.application.boq import BoqService
+from tenderguard.application.business_qualification import (
+    BusinessQualificationService,
+)
 from tenderguard.application.calculations import CalculationService
 from tenderguard.application.commercial_costs import CommercialCostService
 from tenderguard.application.contracts import ContractService
@@ -99,6 +102,9 @@ from .schemas import (
     BindControlledVersionRequest,
     BoqLineResponse,
     BuildApprovalPlanRequest,
+    BusinessQualificationCampaignDetailResponse,
+    BusinessQualificationCampaignResponse,
+    BusinessQualificationEvaluationResponse,
     CalculateRiskReserveRequest,
     CalculateScenarioRequest,
     CalculationContextResponse,
@@ -118,6 +124,7 @@ from .schemas import (
     ControlledVersionResponse,
     CreateAuditCheckpointRequest,
     CreateBoqLineRequest,
+    CreateBusinessQualificationCampaignRequest,
     CreateControlledVersionRequest,
     CreateProjectRequest,
     CurrentCalculationExecutionRequest,
@@ -143,6 +150,7 @@ from .schemas import (
     PassportFactResponse,
     PassportFactVerificationResponse,
     PassportValidationResponse,
+    PrepareQualificationReferenceRequest,
     PriceDecisionResponse,
     PriceItemContextResponse,
     PriceQuoteCandidateResponse,
@@ -155,6 +163,8 @@ from .schemas import (
     ProposeCommercialCostModelRequest,
     ProposeContractCostImpactRequest,
     ProposeQuantityManualChangeRequest,
+    QualificationActionRequest,
+    QualificationReferenceEvidenceResponse,
     QuantityChangeContextResponse,
     QuantityExecutionResponse,
     QuantityManualChangeResponse,
@@ -178,6 +188,7 @@ from .schemas import (
     ReplayOutboxResponse,
     RequeueDocumentProcessingRequest,
     ResolveConflictRequest,
+    ReviewQualificationDiscrepancyRequest,
     RevokeProjectMembershipRequest,
     RiskCalculationResponse,
     RiskItemResponse,
@@ -196,6 +207,7 @@ from .schemas import (
     VerifyBoqLineRequest,
     VerifyContractTermRequest,
     VerifyPassportFactRequest,
+    VerifyQualificationReferenceRequest,
     VerifyRiskItemRequest,
     WorkItemDetailResponse,
     WorkItemPageResponse,
@@ -338,6 +350,15 @@ def create_app(
 
     def governance_service(session: Session) -> GovernanceService:
         return GovernanceService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def business_qualification_service(
+        session: Session,
+    ) -> BusinessQualificationService:
+        return BusinessQualificationService(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
@@ -1521,6 +1542,154 @@ def create_app(
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
+
+    @application.post(
+        "/v1/qualification/business/campaigns",
+        response_model=BusinessQualificationCampaignResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_business_qualification_campaign(
+        payload: CreateBusinessQualificationCampaignRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BusinessQualificationCampaignResponse:
+        with mutation_transaction(session):
+            campaign = business_qualification_service(session).create_campaign(
+                actor=actor,
+                profile_version_id=payload.profile_version_id,
+                profile_content_hash=payload.profile_content_hash,
+                dataset_version_id=payload.dataset_version_id,
+                dataset_content_hash=payload.dataset_content_hash,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return BusinessQualificationCampaignResponse.model_validate(campaign.model_dump())
+
+    @application.get(
+        "/v1/qualification/business/campaigns/{campaign_id}",
+        response_model=BusinessQualificationCampaignDetailResponse,
+    )
+    def get_business_qualification_campaign(
+        campaign_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BusinessQualificationCampaignDetailResponse:
+        campaign = business_qualification_service(session).get_campaign_detail(
+            actor=actor,
+            campaign_id=campaign_id,
+        )
+        return BusinessQualificationCampaignDetailResponse.model_validate(campaign.model_dump())
+
+    @application.post(
+        "/v1/qualification/business/campaigns/{campaign_id}/cases/{case_id}/references/prepare",
+        response_model=QualificationReferenceEvidenceResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def prepare_business_qualification_reference(
+        campaign_id: str,
+        case_id: str,
+        payload: PrepareQualificationReferenceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QualificationReferenceEvidenceResponse:
+        with mutation_transaction(session):
+            evidence = business_qualification_service(session).prepare_reference_evidence(
+                actor=actor,
+                campaign_id=campaign_id,
+                case_id=case_id,
+                draft=payload.draft,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return QualificationReferenceEvidenceResponse.model_validate(evidence.model_dump())
+
+    @application.post(
+        "/v1/qualification/business/campaigns/{campaign_id}/cases/{case_id}/references/verify",
+        response_model=BusinessQualificationCampaignResponse,
+    )
+    def verify_business_qualification_reference(
+        campaign_id: str,
+        case_id: str,
+        payload: VerifyQualificationReferenceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BusinessQualificationCampaignResponse:
+        with mutation_transaction(session):
+            campaign = business_qualification_service(session).verify_and_register_reference(
+                actor=actor,
+                campaign_id=campaign_id,
+                case_id=case_id,
+                prepared_observation_id=payload.prepared_observation_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return BusinessQualificationCampaignResponse.model_validate(campaign.model_dump())
+
+    @application.post(
+        "/v1/qualification/business/campaigns/{campaign_id}/evaluate",
+        response_model=BusinessQualificationEvaluationResponse,
+    )
+    def evaluate_business_qualification_campaign(
+        campaign_id: str,
+        payload: QualificationActionRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BusinessQualificationEvaluationResponse:
+        with mutation_transaction(session):
+            evaluation = business_qualification_service(session).evaluate(
+                actor=actor,
+                campaign_id=campaign_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return BusinessQualificationEvaluationResponse.model_validate(evaluation.model_dump())
+
+    @application.post(
+        "/v1/qualification/business/campaigns/{campaign_id}/discrepancies/{discrepancy_id}/review",
+        response_model=BusinessQualificationCampaignResponse,
+    )
+    def review_business_qualification_discrepancy(
+        campaign_id: str,
+        discrepancy_id: str,
+        payload: ReviewQualificationDiscrepancyRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BusinessQualificationCampaignResponse:
+        with mutation_transaction(session):
+            campaign = business_qualification_service(session).review_discrepancy(
+                actor=actor,
+                campaign_id=campaign_id,
+                discrepancy_id=discrepancy_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return BusinessQualificationCampaignResponse.model_validate(campaign.model_dump())
+
+    @application.post(
+        "/v1/qualification/business/campaigns/{campaign_id}/approve",
+        response_model=BusinessQualificationCampaignResponse,
+    )
+    def approve_business_qualification_campaign(
+        campaign_id: str,
+        payload: QualificationActionRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BusinessQualificationCampaignResponse:
+        with mutation_transaction(session):
+            campaign = business_qualification_service(session).approve_campaign(
+                actor=actor,
+                campaign_id=campaign_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return BusinessQualificationCampaignResponse.model_validate(campaign.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/evidence/observations",

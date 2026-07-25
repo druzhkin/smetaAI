@@ -30,6 +30,12 @@ from tenderguard.application.boq import (
     QuantitySubmission,
     ScopeRunResult,
 )
+from tenderguard.application.business_qualification import (
+    DiscrepancyReviewCommand,
+    QualificationCampaignDetail,
+    QualificationCampaignView,
+    QualificationReferenceEvidenceView,
+)
 from tenderguard.application.calculations import (
     CalculationContextView,
     CalculationExecutionResult,
@@ -102,6 +108,10 @@ from tenderguard.application.workbench import (
     WorkItemPage,
 )
 from tenderguard.domain.approvals import ApprovalSubject
+from tenderguard.domain.business_qualification import (
+    BusinessQualificationEvaluation,
+    QualificationReferenceEvidenceDraft,
+)
 from tenderguard.domain.calculation import AtomicCostInput, CalculationPolicy
 from tenderguard.domain.commercial_costs import CommercialCostModelInput
 from tenderguard.domain.enums import ActorRole, ApprovalState, ProjectAccessLevel
@@ -587,6 +597,49 @@ class ActualComparisonResponse(ActualComparisonResult):
 class CalibrationApprovalResponse(ApiModel):
     example_id: str
     approved: bool
+
+
+class CreateBusinessQualificationCampaignRequest(ApiModel):
+    profile_version_id: str = Field(min_length=1, max_length=64)
+    profile_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_version_id: str = Field(min_length=1, max_length=64)
+    dataset_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class PrepareQualificationReferenceRequest(ApiModel):
+    draft: QualificationReferenceEvidenceDraft
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class VerifyQualificationReferenceRequest(ApiModel):
+    prepared_observation_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ReviewQualificationDiscrepancyRequest(ApiModel):
+    command: DiscrepancyReviewCommand
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class QualificationActionRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class BusinessQualificationCampaignResponse(QualificationCampaignView):
+    pass
+
+
+class BusinessQualificationCampaignDetailResponse(QualificationCampaignDetail):
+    pass
+
+
+class QualificationReferenceEvidenceResponse(QualificationReferenceEvidenceView):
+    pass
+
+
+class BusinessQualificationEvaluationResponse(BusinessQualificationEvaluation):
+    pass
 
 
 class BuildApprovalPlanRequest(ApiModel):

@@ -53,7 +53,8 @@ jobs:
           uv run alembic upgrade head
           uv run pytest \
             tests/integration/test_pricing_integrity_postgresql.py \
-            tests/integration/test_calculation_integrity_postgresql.py
+            tests/integration/test_calculation_integrity_postgresql.py \
+            tests/integration/test_business_qualification_postgresql.py
 
   frontend:
     runs-on: ubuntu-latest

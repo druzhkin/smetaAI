@@ -30,7 +30,7 @@ Status values:
 | 20 expert approval | workflow | version-bound task planning, evidence-required decisions, four-eyes checks and exact gate-hash/project/target attestation at release (`APPLICATION_CORE`); organisation policy qualification remains open |
 | 21 audit | audit | versioned-key hash chains, verified legacy migration, immutable global checkpoints, four-eyes Ed25519 external receipts, full current-history verification, snapshot-to-document lineage, and live object-lock readiness enforcement (`APPLICATION_CORE`); production anchor provider, WORM evidence and drills (`QUALIFICATION`) |
 | 22 export/integration | integration | deterministic Ed25519-signed estimate/audit package; persisted mutation idempotency; universal outbox; qualification-bound Ed25519 event/receipt contracts; immutable outbound attempts and inbound messages; leased retry/dead-letter processing; collision-safe deduplication and controlled replay (`APPLICATION_CORE`); organization-specific ERP/DMS/BI mappings, deployed workers/schedulers, endpoints, credentials, conformance/load evidence and external trust registry (`PORT`, `OPERATIONS`, `QUALIFICATION`) |
-| 23-24 actuals and calibration | actuals | revisioned verified facts, fixed-snapshot comparison, mandatory variance reasons and methodology-owner calibration approval (`APPLICATION_CORE`); factual feed (`PORT`) |
+| 23-24 actuals and calibration | actuals + business qualification | revisioned verified facts, fixed-snapshot comparison, mandatory variance reasons and methodology-owner calibration approval; governed closed historical/blind/parallel campaigns lock system forecasts before references, use exact unrounded metrics, require independent material-discrepancy review, and produce an immutable package revalidated by production release (`APPLICATION_CORE`); organisation dataset, professional comparisons and factual feeds remain `QUALIFICATION`/`PORT` |
 
 ## Verification contours
 
@@ -44,6 +44,12 @@ calculation, independent validation, controlled scenario execution, expert
 approval, lineage, audit, release, signed release export,
 actuals, and calibration approval. Integration tests exercise positive and
 negative paths through these workflows.
+
+The historical/blind/parallel qualification mechanism is connected through its
+API and PostgreSQL append-only guards. It prevents missing-reference
+evaluation, self-review, result-hash tampering, rounded-threshold masking,
+unreviewed material discrepancies, and an unbound production-qualification
+claim. It is a qualification harness, not completed qualification evidence.
 
 This does not make every contour operationally qualified. OCR/visual
 extraction, the recognised normative engine, live price/RFQ sources,

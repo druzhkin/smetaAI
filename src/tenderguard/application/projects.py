@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.operational_qualification import load_approved_profile
 from tenderguard.application.snapshot_integrity import read_verified_snapshot
 from tenderguard.application.stage_gates import (
     boq_stage_blockers,
@@ -23,7 +24,13 @@ from tenderguard.application.stage_gates import (
 )
 from tenderguard.config import Settings
 from tenderguard.domain.access import project_role_mask, validate_project_role_evidence
-from tenderguard.domain.audit import AuditEvent, append_event
+from tenderguard.domain.audit import AuditEvent, append_event, verify_chain
+from tenderguard.domain.business_qualification import (
+    BusinessQualificationDataset,
+    BusinessQualificationEvaluation,
+    BusinessQualificationProfile,
+    QualificationReferencePayload,
+)
 from tenderguard.domain.common import canonical_data, content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import (
     ActorRole,
@@ -59,6 +66,13 @@ from tenderguard.infrastructure.orm import (
     ApprovalTaskRow,
     AuditEventRow,
     BoqLineRow,
+    BusinessQualificationApprovalRow,
+    BusinessQualificationCampaignRow,
+    BusinessQualificationCaseRow,
+    BusinessQualificationDiscrepancyReviewRow,
+    BusinessQualificationDiscrepancyRow,
+    BusinessQualificationEvaluationRow,
+    BusinessQualificationReferenceRow,
     CalculationRunRow,
     CalculationSnapshotRow,
     ConflictRow,
@@ -72,6 +86,7 @@ from tenderguard.infrastructure.orm import (
     ManualChangeRow,
     NomenclatureMatchRow,
     NormativeCalculationRow,
+    ObservationRow,
     OutboxEventRow,
     PriceDecisionRow,
     ProjectControlledVersionRow,
@@ -1802,7 +1817,10 @@ class ProjectService:
         production_qualified = any(
             row.kind == "production_qualification"
             and row.status == VersionStatus.APPROVED.value
-            and self._production_qualification_evidence_complete(row.payload)
+            and self._production_qualification_evidence_valid(
+                row.payload,
+                organization_id=project.organization_id,
+            )
             for row in bound_versions
         )
         qualification = self._qualified_normative_adapter()
@@ -2112,7 +2130,27 @@ class ProjectService:
             "methodology_approval",
         }
         gates = payload.get("gates")
-        if payload.get("all_gates_complete") is not True or not isinstance(gates, dict):
+        business = payload.get("business_qualification")
+        if (
+            payload.get("all_gates_complete") is not True
+            or not isinstance(gates, dict)
+            or not isinstance(business, dict)
+        ):
+            return False
+        campaign_id = business.get("campaign_id")
+        package_hash = business.get("package_hash")
+        if (
+            not isinstance(campaign_id, str)
+            or not campaign_id
+            or len(campaign_id) > 64
+            or not isinstance(package_hash, str)
+            or len(package_hash) != 64
+            or any(character not in "0123456789abcdef" for character in package_hash)
+            or not all(
+                isinstance(business.get(field), str) and business[field].strip()
+                for field in ("approved_by", "approved_at", "environment")
+            )
+        ):
             return False
         for gate_name in required_gates:
             gate = gates.get(gate_name)
@@ -2135,7 +2173,343 @@ class ProjectService:
                 )
             ):
                 return False
+        for gate_name in (
+            "historical_projects",
+            "blind_estimator_comparison",
+            "parallel_operation",
+            "variance_resolution",
+        ):
+            gate = gates[gate_name]
+            if (
+                gate.get("evidence_hash") != package_hash
+                or gate.get("source_reference") != f"business_qualification_campaign:{campaign_id}"
+            ):
+                return False
         return True
+
+    def _production_qualification_evidence_valid(
+        self,
+        payload: dict[str, Any],
+        *,
+        organization_id: str,
+    ) -> bool:
+        if not self._production_qualification_evidence_complete(payload):
+            return False
+        business = payload["business_qualification"]
+        campaign = self.session.scalar(
+            select(BusinessQualificationCampaignRow).where(
+                BusinessQualificationCampaignRow.id == business["campaign_id"],
+                BusinessQualificationCampaignRow.organization_id == organization_id,
+                BusinessQualificationCampaignRow.status == "PASSED",
+            )
+        )
+        if (
+            campaign is None
+            or campaign.created_by == campaign.evaluated_by
+            or campaign.created_by == campaign.finalized_by
+            or campaign.evaluated_by == campaign.finalized_by
+        ):
+            return False
+        approval = self.session.scalar(
+            select(BusinessQualificationApprovalRow).where(
+                BusinessQualificationApprovalRow.campaign_id == campaign.id,
+                BusinessQualificationApprovalRow.package_hash == business["package_hash"],
+            )
+        )
+        evaluation_row = self.session.scalar(
+            select(BusinessQualificationEvaluationRow).where(
+                BusinessQualificationEvaluationRow.campaign_id == campaign.id
+            )
+        )
+        if (
+            approval is None
+            or evaluation_row is None
+            or not evaluation_row.metrics_passed
+            or approval.evaluation_id != evaluation_row.id
+            or campaign.result_hash != evaluation_row.result_hash
+            or campaign.finalized_by != approval.approved_by
+            or business["approved_by"] != approval.approved_by
+        ):
+            return False
+        try:
+            claimed_approved_at = ensure_utc(
+                datetime.fromisoformat(business["approved_at"].replace("Z", "+00:00"))
+            )
+            evaluation = BusinessQualificationEvaluation.model_validate(evaluation_row.payload)
+            profile, profile_row = load_approved_profile(
+                session=self.session,
+                settings=self.settings,
+                version_id=campaign.profile_version_id,
+                expected_content_hash=campaign.profile_hash,
+                expected_kind="business_qualification_profile",
+                profile_type=BusinessQualificationProfile,
+            )
+            dataset, dataset_row = load_approved_profile(
+                session=self.session,
+                settings=self.settings,
+                version_id=campaign.dataset_version_id,
+                expected_content_hash=campaign.dataset_hash,
+                expected_kind="business_qualification_dataset",
+                profile_type=BusinessQualificationDataset,
+            )
+        except (LookupError, TypeError, ValueError):
+            return False
+        profile_governance = profile_row.payload.get("_governance")
+        dataset_governance = dataset_row.payload.get("_governance")
+        if (
+            claimed_approved_at != ensure_utc(approval.approved_at)
+            or claimed_approved_at != ensure_utc(campaign.finalized_at)
+            or evaluation.result_hash != evaluation_row.result_hash
+            or not evaluation.metrics_passed
+            or evaluation.campaign_id != campaign.id
+            or evaluation.profile_version_id != campaign.profile_version_id
+            or evaluation.dataset_version_id != campaign.dataset_version_id
+            or evaluation.application_build_reference != campaign.application_build_reference
+            or evaluation.currency != profile.currency
+            or profile.expected_application_build_reference != campaign.application_build_reference
+            or self.settings.application_build_reference != campaign.application_build_reference
+            or not isinstance(profile_governance, dict)
+            or profile_governance.get("organization_id") != organization_id
+            or not isinstance(dataset_governance, dict)
+            or dataset_governance.get("organization_id") != organization_id
+            or {metric.mode for metric in evaluation.modes} != {"HISTORICAL", "BLIND", "PARALLEL"}
+            or any(not metric.passed for metric in evaluation.modes)
+        ):
+            return False
+        cases = list(
+            self.session.scalars(
+                select(BusinessQualificationCaseRow).where(
+                    BusinessQualificationCaseRow.campaign_id == campaign.id
+                )
+            )
+        )
+        references = list(
+            self.session.scalars(
+                select(BusinessQualificationReferenceRow).where(
+                    BusinessQualificationReferenceRow.campaign_id == campaign.id
+                )
+            )
+        )
+        if (
+            not cases
+            or {case.mode for case in cases} != {"HISTORICAL", "BLIND", "PARALLEL"}
+            or len(references) != len(cases)
+            or {reference.case_id for reference in references} != {case.id for case in cases}
+            or {metric.case_id for metric in evaluation.cases} != {case.id for case in cases}
+        ):
+            return False
+        ordered_cases = sorted(cases, key=lambda item: item.case_key)
+        dataset_cases = {item.case_key: item for item in dataset.cases}
+        references_by_case = {item.case_id: item for item in references}
+        reference_actors = {
+            actor_id
+            for reference in references
+            for actor_id in (
+                reference.registered_by,
+                reference.payload.get("prepared_by"),
+            )
+            if isinstance(actor_id, str) and actor_id
+        }
+        if (
+            set(dataset_cases) != {case.case_key for case in cases}
+            or campaign.evaluated_by in reference_actors
+            or campaign.finalized_by in reference_actors
+        ):
+            return False
+        try:
+            for case in ordered_cases:
+                planned = dataset_cases[case.case_key]
+                reference = references_by_case[case.id]
+                prediction_identity = {
+                    "case_key": case.case_key,
+                    "mode": case.mode,
+                    "project_id": case.project_id,
+                    "snapshot_id": case.snapshot_id,
+                    "snapshot_hash": case.snapshot_hash,
+                    "prediction_total": self._qualification_decimal_identity(case.prediction_total),
+                    "currency": case.currency,
+                }
+                if (
+                    planned.mode != case.mode
+                    or planned.project_id != case.project_id
+                    or planned.snapshot_id != case.snapshot_id
+                    or planned.stratum != case.stratum
+                    or content_hash(prediction_identity) != case.prediction_hash
+                    or reference.campaign_id != campaign.id
+                    or reference.currency != case.currency
+                    or reference.reference_total <= 0
+                ):
+                    return False
+                if case.mode == "HISTORICAL":
+                    if (
+                        planned.historical_actual_id != reference.source_entity_id
+                        or reference.reference_kind != "VERIFIED_ACTUAL"
+                        or reference.source_entity_type != "ACTUAL_RECORD"
+                        or reference.payload.get("comparison_basis_hash")
+                        != profile.comparison_basis_hash
+                        or content_hash(reference.payload) != reference.evidence_hash
+                    ):
+                        return False
+                else:
+                    reference_payload = QualificationReferencePayload.model_validate(
+                        reference.payload
+                    )
+                    observation = self.session.scalar(
+                        select(ObservationRow).where(
+                            ObservationRow.id == reference.source_entity_id,
+                            ObservationRow.project_id == case.project_id,
+                            ObservationRow.status == VerificationStatus.VERIFIED.value,
+                        )
+                    )
+                    if (
+                        planned.historical_actual_id is not None
+                        or reference.source_entity_type != "OBSERVATION"
+                        or observation is None
+                        or reference_payload.case_key != case.case_key
+                        or reference_payload.mode != case.mode
+                        or reference_payload.amount != reference.reference_total
+                        or reference_payload.currency != reference.currency
+                        or reference_payload.comparison_basis_hash != profile.comparison_basis_hash
+                        or reference_payload.evidence_hash != reference.evidence_hash
+                        or reference_payload.reviewed_by != reference.registered_by
+                        or observation.payload.get("qualification_reference") != reference.payload
+                    ):
+                        return False
+            recomputed_input_hash = content_hash(
+                {
+                    "profile_version_id": campaign.profile_version_id,
+                    "profile_hash": campaign.profile_hash,
+                    "dataset_version_id": campaign.dataset_version_id,
+                    "dataset_hash": campaign.dataset_hash,
+                    "application_build_reference": campaign.application_build_reference,
+                    "population_size": dataset.population_size,
+                    "cases": [
+                        {
+                            "case_key": case.case_key,
+                            "mode": case.mode,
+                            "project_id": case.project_id,
+                            "snapshot_id": case.snapshot_id,
+                            "snapshot_hash": case.snapshot_hash,
+                            "prediction_total": self._qualification_decimal_identity(
+                                case.prediction_total
+                            ),
+                            "currency": case.currency,
+                            "prediction_hash": case.prediction_hash,
+                            "stratum": case.stratum,
+                        }
+                        for case in ordered_cases
+                    ],
+                    "exclusions": dataset.exclusions,
+                }
+            )
+        except (ArithmeticError, KeyError, TypeError, ValueError):
+            return False
+        if (
+            recomputed_input_hash != campaign.input_hash
+            or campaign.payload.get("population_size") != dataset.population_size
+            or campaign.payload.get("exclusion_count") != len(dataset.exclusions)
+            or campaign.payload.get("population_evidence_hash") != dataset.population_evidence_hash
+            or campaign.payload.get("selection_query_hash") != dataset.selection_query_hash
+            or campaign.payload.get("selection_cutoff_at")
+            != dataset.selection_cutoff_at.isoformat()
+            or campaign.payload.get("case_prediction_hashes")
+            != [case.prediction_hash for case in ordered_cases]
+        ):
+            return False
+        discrepancies = list(
+            self.session.scalars(
+                select(BusinessQualificationDiscrepancyRow).where(
+                    BusinessQualificationDiscrepancyRow.campaign_id == campaign.id
+                )
+            )
+        )
+        reviews = (
+            list(
+                self.session.scalars(
+                    select(BusinessQualificationDiscrepancyReviewRow).where(
+                        BusinessQualificationDiscrepancyReviewRow.discrepancy_id.in_(
+                            [row.id for row in discrepancies]
+                        )
+                    )
+                )
+            )
+            if discrepancies
+            else []
+        )
+        if (
+            {row.case_id for row in discrepancies}
+            != {metric.case_id for metric in evaluation.cases if metric.material}
+            or len(reviews) != len(discrepancies)
+            or any(review.decision != "ACCEPTED" for review in reviews)
+            or any(review.reviewed_by == approval.approved_by for review in reviews)
+        ):
+            return False
+        reviews_by_discrepancy = {review.discrepancy_id: review for review in reviews}
+        recomputed_package_hash = content_hash(
+            {
+                "campaign_id": campaign.id,
+                "input_hash": campaign.input_hash,
+                "profile_version_id": campaign.profile_version_id,
+                "profile_hash": campaign.profile_hash,
+                "dataset_version_id": campaign.dataset_version_id,
+                "dataset_hash": campaign.dataset_hash,
+                "application_build_reference": campaign.application_build_reference,
+                "evaluation_id": evaluation_row.id,
+                "evaluation_result_hash": evaluation.result_hash,
+                "population_size": dataset.population_size,
+                "profile_schema_version": profile.schema_version,
+                "accepted_discrepancy_reviews": [
+                    {
+                        "discrepancy_id": discrepancy.id,
+                        "review_id": reviews_by_discrepancy[discrepancy.id].id,
+                        "evidence_hash": reviews_by_discrepancy[discrepancy.id].evidence_hash,
+                    }
+                    for discrepancy in sorted(discrepancies, key=lambda item: item.id)
+                ],
+            }
+        )
+        if (
+            recomputed_package_hash != approval.package_hash
+            or recomputed_package_hash != business["package_hash"]
+        ):
+            return False
+        events = [
+            self._audit_domain(row)
+            for row in self.session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "business_qualification_campaign",
+                    AuditEventRow.aggregate_id == campaign.id,
+                )
+                .order_by(AuditEventRow.sequence)
+            )
+        ]
+        locked = [
+            event for event in events if event.event_type == "business_qualification_inputs_locked"
+        ]
+        evaluated = [
+            event for event in events if event.event_type == "business_qualification_evaluated"
+        ]
+        approved = [
+            event for event in events if event.event_type == "business_qualification_approved"
+        ]
+        return bool(
+            events
+            and verify_chain(events, self.settings.audit_verification_keyring)
+            and len(locked) == len(evaluated) == len(approved) == 1
+            and locked[0].actor_id == campaign.created_by
+            and locked[0].payload.get("input_hash") == campaign.input_hash
+            and evaluated[0].actor_id == campaign.evaluated_by
+            and evaluated[0].payload.get("result_hash") == evaluation_row.result_hash
+            and approved[0].actor_id == approval.approved_by
+            and approved[0].payload.get("package_hash") == approval.package_hash
+        )
+
+    @staticmethod
+    def _qualification_decimal_identity(value: Decimal) -> str:
+        if not value.is_finite():
+            raise ValueError("Qualification amount must be finite")
+        return format(value.normalize(), "f")
 
     def _audit(
         self,

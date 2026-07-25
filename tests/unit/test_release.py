@@ -296,16 +296,26 @@ def test_stale_or_unverified_snapshot_is_blocked() -> None:
 
 
 def test_production_qualification_requires_evidence_for_every_gate() -> None:
+    campaign_id = "business-qualification-campaign-1"
+    package_hash = "a" * 64
     incomplete = {
         "all_gates_complete": True,
+        "business_qualification": {
+            "campaign_id": campaign_id,
+            "package_hash": package_hash,
+            "approved_by": "business-qualification-approver",
+            "approved_at": NOW.isoformat(),
+            "environment": "qualification",
+        },
         "gates": {
             "historical_projects": {
                 "status": "PASSED",
-                "evidence_hash": "a" * 64,
+                "evidence_hash": package_hash,
                 "owner_id": "owner-1",
                 "approved_by": "approver-1",
                 "approved_at": NOW.isoformat(),
                 "environment": "qualification",
+                "source_reference": (f"business_qualification_campaign:{campaign_id}"),
             }
         },
     }
@@ -314,6 +324,7 @@ def test_production_qualification_requires_evidence_for_every_gate() -> None:
     gate = incomplete["gates"]["historical_projects"]
     complete = {
         "all_gates_complete": True,
+        "business_qualification": incomplete["business_qualification"],
         "gates": {
             name: dict(gate)
             for name in (
@@ -330,4 +341,14 @@ def test_production_qualification_requires_evidence_for_every_gate() -> None:
             )
         },
     }
+    for gate_name in (
+        "historical_projects",
+        "blind_estimator_comparison",
+        "parallel_operation",
+        "variance_resolution",
+    ):
+        complete["gates"][gate_name]["evidence_hash"] = package_hash
+        complete["gates"][gate_name]["source_reference"] = (
+            f"business_qualification_campaign:{campaign_id}"
+        )
     assert ProjectService._production_qualification_evidence_complete(complete)

@@ -168,6 +168,33 @@ against a fixed snapshot input, and a different methodology owner must approve
 the resulting calibration example before it is admitted to a training or
 benchmark dataset.
 
+## Historical, blind, and parallel qualification
+
+Before creating a campaign, the methodology owner must approve the exact
+profile and a closed dataset whose selected and explicitly excluded cases cover
+the full declared population. Keep the selection query/evidence hashes outside
+the application database for independent comparison. Do not reveal blind or
+parallel reference values in the dataset.
+
+An auditor with access to every selected project locks the campaign. From that
+point, never replace a snapshot, remove a case, or reuse the campaign after a
+failed result. Professional references are prepared only after the lock and
+verified by a different project reviewer. Blind professionals must not receive
+the system prediction or possess bid authority.
+
+Have a separate auditor evaluate exact metrics. Investigate every generated
+material discrepancy using verified project evidence and the approved reason
+taxonomy. A methodology owner who was neither creator nor evaluator may approve
+only after all material reviews are independently accepted. Preserve the
+campaign package hash, profile/dataset approvals, supporting observations,
+telemetry and meeting decision.
+
+The historical, blind, parallel, and variance gates in
+`production_qualification` must reference the same `PASSED` campaign and
+package. TenderGuard revalidates that evidence both when the controlled version
+is approved and during bid release. Full schemas, roles and endpoints are in
+`docs/business-qualification.md`.
+
 ## Mutation retries and outbox delivery
 
 All production mutation clients must send a stable `Idempotency-Key` for the
