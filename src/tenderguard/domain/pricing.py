@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import (
+    ROUND_HALF_EVEN,
+    ROUND_HALF_UP,
+    Decimal,
+    InvalidOperation,
+    localcontext,
+)
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import PriceEvidenceClass, PriceStatus, VatBasis
@@ -18,7 +24,7 @@ from tenderguard.domain.models import (
 class PriceAdjustment(DomainModel):
     adjustment_id: str
     kind: str
-    amount_per_target_unit: Decimal
+    amount_per_target_unit: Decimal = Field(max_digits=38, decimal_places=12)
     evidence_id: str
     reason: str
 
@@ -34,6 +40,15 @@ class NormalizationRequest(DomainModel):
     region_adjustment_id: str | None = None
     party_adjustment_id: str | None = None
     payment_adjustment_id: str | None = None
+    rounding_scale: int = Field(ge=0, le=12)
+    rounding_mode: str
+
+    @field_validator("rounding_mode")
+    @classmethod
+    def rounding_mode_is_supported(cls, value: str) -> str:
+        if value not in {"ROUND_HALF_UP", "ROUND_HALF_EVEN"}:
+            raise ValueError(f"Unsupported price normalization rounding mode: {value}")
+        return value
 
 
 class TriangulationResult(DomainModel):
@@ -94,39 +109,55 @@ def normalize_quote(
     ):
         raise ValueError("Target basis with unloading requires an unloading adjustment")
 
-    per_source_unit = quote.amount / source.package_quantity
-    exclusive_source = _vat_exclusive(per_source_unit, source)
-    converted = (
-        exclusive_source
-        * request.source_units_per_target_unit
-        * request.target_currency_per_source_currency
-    )
-    delivery = sum(
-        (
-            adjustment.amount_per_target_unit
-            for adjustment in request.adjustments
-            if adjustment.kind == "delivery"
-        ),
-        start=Decimal("0"),
-    )
-    unloading = sum(
-        (
-            adjustment.amount_per_target_unit
-            for adjustment in request.adjustments
-            if adjustment.kind == "unloading"
-        ),
-        start=Decimal("0"),
-    )
-    other = sum(
-        (
-            adjustment.amount_per_target_unit
-            for adjustment in request.adjustments
-            if adjustment.kind not in {"delivery", "unloading"}
-        ),
-        start=Decimal("0"),
-    )
-    normalized_exclusive = converted + delivery + unloading + other
-    normalized_amount = _apply_target_vat(normalized_exclusive, target)
+    try:
+        with localcontext() as decimal_context:
+            # Operands are bounded to 38 significant digits. This precision
+            # prevents the process-global Decimal context from choosing a
+            # financial result before the explicit policy rounding below.
+            decimal_context.prec = 160
+            per_source_unit = quote.amount / source.package_quantity
+            exclusive_source = _vat_exclusive(per_source_unit, source)
+            converted = (
+                exclusive_source
+                * request.source_units_per_target_unit
+                * request.target_currency_per_source_currency
+            )
+            delivery = sum(
+                (
+                    adjustment.amount_per_target_unit
+                    for adjustment in request.adjustments
+                    if adjustment.kind == "delivery"
+                ),
+                start=Decimal("0"),
+            )
+            unloading = sum(
+                (
+                    adjustment.amount_per_target_unit
+                    for adjustment in request.adjustments
+                    if adjustment.kind == "unloading"
+                ),
+                start=Decimal("0"),
+            )
+            other = sum(
+                (
+                    adjustment.amount_per_target_unit
+                    for adjustment in request.adjustments
+                    if adjustment.kind not in {"delivery", "unloading"}
+                ),
+                start=Decimal("0"),
+            )
+            normalized_exclusive = converted + delivery + unloading + other
+            unrounded_amount = _apply_target_vat(normalized_exclusive, target)
+            rounding = {
+                "ROUND_HALF_UP": ROUND_HALF_UP,
+                "ROUND_HALF_EVEN": ROUND_HALF_EVEN,
+            }[request.rounding_mode]
+            normalized_amount = unrounded_amount.quantize(
+                Decimal(1).scaleb(-request.rounding_scale),
+                rounding=rounding,
+            )
+    except InvalidOperation as error:
+        raise ValueError("Price normalization exceeded the controlled decimal precision") from error
     formula_record = {
         "policy_version_id": request.policy_version_id,
         "source_quote_id": quote.quote_id,
@@ -144,6 +175,8 @@ def normalize_quote(
         "payment_adjustment_id": request.payment_adjustment_id,
         "target_vat_basis": target.vat_basis,
         "target_vat_rate": target.vat_rate,
+        "rounding_scale": request.rounding_scale,
+        "rounding_mode": request.rounding_mode,
     }
     formula_hash = content_hash(formula_record)
     return NormalizedPrice(

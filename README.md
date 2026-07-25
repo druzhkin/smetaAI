@@ -124,6 +124,14 @@ The repository currently connects and integration-tests:
   independent policy-assigned approval, while only the original author may
   apply the server-held after-state and every accepted application remains
   linked to its approval and resulting quantity;
+- governed price-source registration, normalization, and triangulation in the
+  operator UI: the browser submits only a verified observation identifier,
+  selects references from the bound approved price policy, and never
+  resubmits or calculates the monetary value. The server replays the exact
+  quote and normalization, applies policy-explicit decimal rounding, and opens
+  RFQ/expert review when evidence is insufficient; verified price decisions
+  are replayed again before calculation, while PostgreSQL guards protect quote
+  inputs, normalized prices, and decision history from in-place mutation;
 - revisioned verified actuals, forecast-to-actual variance classification, and
   methodology-owner approval before facts become calibration examples.
 
@@ -179,7 +187,7 @@ Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
 schedulers/monitoring, remaining controlled extraction-correction,
-BoQ-structure/nomenclature/pricing/calculation/reconciliation/release
+BoQ-structure/nomenclature/calculation/reconciliation/release
 surfaces, and business qualification of the operator interface remain to be
 completed.
 External verification also requires approved out-of-band

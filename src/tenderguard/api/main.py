@@ -143,6 +143,8 @@ from .schemas import (
     PassportFactVerificationResponse,
     PassportValidationResponse,
     PriceDecisionResponse,
+    PriceItemContextResponse,
+    PriceQuoteCandidateResponse,
     PriceQuoteResponse,
     ProjectMembershipResponse,
     ProjectPortfolioResponse,
@@ -163,6 +165,7 @@ from .schemas import (
     RecordActualRequest,
     RecordMalwareScanResultRequest,
     RecordObservationRequest,
+    RecordPriceQuoteFromObservationRequest,
     RecordPriceQuoteRequest,
     RecordQuantityRequest,
     RegisterAuditAnchorReceiptRequest,
@@ -1885,6 +1888,67 @@ def create_app(
                 reason=payload.reason,
             )
         return NomenclatureMatchResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/pricing/items/{item_id}/context",
+        response_model=PriceItemContextResponse,
+    )
+    def get_price_item_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        item_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> PriceItemContextResponse:
+        result = pricing_service(session).price_item_context(
+            actor=actor,
+            project_id=project_id,
+            item_id=item_id,
+        )
+        return PriceItemContextResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/pricing/items/{item_id}/"
+        "quote-candidates/{source_observation_id}",
+        response_model=PriceQuoteCandidateResponse,
+    )
+    def get_price_quote_candidate(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        item_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        source_observation_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> PriceQuoteCandidateResponse:
+        result = pricing_service(session).price_quote_candidate(
+            actor=actor,
+            project_id=project_id,
+            item_id=item_id,
+            source_observation_id=source_observation_id,
+        )
+        return PriceQuoteCandidateResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/pricing/items/{item_id}/quotes/from-observation",
+        response_model=PriceQuoteResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def record_price_quote_from_observation(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        item_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        payload: RecordPriceQuoteFromObservationRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> PriceQuoteResponse:
+        with mutation_transaction(session):
+            result = pricing_service(session).record_quote_from_observation(
+                actor=actor,
+                project_id=project_id,
+                item_id=item_id,
+                source_observation_id=payload.source_observation_id,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return PriceQuoteResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/pricing/quotes",

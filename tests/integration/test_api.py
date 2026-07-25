@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -7,9 +8,27 @@ from sqlalchemy import Engine
 
 from tenderguard.api.main import create_app
 from tenderguard.application.document_processing import DocumentProcessingService
+from tenderguard.application.pricing import (
+    NormalizePriceCommand,
+    PriceQuoteDraft,
+    PricingService,
+)
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
-from tenderguard.domain.enums import ActorRole
+from tenderguard.domain.enums import (
+    ActorRole,
+    EvidenceMethod,
+    MatchClass,
+    PriceEvidenceClass,
+    VatBasis,
+    VerificationStatus,
+)
+from tenderguard.domain.models import (
+    CommercialBasis,
+    EvidenceLocation,
+    NomenclatureMatch,
+    Observation,
+)
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
@@ -693,6 +712,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 "test_evidence_hash": "e" * 64,
                 "valid_until": "2027-07-23",
                 "supported_methods": ["TABLE_PARSER"],
+                "supported_price_evidence_classes": [item.value for item in PriceEvidenceClass],
                 "independence_domain": "deterministic-table-parser",
                 "service_actor_id": "extractor-service",
             },
@@ -706,6 +726,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 "test_evidence_hash": "f" * 64,
                 "valid_until": "2027-07-23",
                 "supported_methods": ["VISUAL_MODEL"],
+                "supported_price_evidence_classes": [item.value for item in PriceEvidenceClass],
                 "independence_domain": "isolated-visual-provider",
                 "service_actor_id": "extractor-service",
             },
@@ -1119,7 +1140,14 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                         "reason": "DOCUMENT_CONFLICT",
                         "assigned_role": "REVIEWER",
                         "required": True,
-                    }
+                    },
+                    {
+                        "reason": "HIGH_PRICE_SPREAD",
+                        "assigned_role": "REVIEWER",
+                        "threshold": "0.50",
+                        "threshold_kind": "RELATIVE_SPREAD",
+                        "required": True,
+                    },
                 ]
             },
             purpose="approval_policy",
@@ -1200,13 +1228,34 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
             purpose="catalog",
         )
-        price_policy_version = approve_version(
+        approve_version(
             "price_policy",
             "price-policy-1",
             {
                 "selection_method": "MEDIAN",
-                "target_bases": {},
-                "item_target_basis_ids": {},
+                "normalization_rounding_scale": 2,
+                "normalization_rounding_mode": "ROUND_HALF_UP",
+                "target_bases": {
+                    "pipe-delivered-rub": {
+                        "currency": "RUB",
+                        "vat_basis": "INCLUSIVE",
+                        "vat_rate": "0.20",
+                        "unit": "m",
+                        "package_quantity": "1",
+                        "party_quantity": "1000",
+                        "region": "Moscow",
+                        "delivery_included": True,
+                        "unloading_included": True,
+                        "payment_terms": "30 days",
+                    }
+                },
+                "item_target_basis_ids": {"pipe": "pipe-delivered-rub"},
+                "unit_conversions": {},
+                "fx_rates": {},
+                "adjustments": {},
+                "region_adjustments": {},
+                "party_adjustments": {},
+                "payment_adjustments": {},
             },
             purpose="price_policy",
         )
@@ -1627,39 +1676,208 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     created_at=now,
                 )
             )
+            match = NomenclatureMatch(
+                match_id="nomenclature-match-calculation-test",
+                source_item_id="pipe",
+                canonical_item_id="pipe",
+                match_class=MatchClass.EXACT,
+                required_critical_attributes=frozenset({"type"}),
+                source_attributes={"type": "pipe"},
+                canonical_attributes={"type": "pipe"},
+            )
             session.add(
                 NomenclatureMatchRow(
-                    id="nomenclature-match-calculation-test",
+                    id=match.match_id,
                     project_id=project["id"],
-                    source_item_id="pipe",
-                    canonical_item_id="pipe",
-                    match_class="EXACT",
-                    status="VERIFIED",
+                    source_item_id=match.source_item_id,
+                    canonical_item_id=match.canonical_item_id,
+                    match_class=match.match_class.value,
+                    status=VerificationStatus.VERIFIED.value,
                     catalog_version_id=catalog_version["version_id"],
                     supersedes_match_id=None,
                     is_current=True,
-                    payload={"test_fixture": "Calculation test pricing gate"},
+                    payload={
+                        "match": match.model_dump(mode="json"),
+                        "critical_price": False,
+                        "assessed_by": "operator-1",
+                        "assessment_method": ("DETERMINISTIC_CRITICAL_ATTRIBUTE_COMPARISON"),
+                    },
                     created_at=now,
                     updated_at=now,
                 )
             )
-            session.add(
-                PriceDecisionRow(
-                    id="price-decision-calculation-test",
+            price_basis = CommercialBasis(
+                currency="RUB",
+                vat_basis=VatBasis.INCLUSIVE,
+                vat_rate=Decimal("0.20"),
+                unit="m",
+                package_quantity=Decimal("1"),
+                party_quantity=Decimal("1000"),
+                region="Moscow",
+                delivery_included=True,
+                unloading_included=True,
+                payment_terms="30 days",
+            )
+            price_drafts: list[PriceQuoteDraft] = []
+            for index, (evidence_class, source_origin) in enumerate(
+                (
+                    (
+                        PriceEvidenceClass.OFFICIAL_OR_PRIMARY,
+                        "manufacturer-primary",
+                    ),
+                    (
+                        PriceEvidenceClass.INDEPENDENT_MARKET,
+                        "independent-market-index",
+                    ),
+                ),
+                start=1,
+            ):
+                source_observation_id = f"observation-price-{index}"
+                draft = PriceQuoteDraft(
+                    item_id="pipe",
+                    supplier_id=f"price-source-{index}",
+                    evidence_class=evidence_class,
+                    source_observation_id=source_observation_id,
+                    technical_attributes={"type": "pipe"},
+                    amount=Decimal("125.50"),
+                    basis=price_basis,
+                    quote_date=date(2026, 7, 20),
+                    valid_until=date(2026, 8, 20),
+                    lead_time_days=10,
+                    available=True,
+                    source_reliability=Decimal("0.95"),
+                )
+                price_drafts.append(draft)
+                leaf_ids: list[str] = []
+                for suffix, method, qualification_id in (
+                    (
+                        "parser",
+                        EvidenceMethod.TABLE_PARSER,
+                        parser_adapter["version_id"],
+                    ),
+                    (
+                        "visual",
+                        EvidenceMethod.VISUAL_MODEL,
+                        visual_adapter["version_id"],
+                    ),
+                ):
+                    leaf_id = f"{source_observation_id}-{suffix}"
+                    leaf_ids.append(leaf_id)
+                    leaf = Observation(
+                        observation_id=leaf_id,
+                        field_name=f"price_quote:pipe:{index}",
+                        value=draft.evidence_value(),
+                        method=method,
+                        method_version="1.0",
+                        source_priority=1,
+                        location=EvidenceLocation(
+                            document_id=uploaded_payload["document_id"],
+                            document_revision_id=uploaded_payload["document_revision_id"],
+                            original_object_hash=uploaded_payload["manifest"]["root_sha256"],
+                            locator_kind="structured_region",
+                            locator=f"price-quote-{index}-{suffix}",
+                        ),
+                        observed_at=now,
+                        actor_id="extractor-service",
+                    )
+                    session.add(
+                        ObservationRow(
+                            id=leaf_id,
+                            project_id=project["id"],
+                            document_revision_id=uploaded_payload["document_revision_id"],
+                            field_name=leaf.field_name,
+                            method=leaf.method.value,
+                            method_version=leaf.method_version,
+                            status=leaf.status.value,
+                            payload={
+                                "observation": leaf.model_dump(mode="json"),
+                                "adapter_qualification_id": qualification_id,
+                                "source_origin_id": source_origin,
+                            },
+                            created_at=now,
+                        )
+                    )
+                reconciled = Observation(
+                    observation_id=source_observation_id,
+                    field_name=f"price_quote:pipe:{index}",
+                    value=draft.evidence_value(),
+                    method=EvidenceMethod.RULE_ENGINE,
+                    method_version=reconciliation_rules["version_id"],
+                    source_priority=1,
+                    location=EvidenceLocation(
+                        document_id=uploaded_payload["document_id"],
+                        document_revision_id=uploaded_payload["document_revision_id"],
+                        original_object_hash=uploaded_payload["manifest"]["root_sha256"],
+                        locator_kind="structured_region",
+                        locator=f"price-quote-{index}",
+                    ),
+                    observed_at=now,
+                    actor_id="owner-b",
+                    status=VerificationStatus.VERIFIED,
+                )
+                session.add(
+                    ObservationRow(
+                        id=reconciled.observation_id,
+                        project_id=project["id"],
+                        document_revision_id=uploaded_payload["document_revision_id"],
+                        field_name=reconciled.field_name,
+                        method=reconciled.method.value,
+                        method_version=reconciled.method_version,
+                        status=reconciled.status.value,
+                        payload={
+                            "observation": reconciled.model_dump(mode="json"),
+                            "source_observation_ids": leaf_ids,
+                        },
+                        created_at=now,
+                    )
+                )
+            session.flush()
+            pricing = PricingService(
+                session=session,
+                settings=settings,
+                object_store=LocalObjectStore(tmp_path / "objects"),
+            )
+            pricing_actor = Actor(
+                "operator-1",
+                "org-1",
+                frozenset(
+                    {
+                        ActorRole.ESTIMATOR,
+                        ActorRole.PROCUREMENT,
+                        ActorRole.TECHNICAL_EXPERT,
+                        ActorRole.REVIEWER,
+                    }
+                ),
+            )
+            for index, draft in enumerate(price_drafts, start=1):
+                quote = pricing.record_quote_from_observation(
+                    actor=pricing_actor,
                     project_id=project["id"],
                     item_id="pipe",
-                    status="VERIFIED",
-                    amount_per_unit="125.50",
-                    currency="RUB",
-                    unit="m",
-                    policy_version_id=price_policy_version["version_id"],
-                    derived_observation_id=verified_observation_id,
-                    supersedes_decision_id=None,
-                    is_current=True,
-                    payload={"test_fixture": "Calculation test pricing gate"},
-                    created_at=now,
+                    source_observation_id=draft.source_observation_id,
+                    request_id=f"calculation-price-quote-{index}",
+                    reason="Record governed calculation price source",
                 )
+                pricing.normalize_price(
+                    actor=pricing_actor,
+                    project_id=project["id"],
+                    command=NormalizePriceCommand(
+                        quote_id=quote.quote.quote_id,
+                    ),
+                    request_id=f"calculation-normalized-price-{index}",
+                    reason="Normalize governed calculation price source",
+                )
+            price_decision = pricing.evaluate_item_price(
+                actor=pricing_actor,
+                project_id=project["id"],
+                item_id="pipe",
+                as_of=date(2026, 7, 23),
+                request_id="calculation-price-evaluation",
+                reason="Evaluate governed calculation price sources",
             )
+            assert price_decision.status.value == "VERIFIED"
+            assert price_decision.derived_observation_id is not None
+            verified_price_observation_id = price_decision.derived_observation_id
         response = client.post(
             f"/v1/projects/{project['id']}/transitions",
             headers=operator,
@@ -1685,7 +1903,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     "unit": "m",
                     "unit_rate": "125.50",
                     "currency": "RUB",
-                    "source_observation_id": verified_observation_id,
+                    "source_observation_id": verified_price_observation_id,
                 },
                 {
                     "cost_input_id": "risk-reserve-cost",
@@ -1771,7 +1989,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             item for item in lineage_payload["cost_inputs"] if item["semantic_key"] == "pipe"
         )
         evidence = pipe_lineage["evidence"]
-        assert evidence["basis_id"] == verified_observation_id
+        assert evidence["basis_id"] == verified_price_observation_id
         assert evidence["document"]["revision_id"] == uploaded_payload["document_revision_id"]
         assert len(evidence["source_observations"]) == 2
 

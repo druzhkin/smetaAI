@@ -171,10 +171,24 @@ class NomenclatureMatch(DomainModel):
 class CommercialBasis(DomainModel):
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     vat_basis: VatBasis
-    vat_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    vat_rate: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        max_digits=13,
+        decimal_places=12,
+    )
     unit: str = Field(min_length=1)
-    package_quantity: Decimal = Field(gt=0)
-    party_quantity: Decimal = Field(gt=0)
+    package_quantity: Decimal = Field(
+        gt=0,
+        max_digits=38,
+        decimal_places=12,
+    )
+    party_quantity: Decimal = Field(
+        gt=0,
+        max_digits=38,
+        decimal_places=12,
+    )
     region: str = Field(min_length=1)
     delivery_included: bool
     unloading_included: bool
@@ -196,7 +210,7 @@ class PriceQuote(DomainModel):
     evidence_class: PriceEvidenceClass
     source_observation_id: str
     technical_attributes: dict[str, str]
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=38, decimal_places=12)
     basis: CommercialBasis
     quote_date: date
     valid_until: date | None
@@ -209,7 +223,11 @@ class PriceQuote(DomainModel):
 class NormalizedPrice(DomainModel):
     normalized_price_id: str
     quote_id: str
-    amount_per_unit: Decimal = Field(gt=0)
+    amount_per_unit: Decimal = Field(
+        gt=0,
+        max_digits=38,
+        decimal_places=12,
+    )
     target_basis: CommercialBasis
     fx_rate_id: str | None = None
     unit_conversion_id: str | None = None

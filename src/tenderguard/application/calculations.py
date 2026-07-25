@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tenderguard.application.approvals import ApprovalService
+from tenderguard.application.pricing import PricingService
 from tenderguard.application.projects import ProjectService, ProjectView
 from tenderguard.config import Settings
 from tenderguard.domain.approvals import ApprovalSubject
@@ -414,6 +415,19 @@ class CalculationService:
                     raise ValueError(
                         f"Cost input {item.cost_input_id} does not reference the current "
                         "verified price decision"
+                    )
+                decision = PricingService(
+                    session=self.session,
+                    settings=self.settings,
+                    object_store=self.object_store,
+                ).require_price_decision_integrity(price_decision)
+                if (
+                    decision.status is not PriceStatus.VERIFIED
+                    or decision.decision_id != price_decision.id
+                ):
+                    raise ValueError(
+                        f"Cost input {item.cost_input_id} references a price decision "
+                        "that failed deterministic integrity validation"
                     )
                 self._match_rate_basis(
                     item,

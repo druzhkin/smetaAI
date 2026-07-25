@@ -11,6 +11,20 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: tenderguard_ci
+          POSTGRES_USER: tenderguard_ci
+          POSTGRES_PASSWORD: tenderguard_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tenderguard_ci -d tenderguard_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -30,3 +44,11 @@ jobs:
           uv run alembic upgrade head
           uv run alembic downgrade base
           uv run alembic upgrade head
+      - name: PostgreSQL pricing evidence guards
+        env:
+          APP_ENV: test
+          AUDIT_SIGNING_KEY: pricing-guard-ci-signing-key-at-least-32-bytes
+          DATABASE_URL: postgresql+psycopg://tenderguard_ci:tenderguard_ci_only@localhost:5432/tenderguard_ci
+        run: |
+          uv run alembic upgrade head
+          uv run pytest tests/integration/test_pricing_integrity_postgresql.py

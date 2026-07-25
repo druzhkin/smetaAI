@@ -5,7 +5,11 @@ import {
   confirmDocumentSet,
   createProject,
   decideWorkItem,
+  evaluatePriceItem,
+  getPriceQuoteCandidate,
+  normalizePriceQuote,
   proposeQuantityChange,
+  recordPriceQuoteFromObservation,
   resolveConflict,
   uploadDocument,
   type RequestContext,
@@ -306,6 +310,121 @@ describe("controlled mutations", () => {
     });
     expect(JSON.parse(String(applyInit.body))).toEqual({
       reason: "Apply the exact independently approved after-state",
+    });
+  });
+
+  it("keeps price evidence, normalization references and evaluation exact", async () => {
+    const jsonResponse = (value: unknown, status = 200) =>
+      new Response(JSON.stringify(value), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          source_observation_id: "observation/quote",
+          source_origin_id: "supplier-origin",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ quote: { quote_id: "quote-1" } }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ normalized_price_id: "normalized-1" }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ decision_id: "decision-1", status: "RFQ_REQUIRED" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getPriceQuoteCandidate(
+      context,
+      "project/1",
+      "item/1",
+      "observation/quote",
+    );
+    await recordPriceQuoteFromObservation(context, {
+      projectId: "project/1",
+      itemId: "item/1",
+      sourceObservationId: "observation/quote",
+      reason: "Register the exact verified source",
+      idempotencyKey: "quote-operation",
+    });
+    await normalizePriceQuote(context, {
+      projectId: "project/1",
+      quoteId: "quote-1",
+      unitConversionId: "unit-rule-1",
+      fxRateId: null,
+      adjustmentIds: ["delivery-1"],
+      regionAdjustmentId: "region-rule-1",
+      partyAdjustmentId: null,
+      paymentAdjustmentId: null,
+      reason: "Normalize on the approved basis",
+      idempotencyKey: "normalize-operation",
+    });
+    await evaluatePriceItem(context, {
+      projectId: "project/1",
+      itemId: "item/1",
+      asOf: "2026-07-24",
+      reason: "Run exact triangulation",
+      idempotencyKey: "evaluate-operation",
+    });
+
+    const [candidateUrl, candidateInit] = fetchMock.mock.calls[0] as [
+      URL,
+      RequestInit,
+    ];
+    expect(candidateUrl.pathname).toBe(
+      "/v1/projects/project%2F1/pricing/items/item%2F1/quote-candidates/observation%2Fquote",
+    );
+    expect(candidateInit.method).toBe("GET");
+
+    const [recordUrl, recordInit] = fetchMock.mock.calls[1] as [
+      URL,
+      RequestInit,
+    ];
+    expect(recordUrl.pathname).toBe(
+      "/v1/projects/project%2F1/pricing/items/item%2F1/quotes/from-observation",
+    );
+    expect(recordInit.headers).toMatchObject({
+      "Idempotency-Key": "quote-operation",
+    });
+    expect(JSON.parse(String(recordInit.body))).toEqual({
+      source_observation_id: "observation/quote",
+      reason: "Register the exact verified source",
+    });
+
+    const [normalizeUrl, normalizeInit] = fetchMock.mock.calls[2] as [
+      URL,
+      RequestInit,
+    ];
+    expect(normalizeUrl.pathname).toBe(
+      "/v1/projects/project%2F1/pricing/normalize",
+    );
+    expect(JSON.parse(String(normalizeInit.body))).toEqual({
+      command: {
+        quote_id: "quote-1",
+        unit_conversion_id: "unit-rule-1",
+        fx_rate_id: null,
+        adjustment_ids: ["delivery-1"],
+        region_adjustment_id: "region-rule-1",
+        party_adjustment_id: null,
+        payment_adjustment_id: null,
+      },
+      reason: "Normalize on the approved basis",
+    });
+
+    const [evaluateUrl, evaluateInit] = fetchMock.mock.calls[3] as [
+      URL,
+      RequestInit,
+    ];
+    expect(evaluateUrl.pathname).toBe(
+      "/v1/projects/project%2F1/pricing/items/item%2F1/evaluate",
+    );
+    expect(JSON.parse(String(evaluateInit.body))).toEqual({
+      as_of: "2026-07-24",
+      reason: "Run exact triangulation",
     });
   });
 });

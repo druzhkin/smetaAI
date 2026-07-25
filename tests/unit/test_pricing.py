@@ -74,6 +74,8 @@ def test_price_normalization_requires_explicit_region_adjustment() -> None:
                 reason="Delivery to site",
             ),
         ),
+        rounding_scale=2,
+        rounding_mode="ROUND_HALF_UP",
     )
     with pytest.raises(ValueError, match="Region mismatch"):
         normalize_quote(
@@ -100,6 +102,8 @@ def test_price_normalization_reproduces_commercial_basis_formula() -> None:
                 reason="Delivery to site",
             ),
         ),
+        rounding_scale=2,
+        rounding_mode="ROUND_HALF_UP",
     )
     normalized = normalize_quote(
         quote("q1", PriceEvidenceClass.OFFICIAL_OR_PRIMARY),
@@ -124,6 +128,32 @@ def test_price_normalization_reproduces_commercial_basis_formula() -> None:
     assert changed_policy.amount_per_unit == normalized.amount_per_unit
     assert changed_policy.normalized_price_id != normalized.normalized_price_id
     assert changed_policy.normalization_formula != normalized.normalization_formula
+
+
+def test_price_normalization_applies_explicit_policy_rounding() -> None:
+    source = quote("q-rounding", PriceEvidenceClass.OFFICIAL_OR_PRIMARY)
+    source = source.model_copy(
+        update={
+            "amount": Decimal("1"),
+            "basis": source.basis.model_copy(update={"package_quantity": Decimal("3")}),
+        }
+    )
+    request = NormalizationRequest(
+        policy_version_id="price-policy-v1",
+        target_basis=source.basis,
+        source_units_per_target_unit=Decimal("1"),
+        target_currency_per_source_currency=Decimal("1"),
+        rounding_scale=2,
+        rounding_mode="ROUND_HALF_UP",
+    )
+
+    normalized = normalize_quote(
+        source,
+        request,
+        normalized_at=datetime(2026, 7, 23, tzinfo=UTC),
+    )
+
+    assert normalized.amount_per_unit == Decimal("0.33")
 
 
 def test_critical_price_requires_three_way_triangulation() -> None:

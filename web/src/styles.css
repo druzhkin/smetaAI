@@ -1638,6 +1638,296 @@ kbd,
   color: var(--ink-muted);
 }
 
+.price-governance-summary,
+.price-workflow-section,
+.price-decision-banner {
+  padding: 22px;
+  margin-top: 24px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+
+.price-governance-summary .task-facts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.technical-attributes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 0;
+  margin: 16px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.technical-attributes > span {
+  flex-basis: 100%;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.technical-attributes code {
+  padding: 5px 7px;
+  font-size: 9px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.price-basis {
+  min-width: 0;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.price-basis > span {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--forest-bright);
+  text-transform: uppercase;
+}
+
+.price-basis dl,
+.price-quote-facts,
+.price-decision-banner dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+}
+
+.price-basis dl > div,
+.price-quote-facts > div,
+.price-decision-banner dl > div {
+  min-width: 0;
+  padding: 9px 11px;
+  border-top: 1px solid var(--line);
+}
+
+.price-basis dt,
+.price-quote-facts dt,
+.price-decision-banner dt {
+  margin-bottom: 5px;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.price-basis dd,
+.price-quote-facts dd,
+.price-decision-banner dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.price-decision-banner {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
+  gap: 20px;
+  background: #edf2ef;
+  border-color: #b8c7c0;
+}
+
+.price-decision-banner h2 {
+  margin: 4px 0;
+  font-size: 22px;
+}
+
+.price-decision-banner p {
+  margin: 0;
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+.price-workflow-section > .section-heading {
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.price-workflow-section .section-heading p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+
+.inline-controlled-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.inline-controlled-form .decision-field {
+  margin: 0;
+}
+
+.price-candidate {
+  padding: 18px;
+  margin-top: 18px;
+  background: #f2f4f0;
+  border: 1px solid var(--line-strong);
+}
+
+.price-candidate__header,
+.price-quote-card__header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.price-candidate__header span,
+.price-quote-card__header span {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.price-candidate__header h3,
+.price-quote-card__header h3 {
+  margin: 5px 0 3px;
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: 22px;
+  font-weight: 560;
+}
+
+.price-candidate__header p,
+.price-quote-card__header p {
+  margin: 0;
+  font-size: 9px;
+  color: var(--ink-muted);
+}
+
+.compact-entry-form {
+  padding: 18px;
+  margin-top: 18px;
+}
+
+.permission-note {
+  padding: 12px 14px;
+  margin: 14px 0 0;
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  background: var(--paper);
+  border-left: 3px solid var(--ochre);
+}
+
+.price-quote-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.price-quote-card {
+  min-width: 0;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.price-quote-card > .button {
+  margin-top: 14px;
+}
+
+.normalized-price {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  margin-top: 12px;
+  background: #edf2ef;
+  border: 1px solid #b8c7c0;
+}
+
+.normalized-price span {
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--forest-bright);
+  text-transform: uppercase;
+}
+
+.normalized-price strong {
+  font-size: 13px;
+}
+
+.normalized-price code {
+  overflow: hidden;
+  font-size: 7px;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+}
+
+.normalization-form {
+  margin-top: 20px;
+}
+
+.price-basis-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.normalization-adjustments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px;
+  margin: 16px 0;
+  background: #f2f4f0;
+  border: 1px solid var(--line);
+}
+
+.normalization-adjustments legend {
+  padding: 0 6px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+.normalization-adjustments label {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 9px;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.normalization-adjustments label > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 8px;
+  color: var(--ink-muted);
+}
+
+.normalization-adjustments strong {
+  color: var(--ink);
+}
+
 .entry-form__intro {
   max-width: 760px;
   padding-bottom: 18px;
@@ -2951,8 +3241,19 @@ kbd,
   .workbench-columns,
   .task-facts,
   .quantity-context .task-facts,
+  .price-governance-summary .task-facts,
+  .price-quote-grid,
+  .price-basis-comparison,
+  .price-decision-banner,
+  .normalization-adjustments,
   .decision-options {
     grid-template-columns: 1fr;
+  }
+
+  .price-basis dl,
+  .price-quote-facts,
+  .price-decision-banner dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .entry-form__grid,
@@ -3078,7 +3379,10 @@ kbd,
   .document-set-summary,
   .conflict-summary,
   .quantity-context,
-  .manual-change-summary {
+  .manual-change-summary,
+  .price-governance-summary,
+  .price-workflow-section,
+  .price-decision-banner {
     padding: 15px;
   }
 
@@ -3091,6 +3395,13 @@ kbd,
   }
 
   .conflict-observation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-controlled-form,
+  .price-basis dl,
+  .price-quote-facts,
+  .price-decision-banner dl {
     grid-template-columns: 1fr;
   }
 

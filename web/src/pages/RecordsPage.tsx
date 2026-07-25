@@ -201,6 +201,35 @@ export function RecordsPage({
                   );
                 }
                 if (
+                  ((section === "BOQ_SCOPE" &&
+                    record.kind === "NOMENCLATURE_MATCH" &&
+                    record.current === true &&
+                    record.status === "VERIFIED") ||
+                    (section === "PRICING" &&
+                      [
+                        "PRICE_QUOTE",
+                        "NORMALIZED_PRICE",
+                        "PRICE_DECISION",
+                        "RFQ",
+                      ].includes(record.kind))) &&
+                  (auth.roles.includes("PROCUREMENT") ||
+                    auth.roles.includes("ESTIMATOR") ||
+                    auth.roles.includes("TECHNICAL_EXPERT") ||
+                    auth.roles.includes("REVIEWER") ||
+                    auth.roles.includes("APPROVER") ||
+                    auth.roles.includes("AUDITOR"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(record.title)}`}
+                    >
+                      <Icon name="trace" size={15} />
+                      Открыть ценовой контур
+                    </Link>
+                  );
+                }
+                if (
                   section === "EVIDENCE" &&
                   record.kind === "CONFLICT" &&
                   record.status === "CONFLICT" &&

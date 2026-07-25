@@ -1401,10 +1401,8 @@ class BoqService:
             integrity_ok = (
                 integrity_ok
                 and application.applied_by == change.changed_by
-                and application.payload.get("manual_change_hash")
-                == content_hash(change.payload)
-                and application.payload.get("before_hash")
-                == change.payload.get("before_hash")
+                and application.payload.get("manual_change_hash") == content_hash(change.payload)
+                and application.payload.get("before_hash") == change.payload.get("before_hash")
                 and application.payload.get("after_hash") == change.payload.get("after_hash")
                 and application.payload.get("policy_version_id") == policy_version_id
                 and isinstance(applied_record, dict)

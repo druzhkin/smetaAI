@@ -11,7 +11,8 @@ The methodology owner must version and approve:
 - WBS/typology/dependency scope-completeness rules;
 - critical nomenclature attributes and equivalence rules;
 - approved normative bases, methods, regions, periods, and coefficients;
-- price commercial basis, triangulation, expiry, reliability, and RFQ rules;
+- price commercial basis, explicit normalization rounding scale/mode,
+  triangulation, expiry, reliability, and RFQ rules;
 - required logistics/mobilisation/finance model kinds and components,
   commercial-model rounding, day-count convention, zero-cost policy, and
   required contract-term/cash-flow coverage;
@@ -34,10 +35,14 @@ stage gates or calculation lineage:
   normative result whenever a normative component is used.
 
 Policy payloads are schemas, not suggestion text. For example, price source
-classes, normalization parameters, spread rules, and selection method are read
-from the project-bound approved `price_policy`; risk rounding and the reserve
-component mapping come from the approved `risk_model`. Missing required fields
-block the operation instead of invoking a software default.
+classes, normalization parameters, `normalization_rounding_scale`,
+`normalization_rounding_mode`, spread rules, and selection method are read
+from the project-bound approved `price_policy`. Normalized monetary values are
+rounded before persistence and the same policy is used by integrity replay;
+the database is not allowed to choose an implicit precision. Risk rounding and
+the reserve component mapping come from the approved `risk_model`. Missing or
+unsupported required fields block the operation instead of invoking a software
+default.
 
 Scenario overrides are also controlled content. The API selects a named
 definition from the bound approved `scenario_policy`; it does not accept

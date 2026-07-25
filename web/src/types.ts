@@ -391,6 +391,141 @@ export interface QuantityExecution {
   supersedes_quantity_id: string | null;
 }
 
+export type PriceEvidenceClass =
+  | "OFFICIAL_OR_PRIMARY"
+  | "INDEPENDENT_MARKET"
+  | "INTERNAL_HISTORY"
+  | "COMMERCIAL_QUOTE";
+
+export type VatBasis = "EXCLUSIVE" | "INCLUSIVE" | "NOT_APPLICABLE";
+
+export interface CommercialBasis {
+  currency: string;
+  vat_basis: VatBasis;
+  vat_rate: string | null;
+  unit: string;
+  package_quantity: string;
+  party_quantity: string;
+  region: string;
+  delivery_included: boolean;
+  unloading_included: boolean;
+  payment_terms: string;
+}
+
+export interface PriceQuoteDraft {
+  item_id: string;
+  supplier_id: string | null;
+  evidence_class: PriceEvidenceClass;
+  source_observation_id: string;
+  technical_attributes: Record<string, string>;
+  amount: string;
+  basis: CommercialBasis;
+  quote_date: string;
+  valid_until: string | null;
+  lead_time_days: number | null;
+  available: boolean | null;
+  source_reliability: string;
+}
+
+export interface PriceQuote extends PriceQuoteDraft {
+  quote_id: string;
+  status: string;
+}
+
+export interface NormalizedPrice {
+  normalized_price_id: string;
+  quote_id: string;
+  amount_per_unit: string;
+  currency: string;
+  unit: string;
+  formula_hash: string;
+  policy_version_id: string;
+}
+
+export interface PriceQuoteSummary {
+  quote: PriceQuote;
+  source_origin_id: string;
+  normalized_prices: NormalizedPrice[];
+}
+
+export interface PriceQuoteRecord {
+  quote: PriceQuote;
+  source_origin_id: string;
+  normalized_price_id: string | null;
+}
+
+export interface PriceDecisionSummary {
+  decision_id: string;
+  status: string;
+  amount_per_unit: string | null;
+  currency: string | null;
+  unit: string | null;
+  policy_version_id: string;
+  derived_observation_id: string | null;
+  evaluation_id: string | null;
+  as_of: string | null;
+  normalized_price_ids: string[];
+  source_origin_ids: string[];
+  approval_task_ids: string[];
+  rfq_request_id: string | null;
+}
+
+export interface PriceItemContext {
+  project_id: string;
+  item_id: string;
+  match_id: string;
+  match_class: string;
+  critical_price: boolean;
+  required_critical_attributes: string[];
+  technical_attributes: Record<string, string>;
+  document_set_revision_id: string | null;
+  catalog_version_id: string;
+  price_policy_version_id: string;
+  normalization_rounding_scale: number;
+  normalization_rounding_mode: string;
+  target_basis: CommercialBasis;
+  normalization_references: Record<
+    string,
+    Record<string, Record<string, unknown>>
+  >;
+  quotes: PriceQuoteSummary[];
+  current_decision: PriceDecisionSummary | null;
+}
+
+export interface PriceQuoteCandidate {
+  project_id: string;
+  item_id: string;
+  source_observation_id: string;
+  source_origin_id: string;
+  draft: PriceQuoteDraft;
+  target_basis: CommercialBasis;
+  price_policy_version_id: string;
+  required_reference_types: string[];
+  required_adjustment_kinds: string[];
+}
+
+export interface PriceDecision {
+  decision_id: string;
+  item_id: string;
+  status: string;
+  amount_per_unit: string | null;
+  currency: string | null;
+  unit: string | null;
+  derived_observation_id: string | null;
+  triangulation: {
+    item_id: string;
+    quote_ids: string[];
+    passed: boolean;
+    resulting_status: string;
+    missing_evidence_classes: PriceEvidenceClass[];
+    reason: string;
+  };
+  relative_spread: string | null;
+  approval_task_ids: string[];
+  rfq_request_id: string | null;
+  project_state: string;
+}
+
 export interface DevelopmentIdentity {
   actorId: string;
   organizationId: string;

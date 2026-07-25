@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -58,6 +59,7 @@ from tenderguard.infrastructure.orm import (
     PriceDecisionRow,
     PriceQuoteRow,
     ProjectControlledVersionRow,
+    ProjectRow,
     RfqRequestRow,
 )
 
@@ -86,7 +88,7 @@ class PriceQuoteDraft(DomainModel):
     evidence_class: PriceEvidenceClass
     source_observation_id: str = Field(min_length=1)
     technical_attributes: dict[str, str]
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=38, decimal_places=12)
     basis: CommercialBasis
     quote_date: date
     valid_until: date | None
@@ -98,10 +100,7 @@ class PriceQuoteDraft(DomainModel):
     def validity_and_source_identity_are_consistent(self) -> PriceQuoteDraft:
         if self.valid_until is not None and self.valid_until < self.quote_date:
             raise ValueError("Price quote validity cannot end before the quote date")
-        if (
-            self.evidence_class is PriceEvidenceClass.COMMERCIAL_QUOTE
-            and not self.supplier_id
-        ):
+        if self.evidence_class is PriceEvidenceClass.COMMERCIAL_QUOTE and not self.supplier_id:
             raise ValueError("A commercial quote requires a supplier identity")
         return self
 
@@ -157,6 +156,59 @@ class PriceDecisionView(DomainModel):
     approval_task_ids: tuple[str, ...] = ()
     rfq_request_id: str | None = None
     project_state: ApprovalState
+
+
+class PriceQuoteSummaryView(DomainModel):
+    quote: PriceQuote
+    source_origin_id: str
+    normalized_prices: tuple[NormalizedPriceView, ...] = ()
+
+
+class PriceDecisionSummaryView(DomainModel):
+    decision_id: str
+    status: PriceStatus
+    amount_per_unit: Decimal | None = None
+    currency: str | None = None
+    unit: str | None = None
+    policy_version_id: str
+    derived_observation_id: str | None = None
+    evaluation_id: str | None = None
+    as_of: date | None = None
+    normalized_price_ids: tuple[str, ...] = ()
+    source_origin_ids: tuple[str, ...] = ()
+    approval_task_ids: tuple[str, ...] = ()
+    rfq_request_id: str | None = None
+
+
+class PriceItemContextView(DomainModel):
+    project_id: str
+    item_id: str
+    match_id: str
+    match_class: MatchClass
+    critical_price: bool
+    required_critical_attributes: tuple[str, ...]
+    technical_attributes: dict[str, str]
+    document_set_revision_id: str | None
+    catalog_version_id: str
+    price_policy_version_id: str
+    normalization_rounding_scale: int
+    normalization_rounding_mode: str
+    target_basis: CommercialBasis
+    normalization_references: dict[str, dict[str, dict[str, Any]]]
+    quotes: tuple[PriceQuoteSummaryView, ...]
+    current_decision: PriceDecisionSummaryView | None = None
+
+
+class PriceQuoteCandidateView(DomainModel):
+    project_id: str
+    item_id: str
+    source_observation_id: str
+    source_origin_id: str
+    draft: PriceQuoteDraft
+    target_basis: CommercialBasis
+    price_policy_version_id: str
+    required_reference_types: tuple[str, ...]
+    required_adjustment_kinds: tuple[str, ...]
 
 
 class PricingService:
@@ -458,6 +510,196 @@ class PricingService:
         )
         return self._match_view(row)
 
+    def price_item_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        item_id: str,
+    ) -> PriceItemContextView:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.PROCUREMENT,
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+                ActorRole.APPROVER,
+                ActorRole.AUDITOR,
+            ),
+        )
+        match_row = self._verified_match_for_item(project.id, item_id)
+        match = NomenclatureMatch.model_validate(match_row.payload["match"])
+        policy = self._bound_version(project.id, "price_policy", "price_policy")
+        target_basis = self._target_basis(policy, item_id)
+        quote_rows = list(
+            self.session.scalars(
+                select(PriceQuoteRow)
+                .where(
+                    PriceQuoteRow.project_id == project.id,
+                    PriceQuoteRow.item_id == item_id,
+                )
+                .order_by(PriceQuoteRow.created_at, PriceQuoteRow.id)
+            )
+        )
+        summaries: list[PriceQuoteSummaryView] = []
+        for quote_row in quote_rows:
+            quote = self._validated_quote_row(
+                project_id=project.id,
+                row=quote_row,
+                match=match_row,
+            )
+            normalized_rows = list(
+                self.session.scalars(
+                    select(NormalizedPriceRow)
+                    .where(NormalizedPriceRow.quote_id == quote_row.id)
+                    .order_by(NormalizedPriceRow.created_at, NormalizedPriceRow.id)
+                )
+            )
+            normalized_views: list[NormalizedPriceView] = []
+            for normalized_row in normalized_rows:
+                if normalized_row.payload.get("policy_version_id") != policy.id:
+                    continue
+                self._require_normalized_row_integrity(
+                    project_id=project.id,
+                    row=normalized_row,
+                    quote=quote,
+                    policy=policy,
+                )
+                normalized_model = NormalizedPrice.model_validate(
+                    normalized_row.payload["normalized_price"]
+                )
+                normalized_views.append(
+                    NormalizedPriceView(
+                        normalized_price_id=normalized_row.id,
+                        quote_id=normalized_row.quote_id,
+                        amount_per_unit=normalized_row.amount_per_unit,
+                        currency=normalized_row.currency,
+                        unit=normalized_model.target_basis.unit,
+                        formula_hash=normalized_row.formula_hash,
+                        policy_version_id=policy.id,
+                    )
+                )
+            source_origin_id = quote_row.payload.get("source_origin_id")
+            if not isinstance(source_origin_id, str):
+                raise ValueError("Price quote has no controlled source origin")
+            summaries.append(
+                PriceQuoteSummaryView(
+                    quote=quote,
+                    source_origin_id=source_origin_id,
+                    normalized_prices=tuple(normalized_views),
+                )
+            )
+        current_decision_row = self.session.scalar(
+            select(PriceDecisionRow).where(
+                PriceDecisionRow.project_id == project.id,
+                PriceDecisionRow.item_id == item_id,
+                PriceDecisionRow.is_current.is_(True),
+            )
+        )
+        current_decision = (
+            self.require_price_decision_integrity(current_decision_row)
+            if current_decision_row is not None
+            else None
+        )
+        return PriceItemContextView(
+            project_id=project.id,
+            item_id=item_id,
+            match_id=match_row.id,
+            match_class=MatchClass(match_row.match_class),
+            critical_price=bool(match_row.payload.get("critical_price")),
+            required_critical_attributes=tuple(sorted(match.required_critical_attributes)),
+            technical_attributes=dict(sorted(match.source_attributes.items())),
+            document_set_revision_id=project.current_document_set_revision_id,
+            catalog_version_id=match_row.catalog_version_id,
+            price_policy_version_id=policy.id,
+            normalization_rounding_scale=self._price_rounding_scale(policy),
+            normalization_rounding_mode=self._price_rounding_mode(policy),
+            target_basis=target_basis,
+            normalization_references=self._normalization_reference_catalog(policy),
+            quotes=tuple(summaries),
+            current_decision=current_decision,
+        )
+
+    def price_quote_candidate(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        item_id: str,
+        source_observation_id: str,
+    ) -> PriceQuoteCandidateView:
+        project = self._require_pricing_state(
+            actor,
+            project_id,
+            required_roles=(
+                ActorRole.PROCUREMENT,
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+            ),
+        )
+        match = self._verified_match_for_item(project.id, item_id)
+        draft, source_origin_id = self._quote_draft_from_observation(
+            project_id=project.id,
+            item_id=item_id,
+            source_observation_id=source_observation_id,
+            match=match,
+        )
+        policy = self._bound_version(project.id, "price_policy", "price_policy")
+        target = self._target_basis(policy, item_id)
+        required_references: list[str] = []
+        if draft.basis.unit != target.unit:
+            required_references.append("unit_conversion")
+        if draft.basis.currency != target.currency:
+            required_references.append("fx_rate")
+        if draft.basis.region != target.region:
+            required_references.append("region_adjustment")
+        if draft.basis.party_quantity != target.party_quantity:
+            required_references.append("party_adjustment")
+        if draft.basis.payment_terms != target.payment_terms:
+            required_references.append("payment_adjustment")
+        required_adjustments: list[str] = []
+        if target.delivery_included and not draft.basis.delivery_included:
+            required_adjustments.append("delivery")
+        if target.unloading_included and not draft.basis.unloading_included:
+            required_adjustments.append("unloading")
+        return PriceQuoteCandidateView(
+            project_id=project.id,
+            item_id=item_id,
+            source_observation_id=source_observation_id,
+            source_origin_id=source_origin_id,
+            draft=draft,
+            target_basis=target,
+            price_policy_version_id=policy.id,
+            required_reference_types=tuple(required_references),
+            required_adjustment_kinds=tuple(required_adjustments),
+        )
+
+    def record_quote_from_observation(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        item_id: str,
+        source_observation_id: str,
+        request_id: str,
+        reason: str,
+    ) -> PriceQuoteView:
+        candidate = self.price_quote_candidate(
+            actor=actor,
+            project_id=project_id,
+            item_id=item_id,
+            source_observation_id=source_observation_id,
+        )
+        return self.record_quote(
+            actor=actor,
+            project_id=project_id,
+            draft=candidate.draft,
+            request_id=request_id,
+            reason=reason,
+        )
+
     def record_quote(
         self,
         *,
@@ -605,8 +847,11 @@ class PricingService:
                 policy=policy,
                 expected_command=command,
             )
-        row.status = PriceStatus.NORMALIZED.value
-        row.updated_at = utc_now()
+        if row.status == PriceStatus.UNNORMALIZED.value:
+            row.status = PriceStatus.NORMALIZED.value
+            row.updated_at = utc_now()
+        elif row.status != PriceStatus.NORMALIZED.value:
+            raise ValueError("Only an unnormalized quote can enter normalized state")
         self._project_service().record_event(
             aggregate_type="project",
             aggregate_id=project.id,
@@ -975,11 +1220,14 @@ class PricingService:
                 "party_adjustments",
                 command.party_adjustment_id,
             )
-            try:
-                source_party_quantity = Decimal(str(reference["source_party_quantity"]))
-                target_party_quantity = Decimal(str(reference["target_party_quantity"]))
-            except (KeyError, InvalidOperation, TypeError, ValueError) as error:
-                raise ValueError("Party adjustment quantities are invalid") from error
+            source_party_quantity = self._decimal_parameter(
+                reference,
+                "source_party_quantity",
+            )
+            target_party_quantity = self._decimal_parameter(
+                reference,
+                "target_party_quantity",
+            )
             if (
                 source_party_quantity != quote.basis.party_quantity
                 or target_party_quantity != target.party_quantity
@@ -1011,6 +1259,315 @@ class PricingService:
             region_adjustment_id=command.region_adjustment_id,
             party_adjustment_id=command.party_adjustment_id,
             payment_adjustment_id=command.payment_adjustment_id,
+            rounding_scale=self._price_rounding_scale(policy),
+            rounding_mode=self._price_rounding_mode(policy),
+        )
+
+    @staticmethod
+    def _price_rounding_scale(policy: ControlledVersionRow) -> int:
+        value = policy.payload.get("normalization_rounding_scale")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 12:
+            raise ValueError("Approved price policy lacks a valid normalization_rounding_scale")
+        return value
+
+    @staticmethod
+    def _price_rounding_mode(policy: ControlledVersionRow) -> str:
+        value = policy.payload.get("normalization_rounding_mode")
+        if value not in {"ROUND_HALF_UP", "ROUND_HALF_EVEN"}:
+            raise ValueError("Approved price policy lacks a supported normalization_rounding_mode")
+        return str(value)
+
+    def _quote_draft_from_observation(
+        self,
+        *,
+        project_id: str,
+        item_id: str,
+        source_observation_id: str,
+        match: NomenclatureMatchRow,
+    ) -> tuple[PriceQuoteDraft, str]:
+        observation = self._verified_observation(project_id, source_observation_id)
+        value = observation.payload.get("observation", {}).get("value")
+        if not isinstance(value, dict):
+            raise ValueError("Price quote observation does not contain a structured quote")
+        draft = PriceQuoteDraft.model_validate(
+            {
+                **value,
+                "source_observation_id": source_observation_id,
+            }
+        )
+        if draft.item_id != item_id:
+            raise ValueError("Price quote observation belongs to another item")
+        self._validate_quote_technical_attributes(match, draft.technical_attributes)
+        source_origin_id = self._validate_price_evidence_class(
+            project_id,
+            observation,
+            draft.evidence_class,
+        )
+        return draft, source_origin_id
+
+    @staticmethod
+    def _normalization_reference_catalog(
+        policy: ControlledVersionRow,
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        result: dict[str, dict[str, dict[str, Any]]] = {}
+        for section in (
+            "unit_conversions",
+            "fx_rates",
+            "adjustments",
+            "region_adjustments",
+            "party_adjustments",
+            "payment_adjustments",
+        ):
+            raw_section = policy.payload.get(section, {})
+            if not isinstance(raw_section, dict) or not all(
+                isinstance(reference_id, str) and isinstance(payload, dict)
+                for reference_id, payload in raw_section.items()
+            ):
+                raise ValueError(f"Approved price policy section is invalid: {section}")
+            result[section] = {
+                reference_id: payload for reference_id, payload in sorted(raw_section.items())
+            }
+        return result
+
+    def require_price_decision_integrity(
+        self,
+        row: PriceDecisionRow,
+    ) -> PriceDecisionSummaryView:
+        policy = self._bound_version(
+            row.project_id,
+            "price_policy",
+            "price_policy",
+        )
+        if row.policy_version_id != policy.id:
+            raise ValueError("Current price decision uses a stale price policy")
+        match = self._verified_match_for_item(row.project_id, row.item_id)
+        normalized_price_ids = row.payload.get("normalized_price_ids", [])
+        source_origin_ids = row.payload.get("source_origin_ids", [])
+        approval_task_ids = row.payload.get("approval_task_ids", [])
+        if any(
+            not isinstance(values, list)
+            or not all(isinstance(value, str) for value in values)
+            or len(values) != len(set(values))
+            for values in (
+                normalized_price_ids,
+                source_origin_ids,
+                approval_task_ids,
+            )
+        ):
+            raise ValueError("Current price decision contains invalid lineage identifiers")
+        raw_as_of = row.payload.get("as_of")
+        try:
+            as_of = date.fromisoformat(raw_as_of) if isinstance(raw_as_of, str) else None
+        except ValueError as error:
+            raise ValueError("Current price decision has an invalid as-of date") from error
+        if as_of is None:
+            raise ValueError("Current price decision has no as-of date")
+        loaded_normalized_rows = list(
+            self.session.scalars(
+                select(NormalizedPriceRow).where(NormalizedPriceRow.id.in_(normalized_price_ids))
+            )
+        )
+        if len(loaded_normalized_rows) != len(normalized_price_ids):
+            raise ValueError("Current price decision has missing normalized inputs")
+        normalized_rows_by_id = {
+            normalized_row.id: normalized_row for normalized_row in loaded_normalized_rows
+        }
+        normalized_rows = [
+            normalized_rows_by_id[normalized_price_id]
+            for normalized_price_id in normalized_price_ids
+        ]
+        quote_rows = {
+            quote_row.id: quote_row
+            for quote_row in self.session.scalars(
+                select(PriceQuoteRow).where(
+                    PriceQuoteRow.id.in_(
+                        {normalized_row.quote_id for normalized_row in normalized_rows}
+                    ),
+                    PriceQuoteRow.project_id == row.project_id,
+                    PriceQuoteRow.item_id == row.item_id,
+                )
+            )
+        }
+        quotes: list[PriceQuote] = []
+        origins: set[str] = set()
+        for normalized_row in normalized_rows:
+            if normalized_row.payload.get("policy_version_id") != policy.id:
+                raise ValueError("Current price decision includes another price policy")
+            quote_row = quote_rows.get(normalized_row.quote_id)
+            if quote_row is None:
+                raise ValueError("Current price decision has a missing project-scoped quote")
+            quote = self._validated_quote_row(
+                project_id=row.project_id,
+                row=quote_row,
+                match=match,
+            )
+            self._require_normalized_row_integrity(
+                project_id=row.project_id,
+                row=normalized_row,
+                quote=quote,
+                policy=policy,
+            )
+            quotes.append(quote)
+            source_origin = quote_row.payload.get("source_origin_id")
+            if not isinstance(source_origin, str) or not source_origin:
+                raise ValueError("Current price decision quote has no controlled source origin")
+            origins.add(source_origin)
+        triangulation = evaluate_triangulation(
+            item_id=row.item_id,
+            quotes=tuple(quotes),
+            as_of=as_of,
+            critical=bool(match.payload.get("critical_price")),
+        )
+        raw_triangulation = row.payload.get("triangulation")
+        if (
+            not isinstance(raw_triangulation, dict)
+            or TriangulationResult.model_validate(raw_triangulation) != triangulation
+            or set(triangulation.quote_ids) != set(quote_rows)
+        ):
+            raise ValueError("Current price decision failed triangulation integrity validation")
+        origins_are_independent = bool(normalized_rows) and len(origins) == len(normalized_rows)
+        if row.payload.get("origins_are_independent") is not origins_are_independent or tuple(
+            sorted(origins)
+        ) != tuple(source_origin_ids):
+            raise ValueError("Current price decision failed source-origin integrity validation")
+        amounts = tuple(sorted(item.amount_per_unit for item in normalized_rows))
+        selected_amount = self._median(amounts) if amounts else None
+        relative_spread = (
+            (max(amounts) - min(amounts)) / selected_amount
+            if selected_amount is not None and selected_amount != 0 and len(amounts) > 1
+            else Decimal("0")
+            if selected_amount is not None
+            else None
+        )
+        stored_relative_spread = row.payload.get("relative_spread")
+        try:
+            parsed_relative_spread = (
+                Decimal(stored_relative_spread) if isinstance(stored_relative_spread, str) else None
+            )
+        except InvalidOperation as error:
+            raise ValueError("Current price decision has an invalid relative spread") from error
+        target_basis = self._target_basis(policy, row.item_id)
+        if (
+            row.amount_per_unit != selected_amount
+            or row.currency != (target_basis.currency if selected_amount is not None else None)
+            or row.unit != (target_basis.unit if selected_amount is not None else None)
+            or parsed_relative_spread != relative_spread
+            or row.payload.get("selection_method") != policy.payload.get("selection_method")
+        ):
+            raise ValueError(
+                "Current price decision failed deterministic amount integrity validation"
+            )
+        evaluation_identity = {
+            "project_id": row.project_id,
+            "item_id": row.item_id,
+            "policy_version_id": policy.id,
+            "normalized_price_ids": sorted(normalized_price_ids),
+            "as_of": as_of,
+            "triangulation": triangulation,
+            "relative_spread": relative_spread,
+        }
+        expected_evaluation_id = f"price-evaluation-{content_hash(evaluation_identity)[:24]}"
+        evaluation_id = row.payload.get("evaluation_id")
+        if evaluation_id != expected_evaluation_id:
+            raise ValueError("Current price decision failed evaluation identity validation")
+        project_row = self.session.get(ProjectRow, row.project_id)
+        if project_row is None:
+            raise LookupError(row.project_id)
+        if (
+            row.payload.get("document_set_revision_id")
+            != project_row.current_document_set_revision_id
+        ):
+            raise ValueError("Current price decision uses a stale document-set revision")
+        approval_findings = row.payload.get("approval_findings", [])
+        if not isinstance(approval_findings, list):
+            raise ValueError("Current price decision has invalid approval findings")
+        approval_tasks = list(
+            self.session.scalars(
+                select(ApprovalTaskRow).where(
+                    ApprovalTaskRow.id.in_(approval_task_ids),
+                    ApprovalTaskRow.project_id == row.project_id,
+                    ApprovalTaskRow.entity_type == "price_evaluation",
+                    ApprovalTaskRow.entity_id == evaluation_id,
+                )
+            )
+        )
+        if len(approval_tasks) != len(approval_task_ids):
+            raise ValueError("Current price decision has invalid approval-task lineage")
+        status = PriceStatus(row.status)
+        if status is PriceStatus.RFQ_REQUIRED:
+            if triangulation.passed and origins_are_independent:
+                raise ValueError("RFQ price decision has no reproduced RFQ condition")
+        elif status is PriceStatus.EXPERT_REVIEW_REQUIRED:
+            if not triangulation.passed or not origins_are_independent:
+                raise ValueError("Expert-review price decision conflicts with triangulation")
+            if (
+                row.payload.get("selection_method") == "MEDIAN"
+                and not approval_findings
+                and not approval_task_ids
+            ):
+                raise ValueError("Expert-review price decision has no reproduced review condition")
+        elif status is PriceStatus.VERIFIED:
+            if (
+                not triangulation.passed
+                or not origins_are_independent
+                or row.payload.get("selection_method") != "MEDIAN"
+                or approval_findings
+                or any(task.status != "APPROVED" for task in approval_tasks)
+            ):
+                raise ValueError("Verified price decision no longer satisfies approval conditions")
+        else:
+            raise ValueError("Current price decision has an unusable status")
+        if status is PriceStatus.VERIFIED:
+            if row.derived_observation_id is None or selected_amount is None:
+                raise ValueError("Verified price decision has no derived rate observation")
+            observation_row = self._verified_observation(
+                row.project_id,
+                row.derived_observation_id,
+            )
+            observation = Observation.model_validate(observation_row.payload["observation"])
+            source_normalized_price_ids = observation_row.payload.get("source_normalized_price_ids")
+            if not isinstance(source_normalized_price_ids, list) or not all(
+                isinstance(identifier, str) for identifier in source_normalized_price_ids
+            ):
+                raise ValueError("Verified price observation has invalid normalized-price lineage")
+            try:
+                observation_amount = Decimal(str(observation.value))
+            except (InvalidOperation, TypeError, ValueError) as error:
+                raise ValueError("Verified price observation has an invalid amount") from error
+            if (
+                not observation_amount.is_finite()
+                or observation_amount != selected_amount
+                or observation.unit != target_basis.unit
+                or observation.method_version != policy.id
+                or observation_row.payload.get("basis_type") != "NORMALIZED_PRICE"
+                or observation_row.payload.get("unit_rate") != str(selected_amount)
+                or observation_row.payload.get("currency") != target_basis.currency
+                or observation_row.payload.get("unit") != target_basis.unit
+                or observation_row.payload.get("price_evaluation_id") != evaluation_id
+                or set(source_normalized_price_ids) != set(normalized_price_ids)
+            ):
+                raise ValueError("Verified price decision failed derived-observation integrity")
+        elif row.derived_observation_id is not None:
+            raise ValueError("Unverified price decision cannot expose a verified rate observation")
+        rfq_request_id = self.session.scalar(
+            select(RfqRequestRow.id).where(RfqRequestRow.price_decision_id == row.id)
+        )
+        if status is PriceStatus.RFQ_REQUIRED and rfq_request_id is None:
+            raise ValueError("RFQ price decision has no RFQ request")
+        return PriceDecisionSummaryView(
+            decision_id=row.id,
+            status=status,
+            amount_per_unit=row.amount_per_unit,
+            currency=row.currency,
+            unit=row.unit,
+            policy_version_id=row.policy_version_id,
+            derived_observation_id=row.derived_observation_id,
+            evaluation_id=evaluation_id,
+            as_of=as_of,
+            normalized_price_ids=tuple(normalized_price_ids),
+            source_origin_ids=tuple(source_origin_ids),
+            approval_task_ids=tuple(approval_task_ids),
+            rfq_request_id=rfq_request_id,
         )
 
     def _validated_quote_row(
@@ -1085,8 +1642,7 @@ class PricingService:
             or row.quote_id != recalculated.quote_id
             or row.amount_per_unit != recalculated.amount_per_unit
             or row.currency != recalculated.target_basis.currency
-            or row.formula_hash
-            != recalculated.normalization_formula.removeprefix("sha256:")
+            or row.formula_hash != recalculated.normalization_formula.removeprefix("sha256:")
         ):
             raise ValueError("Normalized price failed deterministic integrity validation")
 
@@ -1344,12 +1900,24 @@ class PricingService:
 
     @staticmethod
     def _decimal_parameter(payload: dict[str, Any], field_name: str) -> Decimal:
+        raw_value = payload.get(field_name)
+        literal = str(raw_value)
+        if len(literal) > 80 or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", literal) is None:
+            raise ValueError(f"Controlled decimal parameter is invalid: {field_name}")
         try:
-            value = Decimal(str(payload[field_name]))
-        except (KeyError, InvalidOperation, TypeError, ValueError) as error:
+            value = Decimal(literal)
+        except (InvalidOperation, TypeError, ValueError) as error:
             raise ValueError(f"Controlled decimal parameter is invalid: {field_name}") from error
-        if value <= 0:
+        decimal_tuple = value.as_tuple()
+        if not value.is_finite() or value <= 0:
             raise ValueError(f"Controlled decimal parameter must be positive: {field_name}")
+        if not isinstance(decimal_tuple.exponent, int):
+            raise ValueError(f"Controlled decimal parameter is invalid: {field_name}")
+        fractional_digits = max(-decimal_tuple.exponent, 0)
+        if len(decimal_tuple.digits) > 38 or fractional_digits > 24:
+            raise ValueError(
+                f"Controlled decimal parameter exceeds supported precision: {field_name}"
+            )
         return value
 
     def _target_basis(

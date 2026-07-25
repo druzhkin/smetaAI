@@ -1276,8 +1276,28 @@ class ProjectService:
             )
         )
         for price_decision in price_decisions:
-            price_decision.status = PriceStatus.EXPIRED.value
-            price_decision.payload = {**price_decision.payload, **marker}
+            price_decision.is_current = False
+            self.session.add(
+                PriceDecisionRow(
+                    id=f"price-decision-{uuid4()}",
+                    project_id=price_decision.project_id,
+                    item_id=price_decision.item_id,
+                    status=PriceStatus.EXPIRED.value,
+                    amount_per_unit=price_decision.amount_per_unit,
+                    currency=price_decision.currency,
+                    unit=price_decision.unit,
+                    policy_version_id=price_decision.policy_version_id,
+                    derived_observation_id=None,
+                    supersedes_decision_id=price_decision.id,
+                    is_current=True,
+                    payload={
+                        **price_decision.payload,
+                        **marker,
+                        "expired_from_decision_id": price_decision.id,
+                    },
+                    created_at=invalidated_at,
+                )
+            )
         counts["price_decisions"] = len(price_decisions)
 
         normative_calculations = list(
@@ -1666,8 +1686,7 @@ class ProjectService:
                 if (
                     application is None
                     or application.applied_by != change.changed_by
-                    or application.payload.get("manual_change_hash")
-                    != content_hash(change.payload)
+                    or application.payload.get("manual_change_hash") != content_hash(change.payload)
                     or application.payload.get("before_hash") != change.payload.get("before_hash")
                     or application.payload.get("after_hash") != change.payload.get("after_hash")
                     or application.payload.get("policy_version_id")

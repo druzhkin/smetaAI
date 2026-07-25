@@ -11,6 +11,7 @@ import { DocumentSetConfirmPage } from "./pages/DocumentSetConfirmPage";
 import { DocumentUploadPage } from "./pages/DocumentUploadPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
+import { PriceItemPage } from "./pages/PriceItemPage";
 import { ProjectCreatePage } from "./pages/ProjectCreatePage";
 import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
 import { QuantityChangeProposePage } from "./pages/QuantityChangeProposePage";
@@ -140,6 +141,28 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
               config={config}
               projectId={projectId}
               changeId={changeId}
+            />
+          );
+        }
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 5 &&
+        rawSection === "pricing" &&
+        parts[3] === "items"
+      ) {
+        let itemId: string | null = null;
+        try {
+          itemId = decodeURIComponent(parts[4] ?? "");
+        } catch {
+          itemId = null;
+        }
+        if (itemId !== null && itemId !== "") {
+          page = (
+            <PriceItemPage
+              config={config}
+              projectId={projectId}
+              itemId={itemId}
             />
           );
         }

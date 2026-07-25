@@ -72,6 +72,8 @@ from tenderguard.application.pricing import (
     NormalizedPriceView,
     NormalizePriceCommand,
     PriceDecisionView,
+    PriceItemContextView,
+    PriceQuoteCandidateView,
     PriceQuoteDraft,
     PriceQuoteView,
 )
@@ -367,6 +369,19 @@ class RecordPriceQuoteRequest(ApiModel):
 
 class PriceQuoteResponse(PriceQuoteView):
     pass
+
+
+class PriceItemContextResponse(PriceItemContextView):
+    pass
+
+
+class PriceQuoteCandidateResponse(PriceQuoteCandidateView):
+    pass
+
+
+class RecordPriceQuoteFromObservationRequest(ApiModel):
+    source_observation_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class NormalizePriceRequest(ApiModel):

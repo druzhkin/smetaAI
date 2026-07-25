@@ -3,7 +3,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
+from tenderguard.api.main import create_app
 from tenderguard.application.pricing import (
     NomenclatureAssessmentDraft,
     NormalizePriceCommand,
@@ -36,6 +38,7 @@ from tenderguard.infrastructure.orm import (
     ControlledVersionRow,
     NormalizedPriceRow,
     ObservationRow,
+    PriceDecisionRow,
     ProjectControlledVersionRow,
     ProjectRow,
     QuantityRow,
@@ -53,6 +56,8 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         app_env="test",
         database_url="sqlite+pysqlite://",
         local_object_store_path=tmp_path / "objects",
+        local_quarantine_store_path=tmp_path / "quarantine",
+        allow_insecure_dev_auth=True,
         audit_signing_key="test-audit-signing-key-at-least-32-bytes",
     )
     engine = create_database_engine(settings)
@@ -203,6 +208,8 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 status="APPROVED",
                 payload={
                     "selection_method": "MEDIAN",
+                    "normalization_rounding_scale": 2,
+                    "normalization_rounding_mode": "ROUND_HALF_UP",
                     "item_target_basis_ids": {"pipe-source": "delivered-rub"},
                     "target_bases": {"delivered-rub": basis.model_dump(mode="json")},
                     "unit_conversions": {},
@@ -527,13 +534,34 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             reason="Assess critical catalog attributes",
         )
         assert match.status is VerificationStatus.VERIFIED
+        empty_context = service.price_item_context(
+            actor=procurement,
+            project_id="project-pricing",
+            item_id="pipe-source",
+        )
+        assert empty_context.price_policy_version_id == "price-policy-v1"
+        assert empty_context.normalization_rounding_scale == 2
+        assert empty_context.normalization_rounding_mode == "ROUND_HALF_UP"
+        assert empty_context.target_basis == basis
+        assert empty_context.quotes == ()
+        first_candidate = service.price_quote_candidate(
+            actor=procurement,
+            project_id="project-pricing",
+            item_id="pipe-source",
+            source_observation_id=drafts[0].source_observation_id,
+        )
+        assert first_candidate.draft == drafts[0]
+        assert first_candidate.source_origin_id == "manufacturer"
+        assert first_candidate.required_reference_types == ()
+        assert first_candidate.required_adjustment_kinds == ()
 
         normalized_ids: list[str] = []
         for draft in drafts[:2]:
-            quote = service.record_quote(
+            quote = service.record_quote_from_observation(
                 actor=procurement,
                 project_id="project-pricing",
-                draft=draft,
+                item_id=draft.item_id,
+                source_observation_id=draft.source_observation_id,
                 request_id=f"request-{draft.evidence_class.value}",
                 reason="Record independently extracted price source",
             )
@@ -545,6 +573,13 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 reason="Normalize to the approved commercial basis",
             )
             normalized_ids.append(normalized.normalized_price_id)
+        populated_context = service.price_item_context(
+            actor=procurement,
+            project_id="project-pricing",
+            item_id="pipe-source",
+        )
+        assert len(populated_context.quotes) == 2
+        assert all(len(item.normalized_prices) == 1 for item in populated_context.quotes)
         tampered_normalized = session.get(NormalizedPriceRow, normalized_ids[0])
         assert tampered_normalized is not None
         original_amount = tampered_normalized.amount_per_unit
@@ -597,6 +632,25 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         assert final_decision.amount_per_unit == Decimal("101")
         assert final_decision.derived_observation_id
         assert final_decision.project_state is ApprovalState.PRICING_IN_PROGRESS
+        final_context = service.price_item_context(
+            actor=procurement,
+            project_id="project-pricing",
+            item_id="pipe-source",
+        )
+        assert final_context.current_decision is not None
+        assert final_context.current_decision.status is PriceStatus.VERIFIED
+        assert final_context.current_decision.amount_per_unit == Decimal("101")
+        stored_decision = session.get(PriceDecisionRow, final_decision.decision_id)
+        assert stored_decision is not None
+        stored_amount = stored_decision.amount_per_unit
+        stored_decision.amount_per_unit = Decimal("102")
+        with pytest.raises(ValueError, match="amount integrity"):
+            service.price_item_context(
+                actor=procurement,
+                project_id="project-pricing",
+                item_id="pipe-source",
+            )
+        stored_decision.amount_per_unit = stored_amount
         rfq = session.get(RfqRequestRow, first_decision.rfq_request_id)
         assert rfq is not None and rfq.status == "CLOSED"
 
@@ -615,5 +669,36 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             reason="All current item prices are verified",
         )
         assert transitioned.state is ApprovalState.CALCULATION_IN_PROGRESS
+
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=store,
+        quarantine_store=LocalObjectStore(tmp_path / "quarantine"),
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/projects/project-pricing/pricing/items/pipe-source/context",
+            headers={
+                "X-Dev-Actor": procurement.actor_id,
+                "X-Dev-Organization": procurement.organization_id,
+                "X-Dev-Roles": "PROCUREMENT,ESTIMATOR",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["current_decision"]["status"] == "VERIFIED"
+        blocked_candidate = client.get(
+            (
+                "/v1/projects/project-pricing/pricing/items/pipe-source/"
+                "quote-candidates/observation-quote-1"
+            ),
+            headers={
+                "X-Dev-Actor": procurement.actor_id,
+                "X-Dev-Organization": procurement.organization_id,
+                "X-Dev-Roles": "PROCUREMENT,ESTIMATOR",
+            },
+        )
+        assert blocked_candidate.status_code == 422
+        assert "PRICING_IN_PROGRESS or RFQ_REQUIRED" in blocked_candidate.text
 
     engine.dispose()

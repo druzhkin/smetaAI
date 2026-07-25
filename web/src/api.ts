@@ -5,6 +5,11 @@ import type {
   ConflictResolutionResult,
   ConflictReview,
   DocumentSetView,
+  NormalizedPrice,
+  PriceDecision,
+  PriceItemContext,
+  PriceQuoteCandidate,
+  PriceQuoteRecord,
   ProjectPortfolioPage,
   ProjectRecordPage,
   ProjectRecordSection,
@@ -516,6 +521,117 @@ export function applyQuantityManualChange(
     {
       idempotencyKey: input.idempotencyKey,
       body: { reason: input.reason },
+    },
+  );
+}
+
+export function getPriceItemContext(
+  context: RequestContext,
+  projectId: string,
+  itemId: string,
+  signal?: AbortSignal,
+): Promise<PriceItemContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(itemId)}/context`,
+    undefined,
+    signal,
+  );
+}
+
+export function getPriceQuoteCandidate(
+  context: RequestContext,
+  projectId: string,
+  itemId: string,
+  sourceObservationId: string,
+  signal?: AbortSignal,
+): Promise<PriceQuoteCandidate> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(itemId)}/quote-candidates/${encodeURIComponent(sourceObservationId)}`,
+    undefined,
+    signal,
+  );
+}
+
+export function recordPriceQuoteFromObservation(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    itemId: string;
+    sourceObservationId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<PriceQuoteRecord> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/pricing/items/${encodeURIComponent(input.itemId)}/quotes/from-observation`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        source_observation_id: input.sourceObservationId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function normalizePriceQuote(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    quoteId: string;
+    unitConversionId: string | null;
+    fxRateId: string | null;
+    adjustmentIds: string[];
+    regionAdjustmentId: string | null;
+    partyAdjustmentId: string | null;
+    paymentAdjustmentId: string | null;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<NormalizedPrice> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/pricing/normalize`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          quote_id: input.quoteId,
+          unit_conversion_id: input.unitConversionId,
+          fx_rate_id: input.fxRateId,
+          adjustment_ids: input.adjustmentIds,
+          region_adjustment_id: input.regionAdjustmentId,
+          party_adjustment_id: input.partyAdjustmentId,
+          payment_adjustment_id: input.paymentAdjustmentId,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function evaluatePriceItem(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    itemId: string;
+    asOf: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<PriceDecision> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/pricing/items/${encodeURIComponent(input.itemId)}/evaluate`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        as_of: input.asOf,
+        reason: input.reason,
+      },
     },
   );
 }

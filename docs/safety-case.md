@@ -24,7 +24,7 @@ all operational qualification evidence remain open.
 | Quantity | source/formula/unit/geometry/alternatives and checks | unverified quantity hard stop |
 | Nomenclature | explicit critical attributes and match class | reject or expert review |
 | Normative | approved engine/basis/version/applicability | normative calculation unavailable |
-| Price | qualified source classes, normalized commercial basis, triangulation and spread review | `RFQ_REQUIRED` or expert review |
+| Price | qualified source classes, normalized commercial basis, policy-explicit decimal rounding, deterministic replay, triangulation and spread review | `RFQ_REQUIRED` or expert review |
 | Logistics/finance | typed capacity/cash-flow models, exact observation-value binding, controlled completeness and dual recalculation | blocked model; no derived cost basis |
 | Calculation | exact planned-component coverage and deterministic primary build-up | no release on missing, duplicate, or unplanned components |
 | Independent validation | separate recalculation from atomic inputs | arithmetic mismatch hard stop |
@@ -49,6 +49,16 @@ Calculation cannot advance without a complete governed price basis, resolved
 contract assessment, verified risk register, and current risk calculation.
 Release independently re-evaluates these gates rather than trusting the
 workflow state alone.
+
+Price normalization has no software or database rounding default. The bound
+approved price policy must supply a supported rounding mode and a scale within
+the persisted decimal precision. The formula hash includes that policy, and
+every read/evaluation replays the quote, references, adjustment evidence and
+rounding. The current price decision then replays the selected normalized
+inputs, median, spread, triangulation, source origins, approval/RFQ lineage and
+derived rate observation before display and again before calculation.
+PostgreSQL prevents in-place mutation of normalized prices and decision
+history; a mismatch blocks use of the price.
 
 In staging and production, release also re-verifies the configured WORM policy
 and fresh external audit checkpoint. Failure adds
