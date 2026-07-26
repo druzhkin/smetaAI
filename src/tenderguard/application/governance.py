@@ -13,6 +13,7 @@ from tenderguard.domain.common import content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import ActorRole, VersionStatus
 from tenderguard.domain.integration import validate_integration_public_key
 from tenderguard.domain.models import ControlledVersion
+from tenderguard.domain.production_qualification import ProductionGateEvidenceProfile
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.object_store import ObjectStore
 from tenderguard.infrastructure.orm import (
@@ -45,6 +46,16 @@ class GovernanceService:
         reason: str,
     ) -> ControlledVersion:
         self._require_owner(actor, kind)
+        if kind == "production_gate_evidence_profile":
+            profile = ProductionGateEvidenceProfile.model_validate(payload)
+            if (
+                self.settings.application_build_reference is None
+                or profile.expected_application_build_reference
+                != self.settings.application_build_reference
+            ):
+                raise ValueError(
+                    "Production gate evidence profile must bind the running immutable build"
+                )
         if (
             kind == "production_qualification"
             and not ProjectService._production_qualification_evidence_complete(payload)
@@ -119,6 +130,18 @@ class GovernanceService:
             raise ValueError("Controlled version requires four-eyes approval")
         if row.status != VersionStatus.DRAFT.value:
             raise ValueError("Only DRAFT controlled versions can be approved")
+        if row.kind == "production_gate_evidence_profile":
+            profile = ProductionGateEvidenceProfile.model_validate(
+                {key: value for key, value in row.payload.items() if key != "_governance"}
+            )
+            if (
+                self.settings.application_build_reference is None
+                or profile.expected_application_build_reference
+                != self.settings.application_build_reference
+            ):
+                raise ValueError(
+                    "Production gate evidence profile build binding is no longer current"
+                )
         if row.kind == "production_qualification" and not ProjectService(
             session=self.session,
             settings=self.settings,

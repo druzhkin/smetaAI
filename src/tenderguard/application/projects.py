@@ -1817,6 +1817,10 @@ class ProjectService:
         production_qualified = any(
             row.kind == "production_qualification"
             and row.status == VersionStatus.APPROVED.value
+            and self._approved_controlled_version_valid(
+                row,
+                organization_id=project.organization_id,
+            )
             and self._production_qualification_evidence_valid(
                 row.payload,
                 organization_id=project.organization_id,
@@ -2185,6 +2189,23 @@ class ProjectService:
                 or gate.get("source_reference") != f"business_qualification_campaign:{campaign_id}"
             ):
                 return False
+        for gate_name in (
+            "rules_and_catalog_calibration",
+            "damaged_conflicting_document_resilience",
+            "load_test",
+            "security_review",
+            "backup_restore",
+            "methodology_approval",
+        ):
+            gate = gates[gate_name]
+            package_id = gate.get("evidence_package_id")
+            if (
+                not isinstance(package_id, str)
+                or not package_id
+                or len(package_id) > 64
+                or gate.get("source_reference") != f"production_gate_evidence_package:{package_id}"
+            ):
+                return False
         return True
 
     def _production_qualification_evidence_valid(
@@ -2274,6 +2295,20 @@ class ProjectService:
             or dataset_governance.get("organization_id") != organization_id
             or {metric.mode for metric in evaluation.modes} != {"HISTORICAL", "BLIND", "PARALLEL"}
             or any(not metric.passed for metric in evaluation.modes)
+        ):
+            return False
+        if any(
+            payload["gates"][gate_name].get("owner_id") != profile_governance.get("created_by")
+            or payload["gates"][gate_name].get("approved_by") != approval.approved_by
+            or self._production_timestamp(payload["gates"][gate_name].get("approved_at"))
+            != claimed_approved_at
+            or payload["gates"][gate_name].get("environment") != business["environment"]
+            for gate_name in (
+                "historical_projects",
+                "blind_estimator_comparison",
+                "parallel_operation",
+                "variance_resolution",
+            )
         ):
             return False
         cases = list(
@@ -2493,7 +2528,7 @@ class ProjectService:
         approved = [
             event for event in events if event.event_type == "business_qualification_approved"
         ]
-        return bool(
+        business_audit_valid = bool(
             events
             and verify_chain(events, self.settings.audit_verification_keyring)
             and len(locked) == len(evaluated) == len(approved) == 1
@@ -2504,12 +2539,97 @@ class ProjectService:
             and approved[0].actor_id == approval.approved_by
             and approved[0].payload.get("package_hash") == approval.package_hash
         )
+        if not business_audit_valid:
+            return False
+        from tenderguard.application.production_qualification import (
+            ProductionGateEvidenceService,
+        )
+
+        evidence_service = ProductionGateEvidenceService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        )
+        return all(
+            evidence_service.gate_binding_valid(
+                payload["gates"][gate_name],
+                organization_id=organization_id,
+                expected_gate_name=gate_name,
+            )
+            for gate_name in (
+                "rules_and_catalog_calibration",
+                "damaged_conflicting_document_resilience",
+                "load_test",
+                "security_review",
+                "backup_restore",
+                "methodology_approval",
+            )
+        )
+
+    def _approved_controlled_version_valid(
+        self,
+        row: ControlledVersionRow,
+        *,
+        organization_id: str,
+    ) -> bool:
+        governance = row.payload.get("_governance")
+        if (
+            row.status != VersionStatus.APPROVED.value
+            or not row.approved_by
+            or row.approved_at is None
+            or not isinstance(governance, dict)
+            or governance.get("organization_id") != organization_id
+            or not isinstance(governance.get("created_by"), str)
+            or governance.get("created_by") == row.approved_by
+            or content_hash(
+                {
+                    "kind": row.kind,
+                    "version_label": row.version_label,
+                    "payload": row.payload,
+                }
+            )
+            != row.content_hash
+        ):
+            return False
+        events = [
+            self._audit_domain(event)
+            for event in self.session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "controlled_version",
+                    AuditEventRow.aggregate_id == row.id,
+                )
+                .order_by(AuditEventRow.sequence)
+            )
+        ]
+        created = [event for event in events if event.event_type == "controlled_version_created"]
+        approved = [event for event in events if event.event_type == "controlled_version_approved"]
+        return bool(
+            events
+            and verify_chain(events, self.settings.audit_verification_keyring)
+            and len(created) == len(approved) == 1
+            and created[0].actor_id == governance.get("created_by")
+            and created[0].payload.get("kind") == row.kind
+            and created[0].payload.get("version_label") == row.version_label
+            and created[0].payload.get("content_hash") == row.content_hash
+            and approved[0].actor_id == row.approved_by
+            and approved[0].payload.get("content_hash") == row.content_hash
+        )
 
     @staticmethod
     def _qualification_decimal_identity(value: Decimal) -> str:
         if not value.is_finite():
             raise ValueError("Qualification amount must be finite")
         return format(value.normalize(), "f")
+
+    @staticmethod
+    def _production_timestamp(value: Any) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            return ensure_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except ValueError:
+            return None
 
     def _audit(
         self,

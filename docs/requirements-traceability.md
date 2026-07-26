@@ -51,6 +51,13 @@ evaluation, self-review, result-hash tampering, rounded-threshold masking,
 unreviewed material discrepancies, and an unbound production-qualification
 claim. It is a qualification harness, not completed qualification evidence.
 
+The remaining production-readiness gates are connected through immutable
+evidence packages rather than declared hashes. The registry reopens retained
+objects, validates exact internal load/recovery results or governed external
+Ed25519 signatures, enforces four-eyes approval, and rejects expired, revoked,
+tampered, missing or cross-build packages. Real organisation evidence remains
+a `QUALIFICATION` responsibility.
+
 This does not make every contour operationally qualified. OCR/visual
 extraction, the recognised normative engine, live price/RFQ sources,
 enterprise integrations, production logistics/finance feeds and qualification,

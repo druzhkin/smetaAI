@@ -123,8 +123,9 @@ The built-in runner is appropriate for controlled single-node API
 qualification. It does not claim distributed internet-scale generation,
 browser rendering performance, database saturation analysis, upload/archive
 abuse coverage, or soak testing. Where the approved workload requires those
-capabilities, use a separately qualified generator and import its signed
-evidence under the same readiness gate.
+capabilities, the current gate must remain blocked until a qualified generator
+adapter produces the same governed result contract; an external narrative
+report cannot substitute for it.
 
 ## Evidence handling
 
@@ -142,3 +143,9 @@ result file. Preserve:
 Do not approve `production_qualification` merely because the command returned
 zero. The complete gate still requires the owner, environment, reviewer,
 evidence hash, and all organisation-specific qualification work.
+
+The enforced second step is specified in
+[production gate evidence](production-gate-evidence.md). The `load_test` and
+`backup_restore` gates accept only a live registry package that reproduces the
+exact result and approved source profile; a copied result hash or external
+report is rejected.

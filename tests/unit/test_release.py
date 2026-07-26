@@ -351,4 +351,17 @@ def test_production_qualification_requires_evidence_for_every_gate() -> None:
         complete["gates"][gate_name]["source_reference"] = (
             f"business_qualification_campaign:{campaign_id}"
         )
+    for gate_name in (
+        "rules_and_catalog_calibration",
+        "damaged_conflicting_document_resilience",
+        "load_test",
+        "security_review",
+        "backup_restore",
+        "methodology_approval",
+    ):
+        package_id = f"qualification-evidence-{gate_name}"
+        complete["gates"][gate_name]["evidence_package_id"] = package_id
+        complete["gates"][gate_name]["source_reference"] = (
+            f"production_gate_evidence_package:{package_id}"
+        )
     assert ProjectService._production_qualification_evidence_complete(complete)

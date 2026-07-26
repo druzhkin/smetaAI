@@ -70,6 +70,10 @@ Nothing crosses a boundary merely because a model reports high confidence.
   forecast locking, post-lock blind/parallel evidence, verified historical
   facts, exact unrounded accuracy metrics, material-discrepancy review, and an
   immutable approval package consumed by production qualification.
+- `production_gate_evidence`: governed build/environment/evidence profiles,
+  content-addressed artifacts, verified internal load/recovery results or
+  Ed25519 external statements, independent approval, expiry/revocation, and
+  live production-gate validation.
 - `operator_ui`: OIDC Authorization Code + PKCE browser client, role-filtered
   portfolio/work-queue/workbench/record read models, visible release hard
   stops, exact-manifest four-eyes document-set confirmation, source-level
@@ -189,6 +193,10 @@ Production deployment requires:
   locked before professional references, every population exclusion is
   explicit, and the release gate re-verifies the passed campaign package and
   audit chain rather than trusting a declared evidence hash.
+- Non-business production gates cannot use caller-supplied report hashes.
+  Load and restore require exact approved runner results; external assurance
+  packages require a signature from the key in the approved gate profile.
+  Every retained object and approval is revalidated on release.
 - State transitions and critical reads/writes carry actor, request, reason, and
   prior/new values in audit events.
 - `BLOCKED` is a first-class state and cannot be bypassed through API or direct

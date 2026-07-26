@@ -86,6 +86,12 @@ from tenderguard.application.pricing import (
     PriceQuoteDraft,
     PriceQuoteView,
 )
+from tenderguard.application.production_qualification import (
+    ProductionGateEvidencePackageDetail,
+    ProductionGateEvidencePackageView,
+    ProductionGateEvidenceReviewCommand,
+    ProductionGateEvidenceRevocationCommand,
+)
 from tenderguard.application.projects import (
     DocumentSetView,
     ProjectMembershipView,
@@ -117,6 +123,7 @@ from tenderguard.domain.commercial_costs import CommercialCostModelInput
 from tenderguard.domain.enums import ActorRole, ApprovalState, ProjectAccessLevel
 from tenderguard.domain.integration import SignedIntegrationEnvelope
 from tenderguard.domain.models import ControlledVersion, GateDecision, Observation
+from tenderguard.domain.production_qualification import ProductionGateEvidenceSubmission
 from tenderguard.domain.quarantine import MalwareScanResult, QuarantinedUploadView
 
 
@@ -639,6 +646,27 @@ class QualificationReferenceEvidenceResponse(QualificationReferenceEvidenceView)
 
 
 class BusinessQualificationEvaluationResponse(BusinessQualificationEvaluation):
+    pass
+
+
+class SubmitProductionGateEvidenceRequest(ApiModel):
+    submission: ProductionGateEvidenceSubmission
+    reason: str = Field(min_length=1, max_length=4000)
+
+
+class ReviewProductionGateEvidenceRequest(ApiModel):
+    command: ProductionGateEvidenceReviewCommand
+
+
+class RevokeProductionGateEvidenceRequest(ApiModel):
+    command: ProductionGateEvidenceRevocationCommand
+
+
+class ProductionGateEvidencePackageResponse(ProductionGateEvidencePackageView):
+    pass
+
+
+class ProductionGateEvidencePackageDetailResponse(ProductionGateEvidencePackageDetail):
     pass
 
 

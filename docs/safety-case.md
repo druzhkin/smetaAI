@@ -127,6 +127,12 @@ release and operator blocker counts.
   population is representative, that a professional was truly blinded, or
   that the organisation supplied enough real projects. Those claims require
   out-of-system records and process-owner review.
+- The production gate registry prevents a report hash from standing in for
+  evidence. It binds WORM objects, build, environment, source profiles,
+  signatures and independent review, and rechecks expiry/revocation at release.
+  It still cannot prove that a real external review was competently scoped or
+  that an organisation selected honest thresholds; those remain process-owner
+  and assurance-provider responsibilities.
 - Market evidence may be technically comparable yet commercially unavailable;
   availability and validity are mandatory price attributes.
 - Model behaviour can change; exact model/prompt/rule versions and regression

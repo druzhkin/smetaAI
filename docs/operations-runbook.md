@@ -195,6 +195,27 @@ package. TenderGuard revalidates that evidence both when the controlled version
 is approved and during bid release. Full schemas, roles and endpoints are in
 `docs/business-qualification.md`.
 
+## Non-business production gate evidence
+
+Before running or commissioning a qualification activity, approve a dedicated
+`production_gate_evidence_profile` for that gate and immutable build. Stage
+supporting artifacts in the WORM evidence store and retain the external job,
+change, scanner, or assurance references outside TenderGuard for independent
+comparison.
+
+For load and restore, run the approved operational profile and register the
+complete passing result plus its retained JSON artifact. Do not replace a
+blocked or failed result with a narrative report. For security, resilience,
+calibration, and methodology evidence, have the provider sign the exact
+canonical statement with the Ed25519 key already approved in the gate profile.
+
+A different control-role actor reviews the package. Bind the returned approval
+hash and package ID into the matching production gate. Revoke a package
+immediately if a material defect, key compromise, incomplete scope, invalid
+environment, or unreliable evidence is discovered. Expiry and revocation block
+release without a grace status. See
+`docs/production-gate-evidence.md` for the complete schema and API.
+
 ## Mutation retries and outbox delivery
 
 All production mutation clients must send a stable `Idempotency-Key` for the

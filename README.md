@@ -148,6 +148,11 @@ The repository currently connects and integration-tests:
   discrepancy review, PostgreSQL append-only guards, and a package whose
   campaign and audit chain are revalidated before production qualification can
   satisfy release.
+- a governed registry for every remaining production-readiness gate, with
+  build/environment-bound profiles, content-addressed retained artifacts,
+  Ed25519 external attestations, mandatory internal load/recovery results,
+  four-eyes approval, expiry/revocation, PostgreSQL append-only guards, and
+  live revalidation during controlled-version approval and bid release.
 
 These are application workflows, not a claim that the complete target system
 or its external operational environment has been delivered.
@@ -217,6 +222,8 @@ Approved-profile load and restore verification are specified in the
 [operational qualification contract](docs/operational-qualification.md).
 Historical, blind and parallel controls are specified in the
 [business qualification contract](docs/business-qualification.md).
+The non-business readiness evidence contract is specified in the
+[production gate evidence registry](docs/production-gate-evidence.md).
 Open security findings are in
 [the security review](security_best_practices_report.md).
 The untrusted-file boundary is specified in the

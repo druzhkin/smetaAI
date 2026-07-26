@@ -51,6 +51,9 @@ from tenderguard.application.integrations import IntegrationInboxService
 from tenderguard.application.lineage import LineageService
 from tenderguard.application.passport import PassportService
 from tenderguard.application.pricing import PricingService
+from tenderguard.application.production_qualification import (
+    ProductionGateEvidenceService,
+)
 from tenderguard.application.projects import (
     OptimisticLockError,
     ProjectMembershipView,
@@ -155,6 +158,8 @@ from .schemas import (
     PriceItemContextResponse,
     PriceQuoteCandidateResponse,
     PriceQuoteResponse,
+    ProductionGateEvidencePackageDetailResponse,
+    ProductionGateEvidencePackageResponse,
     ProjectMembershipResponse,
     ProjectPortfolioResponse,
     ProjectRecordPageResponse,
@@ -188,7 +193,9 @@ from .schemas import (
     ReplayOutboxResponse,
     RequeueDocumentProcessingRequest,
     ResolveConflictRequest,
+    ReviewProductionGateEvidenceRequest,
     ReviewQualificationDiscrepancyRequest,
+    RevokeProductionGateEvidenceRequest,
     RevokeProjectMembershipRequest,
     RiskCalculationResponse,
     RiskItemResponse,
@@ -199,6 +206,7 @@ from .schemas import (
     SnapshotLineageResponse,
     SubmitContractTermRequest,
     SubmitPassportFactRequest,
+    SubmitProductionGateEvidenceRequest,
     SubmitRiskItemRequest,
     TransitionRequest,
     ValidateContractRequest,
@@ -359,6 +367,15 @@ def create_app(
         session: Session,
     ) -> BusinessQualificationService:
         return BusinessQualificationService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def production_gate_evidence_service(
+        session: Session,
+    ) -> ProductionGateEvidenceService:
+        return ProductionGateEvidenceService(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
@@ -1690,6 +1707,81 @@ def create_app(
                 reason=payload.reason,
             )
         return BusinessQualificationCampaignResponse.model_validate(campaign.model_dump())
+
+    @application.post(
+        "/v1/qualification/production-evidence/packages",
+        response_model=ProductionGateEvidencePackageResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def submit_production_gate_evidence(
+        payload: SubmitProductionGateEvidenceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProductionGateEvidencePackageResponse:
+        with mutation_transaction(session):
+            package = production_gate_evidence_service(session).submit_package(
+                actor=actor,
+                submission=payload.submission,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ProductionGateEvidencePackageResponse.model_validate(package.model_dump())
+
+    @application.get(
+        "/v1/qualification/production-evidence/packages/{package_id}",
+        response_model=ProductionGateEvidencePackageDetailResponse,
+    )
+    def get_production_gate_evidence(
+        package_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProductionGateEvidencePackageDetailResponse:
+        package = production_gate_evidence_service(session).get_package(
+            actor=actor,
+            package_id=package_id,
+        )
+        return ProductionGateEvidencePackageDetailResponse.model_validate(package.model_dump())
+
+    @application.post(
+        "/v1/qualification/production-evidence/packages/{package_id}/review",
+        response_model=ProductionGateEvidencePackageResponse,
+    )
+    def review_production_gate_evidence(
+        package_id: str,
+        payload: ReviewProductionGateEvidenceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProductionGateEvidencePackageResponse:
+        with mutation_transaction(session):
+            package = production_gate_evidence_service(session).review_package(
+                actor=actor,
+                package_id=package_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+            )
+        return ProductionGateEvidencePackageResponse.model_validate(package.model_dump())
+
+    @application.post(
+        "/v1/qualification/production-evidence/packages/{package_id}/revoke",
+        response_model=ProductionGateEvidencePackageResponse,
+    )
+    def revoke_production_gate_evidence(
+        package_id: str,
+        payload: RevokeProductionGateEvidenceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ProductionGateEvidencePackageResponse:
+        with mutation_transaction(session):
+            package = production_gate_evidence_service(session).revoke_package(
+                actor=actor,
+                package_id=package_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+            )
+        return ProductionGateEvidencePackageResponse.model_validate(package.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/evidence/observations",

@@ -45,12 +45,14 @@ from tenderguard.infrastructure.orm import (
     BusinessQualificationDiscrepancyRow,
     CalculationRunRow,
     CalculationSnapshotRow,
+    ControlledVersionRow,
     DocumentRevisionRow,
     DocumentRow,
     ObservationRow,
     ProjectRow,
 )
 from tests.integration.support import project_memberships
+from tests.support.production_evidence import register_all_non_business_gate_evidence
 
 AUDIT_KEY = "business-qualification-audit-key-at-least-32-bytes"
 BUILD_REFERENCE = "git:" + ("7" * 40)
@@ -255,6 +257,8 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
     blind_self_reviewer = _actor("blind-professional", ActorRole.REVIEWER)
     parallel_self_reviewer = _actor("parallel-professional", ActorRole.REVIEWER)
     reference_reviewer = _actor("reference-reviewer", ActorRole.REVIEWER)
+    gate_submitter = _actor("gate-evidence-submitter", ActorRole.AUDITOR)
+    gate_reviewer = _actor("gate-evidence-reviewer", ActorRole.AUDITOR)
     all_actors = (
         campaign_creator,
         evaluator,
@@ -632,12 +636,23 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
         assert approved.result_hash == evaluation.result_hash
         assert approved.approval_package_hash is not None
         assert approved.finalized_at is not None
+        non_business_gates = register_all_non_business_gate_evidence(
+            session=session,
+            settings=settings,
+            object_store=store,
+            profile_creator=governance_creator,
+            profile_approver=final_approver,
+            submitter=gate_submitter,
+            reviewer=gate_reviewer,
+            environment="qualification",
+            label_prefix="business-workflow",
+        )
         campaign_reference = f"business_qualification_campaign:{campaign_id}"
         gate = {
             "status": "PASSED",
             "evidence_hash": "9" * 64,
-            "owner_id": "process-owner",
-            "approved_by": "independent-gate-approver",
+            "owner_id": governance_creator.actor_id,
+            "approved_by": final_approver.actor_id,
             "approved_at": approved.finalized_at.isoformat(),
             "environment": "qualification",
         }
@@ -677,6 +692,7 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
                 "evidence_hash": approved.approval_package_hash,
                 "source_reference": campaign_reference,
             }
+        production_payload["gates"].update(non_business_gates)
         project_service = ProjectService(
             session=session,
             settings=settings,
@@ -727,5 +743,22 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
             reason="Formally approve verified complete production evidence",
         )
         assert production_version.status.value == "APPROVED"
+        persisted_production_version = session.get(
+            ControlledVersionRow,
+            production_version.version_id,
+        )
+        assert persisted_production_version is not None
+        assert project_service._approved_controlled_version_valid(
+            persisted_production_version,
+            organization_id=ORGANIZATION_ID,
+        )
+        persisted_production_version.payload = {
+            **persisted_production_version.payload,
+            "all_gates_complete": False,
+        }
+        assert not project_service._approved_controlled_version_valid(
+            persisted_production_version,
+            organization_id=ORGANIZATION_ID,
+        )
 
     engine.dispose()

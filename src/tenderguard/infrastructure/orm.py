@@ -1647,3 +1647,84 @@ class BusinessQualificationApprovalRow(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     approved_by: Mapped[str] = mapped_column(String(128), nullable=False)
     approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProductionGateEvidencePackageRow(Base):
+    __tablename__ = "production_gate_evidence_packages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    gate_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    profile_version_id: Mapped[str] = mapped_column(
+        ForeignKey("controlled_versions.id"), nullable=False
+    )
+    profile_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    application_build_reference: Mapped[str] = mapped_column(String(200), nullable=False)
+    environment: Mapped[str] = mapped_column(String(100), nullable=False)
+    evidence_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    package_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    statement_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    technical_result_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    attester_id: Mapped[str | None] = mapped_column(String(200))
+    attester_key_id: Mapped[str | None] = mapped_column(String(200))
+    attestation_signature_b64: Mapped[str | None] = mapped_column(String(200))
+    submitted_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "gate_name IN ("
+            "'rules_and_catalog_calibration', "
+            "'damaged_conflicting_document_resilience', "
+            "'load_test', 'security_review', 'backup_restore', "
+            "'methodology_approval'"
+            ")",
+            name="ck_production_gate_evidence_package_gate",
+        ),
+        CheckConstraint(
+            "evidence_mode IN ('INTERNAL_QUALIFICATION_RESULT', 'EXTERNAL_ATTESTED_PACKAGE')",
+            name="ck_production_gate_evidence_package_mode",
+        ),
+        Index(
+            "ix_production_gate_evidence_org_gate",
+            "organization_id",
+            "gate_name",
+        ),
+    )
+
+
+class ProductionGateEvidenceApprovalRow(Base):
+    __tablename__ = "production_gate_evidence_approvals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    package_id: Mapped[str] = mapped_column(
+        ForeignKey("production_gate_evidence_packages.id"),
+        nullable=False,
+        unique=True,
+    )
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    approval_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('APPROVED', 'REJECTED')",
+            name="ck_production_gate_evidence_approval_decision",
+        ),
+    )
+
+
+class ProductionGateEvidenceRevocationRow(Base):
+    __tablename__ = "production_gate_evidence_revocations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    package_id: Mapped[str] = mapped_column(
+        ForeignKey("production_gate_evidence_packages.id"),
+        nullable=False,
+        unique=True,
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

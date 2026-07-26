@@ -23,6 +23,9 @@ The methodology owner must version and approve:
 - historical/blind/parallel population rules, exclusion policy, minimum sample
   sizes and independence domains, exact accuracy/materiality thresholds,
   parallel duration, reporting rounding, and discrepancy reason taxonomy.
+- per-gate evidence mode, immutable build and environments, evidence age,
+  artifact categories/count/byte limits, required claims, approved reviewer
+  roles, exact load/recovery source profiles, and external attester keys.
 
 The application currently binds the following governed content directly into
 stage gates or calculation lineage:
@@ -81,3 +84,10 @@ and its immutable approval package. Controlled-version approval and bid
 release both revalidate the campaign, evaluation, discrepancy reviews,
 segregation of duties, package hash, and audit chain. See
 [business qualification](business-qualification.md).
+
+The other six gates must reference a live approved package from the production
+gate evidence registry. A hash without a package ID, retained object,
+independent approval, valid profile and audit chain is rejected. Load and
+backup/restore additionally require the exact internal qualification result;
+they cannot be closed by an external report. See
+[production gate evidence](production-gate-evidence.md).
