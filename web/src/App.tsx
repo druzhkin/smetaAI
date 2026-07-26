@@ -35,6 +35,9 @@ const ManualEvidenceReviewPage = lazy(async () => ({
 const ReconciliationPage = lazy(async () => ({
   default: (await import("./pages/ReconciliationPage")).ReconciliationPage,
 }));
+const PassportPage = lazy(async () => ({
+  default: (await import("./pages/PassportPage")).PassportPage,
+}));
 const BoqAuthoringPage = lazy(async () => ({
   default: (await import("./pages/BoqAuthoringPage")).BoqAuthoringPage,
 }));
@@ -138,6 +141,14 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
       }
       const rawSection = parts[2];
       if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "passport" &&
+        parts[3] === "manage"
+      ) {
+        page = <PassportPage config={config} projectId={projectId} />;
+      } else if (
         projectId !== null &&
         projectId !== "" &&
         parts.length === 4 &&

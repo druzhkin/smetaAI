@@ -182,6 +182,8 @@ def test_postgresql_approval_task_allows_only_auditable_supersession() -> None:
     suffix = uuid4().hex
     project_id = f"project-approval-supersede-{suffix}"
     task_id = f"task-approval-supersede-{suffix}"
+    decided_task_id = f"task-approval-replaced-{suffix}"
+    approval_id = f"approval-replaced-{suffix}"
     engine = create_engine(database_url)
     with engine.begin() as connection:
         connection.execute(
@@ -242,6 +244,80 @@ def test_postgresql_approval_task_allows_only_auditable_supersession() -> None:
                     '"invalidated_at":"2026-07-26T12:00:00+00:00"}'
                 ),
             },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO approval_tasks (
+                    id, project_id, task_type, entity_type, entity_id,
+                    assigned_role, status, required, payload,
+                    created_at, updated_at
+                ) VALUES (
+                    :id, :project_id, 'PASSPORT_FACT_REVIEW', 'passport_fact',
+                    :entity_id, 'REVIEWER', 'PENDING', true,
+                    CAST(:payload AS json), now(), now()
+                )
+                """
+            ),
+            {
+                "id": decided_task_id,
+                "project_id": project_id,
+                "entity_id": f"passport-fact-old-{suffix}",
+                "payload": '{"created_by":"technical-expert"}',
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO approval_records (
+                    id, task_id, decision, decided_by, reason, payload,
+                    decided_at
+                ) VALUES (
+                    :id, :task_id, 'CHANGES_REQUESTED', 'reviewer',
+                    'Correction required', CAST('{}' AS json), now()
+                )
+                """
+            ),
+            {"id": approval_id, "task_id": decided_task_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE approval_tasks
+                SET status='CHANGES_REQUESTED',
+                    updated_at=now() + interval '1 second'
+                WHERE id=:id
+                """
+            ),
+            {"id": decided_task_id},
+        )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE approval_tasks
+                SET status='SUPERSEDED',
+                    payload=CAST(:payload AS json),
+                    updated_at=updated_at + interval '1 second'
+                WHERE id=:id
+                """
+            ),
+            {
+                "id": decided_task_id,
+                "payload": (
+                    '{"created_by":"technical-expert",'
+                    '"superseded_at":"2026-07-26T12:00:00+00:00",'
+                    f'"superseded_by_entity_id":"passport-fact-new-{suffix}",'
+                    '"supersession_reason":"PASSPORT_FACT_REPLACED"}'
+                ),
+            },
+        )
+        assert (
+            connection.execute(
+                text("SELECT status FROM approval_tasks WHERE id=:id"),
+                {"id": decided_task_id},
+            ).scalar_one()
+            == "SUPERSEDED"
         )
     engine.dispose()
 

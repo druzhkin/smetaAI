@@ -425,6 +425,7 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                         "supported_price_evidence_classes": supported_classes,
                         "independence_domain": domain,
                         "organization_id": "org-1",
+                        "service_actor_id": "extractor",
                     },
                     approved_by="methodology-owner",
                     approved_at=now,

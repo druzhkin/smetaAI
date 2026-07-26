@@ -3,22 +3,40 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.controlled_version_integrity import (
+    require_bound_controlled_version,
+)
+from tenderguard.application.document_set_integrity import (
+    require_confirmed_document_set_integrity,
+)
+from tenderguard.application.evidence_independence import (
+    require_distinct_qualified_independence,
+    resolve_observation_leaves,
+)
+from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import (
     CostBasisKind,
+    EvidenceMethod,
     Severity,
     VerificationStatus,
     VersionStatus,
 )
+from tenderguard.domain.models import Observation
+from tenderguard.domain.passport import PassportRequirementsPolicy
 from tenderguard.infrastructure.orm import (
+    ApprovalRecordRow,
     ApprovalTaskRow,
+    AuditEventRow,
     BoqLineRow,
     CommercialCostModelRow,
+    ConflictRow,
     ContractTermRow,
     ControlledVersionRow,
     ManualChangeRow,
     NomenclatureMatchRow,
     NormativeCalculationRow,
+    ObservationRow,
     PriceDecisionRow,
     ProjectControlledVersionRow,
     ProjectPassportFactRow,
@@ -32,30 +50,41 @@ from tenderguard.infrastructure.orm import (
 )
 
 
-def passport_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:
-    requirements = session.scalar(
-        select(ControlledVersionRow)
-        .join(
-            ProjectControlledVersionRow,
-            ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
+def passport_stage_blockers(
+    session: Session,
+    settings: Settings,
+    project_id: str,
+) -> tuple[str, ...]:
+    project = session.get(ProjectRow, project_id)
+    if project is None:
+        return ("project:missing",)
+    try:
+        requirements = require_bound_controlled_version(
+            session=session,
+            settings=settings,
+            project_id=project_id,
+            organization_id=project.organization_id,
+            purpose="document_requirements",
+            kind="document_requirements",
         )
-        .where(
-            ProjectControlledVersionRow.project_id == project_id,
-            ProjectControlledVersionRow.purpose == "document_requirements",
-            ControlledVersionRow.kind == "document_requirements",
-            ControlledVersionRow.status == VersionStatus.APPROVED.value,
+        document_set = require_confirmed_document_set_integrity(
+            session=session,
+            settings=settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
         )
-    )
-    if requirements is None:
-        return ("document_requirements:missing",)
+    except (KeyError, LookupError, TypeError, ValueError):
+        return ("passport:governance-integrity-failed",)
     passport = requirements.payload.get("passport")
     if not isinstance(passport, dict):
         return (f"{requirements.id}:passport-section-invalid",)
-    required_fields = passport.get("required_fields")
-    if not isinstance(required_fields, list) or not all(
-        isinstance(item, str) for item in required_fields
-    ):
-        return (f"{requirements.id}:required-fields-invalid",)
+    try:
+        policy = PassportRequirementsPolicy.model_validate(passport)
+    except (TypeError, ValueError):
+        return (f"{requirements.id}:passport-policy-invalid",)
+    required_fields = policy.required_fields
+    independent_fields = policy.independently_verified_fields
+    review_role = policy.review_role.value
     facts = {
         row.field_name: row
         for row in session.scalars(
@@ -65,13 +94,218 @@ def passport_stage_blockers(session: Session, project_id: str) -> tuple[str, ...
             )
         )
     }
-    return tuple(
-        f"passport:{field_name}"
-        for field_name in sorted(required_fields)
-        if field_name not in facts
-        or facts[field_name].status != VerificationStatus.VERIFIED.value
-        or facts[field_name].payload.get("requirements_version_id") != requirements.id
+    unresolved_conflict_fields = set(
+        session.scalars(
+            select(ConflictRow.field_name).where(
+                ConflictRow.project_id == project_id,
+                ConflictRow.field_name.in_(tuple(required_fields)),
+                ConflictRow.status != VerificationStatus.VERIFIED.value,
+            )
+        )
     )
+    blockers: list[str] = []
+    for field_name in sorted(required_fields):
+        if field_name in unresolved_conflict_fields:
+            blockers.append(f"passport:{field_name}:unresolved-conflict")
+        fact = facts.get(field_name)
+        if fact is None:
+            blockers.append(f"passport:{field_name}:missing")
+            continue
+        try:
+            _require_passport_fact_integrity(
+                session=session,
+                fact=fact,
+                field_name=field_name,
+                requirements=requirements,
+                document_revision_ids=frozenset(document_set.revision_ids),
+                document_set_revision_id=document_set.id,
+                review_role=review_role,
+                independent=field_name in independent_fields,
+            )
+        except (KeyError, LookupError, TypeError, ValueError):
+            blockers.append(f"passport:{field_name}:integrity-failed")
+    return tuple(blockers)
+
+
+def _require_passport_fact_integrity(
+    *,
+    session: Session,
+    fact: ProjectPassportFactRow,
+    field_name: str,
+    requirements: ControlledVersionRow,
+    document_revision_ids: frozenset[str],
+    document_set_revision_id: str,
+    review_role: str,
+    independent: bool,
+) -> None:
+    observation_ids = fact.payload.get("observation_ids")
+    independence_source_ids = fact.payload.get("independence_source_ids")
+    task_id = fact.payload.get("approval_task_id")
+    created_by = fact.payload.get("created_by")
+    verified_by = fact.payload.get("verified_by")
+    if (
+        fact.status != VerificationStatus.VERIFIED.value
+        or fact.field_name != field_name
+        or not isinstance(observation_ids, list)
+        or not observation_ids
+        or len(observation_ids) != len(set(observation_ids))
+        or not isinstance(independence_source_ids, list)
+        or not isinstance(task_id, str)
+        or not task_id
+        or not isinstance(created_by, str)
+        or not created_by
+        or not isinstance(verified_by, str)
+        or not verified_by
+        or created_by == verified_by
+        or fact.payload.get("reviewed_by") != verified_by
+        or fact.payload.get("review_decision") != "APPROVED"
+        or fact.payload.get("requirements_version_id") != requirements.id
+        or fact.payload.get("requirements_content_hash") != requirements.content_hash
+        or fact.payload.get("document_set_revision_id") != document_set_revision_id
+        or fact.payload.get("review_role") != review_role
+    ):
+        raise ValueError("Verified passport fact provenance is invalid")
+    observations = list(
+        session.scalars(
+            select(ObservationRow).where(
+                ObservationRow.project_id == fact.project_id,
+                ObservationRow.id.in_(observation_ids),
+            )
+        )
+    )
+    if len(observations) != len(observation_ids):
+        raise ValueError("Passport fact evidence is missing")
+    value_hash = content_hash(fact.payload.get("value"))
+    for row in observations:
+        observation = Observation.model_validate(row.payload.get("observation"))
+        if (
+            row.id != observation.observation_id
+            or row.document_revision_id != observation.location.document_revision_id
+            or row.document_revision_id not in document_revision_ids
+            or row.field_name != field_name
+            or row.field_name != observation.field_name
+            or row.method != observation.method.value
+            or row.method_version != observation.method_version
+            or row.status != observation.status.value
+            or observation.status
+            not in {VerificationStatus.UNVERIFIED, VerificationStatus.VERIFIED}
+            or (
+                observation.method is EvidenceMethod.MANUAL
+                and observation.status is not VerificationStatus.VERIFIED
+            )
+            or content_hash(observation.value) != value_hash
+            or observation.unit != fact.payload.get("unit")
+        ):
+            raise ValueError("Passport fact evidence no longer reproduces the fact")
+    provenance_leaves = resolve_observation_leaves(
+        session,
+        project_id=fact.project_id,
+        observations=observations,
+    )
+    for row in provenance_leaves:
+        observation = Observation.model_validate(row.payload.get("observation"))
+        if (
+            row.id != observation.observation_id
+            or row.project_id != fact.project_id
+            or row.document_revision_id != observation.location.document_revision_id
+            or row.document_revision_id not in document_revision_ids
+            or row.field_name != field_name
+            or row.field_name != observation.field_name
+            or row.method != observation.method.value
+            or row.method_version != observation.method_version
+            or row.status != observation.status.value
+            or content_hash(observation.value) != value_hash
+            or observation.unit != fact.payload.get("unit")
+        ):
+            raise ValueError("Passport provenance leaves no longer reproduce the fact")
+    if independent:
+        leaves = require_distinct_qualified_independence(
+            session,
+            project_id=fact.project_id,
+            observations=observations,
+        )
+        if tuple(independence_source_ids) != leaves:
+            raise ValueError("Passport fact independence sources changed")
+        if leaves != tuple(row.id for row in provenance_leaves):
+            raise ValueError("Passport fact independence leaf resolution changed")
+    task = session.get(ApprovalTaskRow, task_id)
+    if (
+        task is None
+        or task.project_id != fact.project_id
+        or task.task_type != "PASSPORT_FACT_REVIEW"
+        or task.entity_type != "passport_fact"
+        or task.entity_id != fact.id
+        or task.assigned_role != review_role
+        or not task.required
+        or task.status != "APPROVED"
+        or task.payload.get("created_by") != created_by
+        or task.payload.get("fact_id") != fact.id
+        or task.payload.get("observation_ids") != observation_ids
+        or task.payload.get("independence_source_ids") != independence_source_ids
+        or task.payload.get("requirements_version_id") != requirements.id
+        or task.payload.get("requirements_content_hash") != requirements.content_hash
+        or task.payload.get("document_set_revision_id") != document_set_revision_id
+        or task.payload.get("review_role") != review_role
+    ):
+        raise ValueError("Passport approval task integrity failed")
+    expected_submission_hash = content_hash(
+        {
+            "field_name": fact.field_name,
+            "value": fact.payload.get("value"),
+            "unit": fact.payload.get("unit"),
+            "observation_ids": observation_ids,
+            "independence_source_ids": independence_source_ids,
+            "created_by": created_by,
+            "requirements_version_id": requirements.id,
+            "requirements_content_hash": requirements.content_hash,
+            "document_set_revision_id": document_set_revision_id,
+            "review_role": review_role,
+        }
+    )
+    if task.payload.get("fact_submission_hash") != expected_submission_hash:
+        raise ValueError("Passport approval task no longer reproduces its submission")
+    approval = session.scalar(select(ApprovalRecordRow).where(ApprovalRecordRow.task_id == task.id))
+    if (
+        approval is None
+        or approval.decision != "APPROVED"
+        or approval.decided_by != verified_by
+        or approval.payload.get("fact_id") != fact.id
+        or approval.payload.get("evidence_ids") != observation_ids
+        or approval.payload.get("independence_source_ids") != independence_source_ids
+        or approval.payload.get("requirements_version_id") != requirements.id
+        or approval.payload.get("requirements_content_hash") != requirements.content_hash
+        or approval.payload.get("document_set_revision_id") != document_set_revision_id
+    ):
+        raise ValueError("Passport approval record integrity failed")
+    decision_event = next(
+        (
+            event
+            for event in session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "project",
+                    AuditEventRow.aggregate_id == fact.project_id,
+                    AuditEventRow.event_type == "passport_fact_review_decided",
+                )
+                .order_by(AuditEventRow.sequence.desc())
+            )
+            if event.payload.get("fact_id") == fact.id
+        ),
+        None,
+    )
+    if (
+        decision_event is None
+        or decision_event.actor_id != verified_by
+        or decision_event.payload.get("approval_id") != approval.id
+        or decision_event.payload.get("approval_task_id") != task.id
+        or decision_event.payload.get("fact_id") != fact.id
+        or decision_event.payload.get("field_name") != field_name
+        or decision_event.payload.get("decision") != "APPROVED"
+        or decision_event.payload.get("evidence_ids") != observation_ids
+        or decision_event.payload.get("requirements_version_id") != requirements.id
+        or decision_event.payload.get("document_set_revision_id") != document_set_revision_id
+    ):
+        raise ValueError("Passport approval audit event integrity failed")
 
 
 def boq_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:

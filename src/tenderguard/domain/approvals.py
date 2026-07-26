@@ -16,6 +16,7 @@ DEDICATED_APPROVAL_TASK_TYPES = frozenset(
     {
         "CONFLICT_RESOLUTION",
         "MANUAL_EVIDENCE_REVIEW",
+        "PASSPORT_FACT_REVIEW",
     }
 )
 

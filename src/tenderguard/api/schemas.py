@@ -77,6 +77,9 @@ from tenderguard.application.integrations import (
 )
 from tenderguard.application.lineage import SnapshotLineage
 from tenderguard.application.passport import (
+    PassportContextView,
+    PassportFactDecisionCommand,
+    PassportFactDecisionResult,
     PassportFactDraft,
     PassportFactView,
     PassportValidationResult,
@@ -328,10 +331,18 @@ class ConflictResolutionResponse(ConflictResolutionResult):
 
 class SubmitPassportFactRequest(ApiModel):
     draft: PassportFactDraft
+    expected_document_set_revision_id: str = Field(min_length=1, max_length=64)
+    requirements_version_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class VerifyPassportFactRequest(ApiModel):
+    expected_fact_updated_at: datetime
+    expected_task_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class DecidePassportFactRequest(PassportFactDecisionCommand):
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -346,6 +357,14 @@ class PassportFactResponse(PassportFactView):
 class PassportFactVerificationResponse(ApiModel):
     fact: PassportFactView
     validation: PassportValidationResult
+
+
+class PassportFactDecisionResponse(PassportFactDecisionResult):
+    pass
+
+
+class PassportContextResponse(PassportContextView):
+    pass
 
 
 class PassportValidationResponse(PassportValidationResult):

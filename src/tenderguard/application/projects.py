@@ -970,7 +970,11 @@ class ProjectService:
             and to_state is ApprovalState.BOQ_IN_PROGRESS
         ):
             gate_name = "project passport"
-            blockers = passport_stage_blockers(self.session, project.id)
+            blockers = passport_stage_blockers(
+                self.session,
+                self.settings,
+                project.id,
+            )
         elif from_state is ApprovalState.BOQ_IN_PROGRESS and to_state is ApprovalState.BOQ_REVIEW:
             gate_name = "BoQ verification"
             blockers = boq_stage_blockers(self.session, project.id)
@@ -1592,7 +1596,7 @@ class ProjectService:
             tuple(row.id for row in blocking_findings if row.contour != "CONTRACT")
             + boq_blockers
             + scope_blockers
-            + passport_stage_blockers(self.session, project.id)
+            + passport_stage_blockers(self.session, self.settings, project.id)
             + scope_stage_blockers(self.session, project.id)
             + risk_stage_blockers(self.session, project.id)
         )

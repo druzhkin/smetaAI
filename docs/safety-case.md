@@ -20,6 +20,7 @@ all operational qualification evidence remain open.
 | Input integrity | archive manifest, hashes, file health, revision graph | block or `DOCUMENTS_INCOMPLETE` |
 | Untrusted file boundary | separate quarantine, qualified exact-hash malware result, leased bounded-retry outbox, worker-only bounded parsing | no evidence promotion; retry or dead-letter with unresolved blocker; `BLOCKED`/`DOCUMENTS_INCOMPLETE` |
 | Extraction | independent observations and reconciliation with reproduced qualification/domain/rule/document-set integrity; policy/document-bound manual correction with dedicated four-eyes review | conflict or unverified source; no auto-merge, old-set reuse, or direct manual `VERIFIED` |
+| Project passport | approved requirements schema, exact current-set observation values, qualified independent leaves, immutable fact/task binding, dedicated four-eyes decision, and late-conflict recheck | missing/unreviewed fact, stale evidence, task drift, self-review, or unresolved conflict blocks stage progression and release |
 | Scope | current-set four-eyes BoQ, WBS/rule/dependency companion-work checks and immutable input signature | stale line rejection, scope issue, or expert review |
 | Quantity | source/formula/unit/geometry/alternatives and checks | unverified quantity hard stop |
 | Nomenclature | reproduced catalog audit chain, unique current BoQ component, current-set attributes, explicit critical attributes and server-derived match class | reject, insufficient-data blocker, or governed analogue expert review |

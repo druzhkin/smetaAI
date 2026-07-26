@@ -140,6 +140,7 @@ from .schemas import (
     CurrentCalculationExecutionRequest,
     DecideApprovalRequest,
     DecideManualEvidenceRequest,
+    DecidePassportFactRequest,
     DocumentSetResponse,
     EvaluateItemPriceRequest,
     ExportArtifactResponse,
@@ -163,6 +164,8 @@ from .schemas import (
     NormalizedPriceResponse,
     NormalizePriceRequest,
     ObservationResponse,
+    PassportContextResponse,
+    PassportFactDecisionResponse,
     PassportFactResponse,
     PassportFactVerificationResponse,
     PassportValidationResponse,
@@ -2017,13 +2020,35 @@ def create_app(
         )
         return ConflictReviewResponse.model_validate(result.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/passport/context",
+        response_model=PassportContextResponse,
+    )
+    def get_passport_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        field_name: Annotated[
+            str | None,
+            Query(min_length=1, max_length=200),
+        ] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> PassportContextResponse:
+        context = passport_service(session).context(
+            actor=actor,
+            project_id=project_id,
+            selected_field_name=field_name,
+            limit=limit,
+        )
+        return PassportContextResponse.model_validate(context.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/passport/facts",
         response_model=PassportFactResponse,
         status_code=status.HTTP_201_CREATED,
     )
     def submit_passport_fact(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: SubmitPassportFactRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2034,6 +2059,8 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 draft=payload.draft,
+                expected_document_set_revision_id=(payload.expected_document_set_revision_id),
+                requirements_version_id=payload.requirements_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2044,8 +2071,8 @@ def create_app(
         response_model=PassportFactVerificationResponse,
     )
     def verify_passport_fact(
-        project_id: str,
-        fact_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        fact_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: VerifyPassportFactRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2056,17 +2083,42 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 fact_id=fact_id,
+                expected_fact_updated_at=payload.expected_fact_updated_at,
+                expected_task_updated_at=payload.expected_task_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
         return PassportFactVerificationResponse(fact=fact, validation=validation)
 
     @application.post(
+        "/v1/projects/{project_id}/passport/facts/{fact_id}/decision",
+        response_model=PassportFactDecisionResponse,
+    )
+    def decide_passport_fact(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        fact_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: DecidePassportFactRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> PassportFactDecisionResponse:
+        with mutation_transaction(session):
+            result = passport_service(session).decide_fact(
+                actor=actor,
+                project_id=project_id,
+                fact_id=fact_id,
+                command=payload,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return PassportFactDecisionResponse.model_validate(result.model_dump())
+
+    @application.post(
         "/v1/projects/{project_id}/passport/validate",
         response_model=PassportValidationResponse,
     )
     def validate_project_passport(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: ValidatePassportRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],

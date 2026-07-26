@@ -155,6 +155,86 @@ export interface EvidenceObservation {
   status: string;
 }
 
+export interface PassportFact {
+  fact_id: string;
+  field_name: string;
+  value: unknown;
+  unit: string | null;
+  observation_ids: string[];
+  independence_source_ids: string[];
+  status: string;
+  supersedes_fact_id: string | null;
+  is_current: boolean;
+  created_by: string;
+  verified_by: string | null;
+  reviewed_by: string | null;
+  requirements_version_id: string;
+  document_set_revision_id: string;
+  approval_task_id: string;
+  updated_at: string;
+}
+
+export interface PassportEvidenceCandidate {
+  observation: EvidenceObservation;
+  adapter_qualification_id: string | null;
+  adapter_status: string | null;
+  adapter_valid_until: string | null;
+  independence_domain: string | null;
+  eligible: boolean;
+  blockers: string[];
+}
+
+export interface PassportValidation {
+  passport: {
+    project_id: string;
+    facts: Array<{
+      field_name: string;
+      value: unknown;
+      unit: string | null;
+      observation_ids: string[];
+      independence_source_ids: string[];
+      status: string;
+    }>;
+    passport_version: string;
+  };
+  findings: ValidationFinding[];
+  requirements_version_id: string;
+}
+
+export interface PassportFactReview {
+  fact: PassportFact;
+  task_status: string;
+  task_updated_at: string;
+  assigned_role: ActorRole;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface PassportContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  requirements_version_id: string;
+  requirements_content_hash: string;
+  required_fields: string[];
+  independently_verified_fields: string[];
+  optional_fields: string[];
+  review_role: ActorRole;
+  selected_field_name: string;
+  facts: PassportFactReview[];
+  evidence_candidates: PassportEvidenceCandidate[];
+  candidates_truncated: boolean;
+  validation: PassportValidation;
+  unresolved_conflict_ids: string[];
+}
+
+export interface PassportDecisionResult {
+  fact: PassportFact;
+  validation: PassportValidation;
+  approval_id: string;
+  decision: ApprovalDecision;
+}
+
 export interface ConflictObservation extends EvidenceObservation {
   adapter_qualification_id: string | null;
   adapter_qualification_status: string | null;

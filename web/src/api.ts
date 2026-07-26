@@ -20,6 +20,10 @@ import type {
   NomenclatureMatchView,
   NomenclatureReviewContext,
   NormalizedPrice,
+  PassportContext,
+  PassportDecisionResult,
+  PassportFact,
+  PassportValidation,
   PriceDecision,
   PriceItemContext,
   PriceQuoteCandidate,
@@ -351,6 +355,99 @@ export function getManualEvidenceContext(
     `/projects/${encodeURIComponent(projectId)}/evidence/manual/context`,
     undefined,
     signal,
+  );
+}
+
+export function getPassportContext(
+  context: RequestContext,
+  projectId: string,
+  fieldName?: string,
+  signal?: AbortSignal,
+): Promise<PassportContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/passport/context`,
+    { field_name: fieldName, limit: 100 },
+    signal,
+  );
+}
+
+export function submitPassportFact(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    fieldName: string;
+    value: unknown;
+    unit: string | null;
+    observationIds: string[];
+    expectedDocumentSetRevisionId: string;
+    requirementsVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<PassportFact> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/passport/facts`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: {
+          field_name: input.fieldName,
+          value: input.value,
+          unit: input.unit,
+          observation_ids: input.observationIds,
+        },
+        expected_document_set_revision_id: input.expectedDocumentSetRevisionId,
+        requirements_version_id: input.requirementsVersionId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function decidePassportFact(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    factId: string;
+    decision: ApprovalDecision;
+    expectedFactUpdatedAt: string;
+    expectedTaskUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<PassportDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/passport/facts/${encodeURIComponent(input.factId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        decision: input.decision,
+        expected_fact_updated_at: input.expectedFactUpdatedAt,
+        expected_task_updated_at: input.expectedTaskUpdatedAt,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function validatePassport(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<PassportValidation> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/passport/validate`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: { reason: input.reason },
+    },
   );
 }
 

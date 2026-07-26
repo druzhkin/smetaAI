@@ -1280,8 +1280,9 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             "document-requirements-1",
             {
                 "passport": {
-                    "required_fields": [],
-                    "independently_verified_fields": [],
+                    "required_fields": ["normalized_unit_rate"],
+                    "independently_verified_fields": ["normalized_unit_rate"],
+                    "review_role": "REVIEWER",
                 }
             },
             purpose="document_requirements",
@@ -1521,7 +1522,6 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         for state in (
             "EXTRACTION_IN_PROGRESS",
             "EXTRACTION_REVIEW",
-            "BOQ_IN_PROGRESS",
         ):
             response = client.post(
                 f"/v1/projects/{project['id']}/transitions",
@@ -1534,6 +1534,68 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             )
             assert response.status_code == 200, response.text
             current = response.json()
+
+        passport_context = client.get(
+            f"/v1/projects/{project['id']}/passport/context",
+            headers=operator,
+            params={"field_name": "normalized_unit_rate"},
+        )
+        assert passport_context.status_code == 200, passport_context.text
+        passport_payload = passport_context.json()
+        passport_fact = client.post(
+            f"/v1/projects/{project['id']}/passport/facts",
+            headers=operator,
+            json={
+                "draft": {
+                    "field_name": "normalized_unit_rate",
+                    "value": "125.50",
+                    "unit": "m",
+                    "observation_ids": observation_ids,
+                },
+                "expected_document_set_revision_id": (passport_payload["document_set_revision_id"]),
+                "requirements_version_id": passport_payload["requirements_version_id"],
+                "reason": "Form the critical project fact from two qualified extractions",
+            },
+        )
+        assert passport_fact.status_code == 201, passport_fact.text
+        passport_review_context = client.get(
+            f"/v1/projects/{project['id']}/passport/context",
+            headers=owner_b,
+            params={"field_name": "normalized_unit_rate"},
+        )
+        assert passport_review_context.status_code == 200, passport_review_context.text
+        passport_review = next(
+            item
+            for item in passport_review_context.json()["facts"]
+            if item["fact"]["fact_id"] == passport_fact.json()["fact_id"]
+        )
+        passport_decision = client.post(
+            (
+                f"/v1/projects/{project['id']}/passport/facts/"
+                f"{passport_fact.json()['fact_id']}/decision"
+            ),
+            headers=owner_b,
+            json={
+                "decision": "APPROVED",
+                "expected_fact_updated_at": passport_fact.json()["updated_at"],
+                "expected_task_updated_at": passport_review["task_updated_at"],
+                "reason": "Independently approve the exact dual-source project fact",
+            },
+        )
+        assert passport_decision.status_code == 200, passport_decision.text
+        assert passport_decision.json()["validation"]["findings"] == []
+
+        response = client.post(
+            f"/v1/projects/{project['id']}/transitions",
+            headers=operator,
+            json={
+                "to_state": "BOQ_IN_PROGRESS",
+                "expected_row_version": current["row_version"],
+                "reason": "Advance through the verified project-passport gate",
+            },
+        )
+        assert response.status_code == 200, response.text
+        current = response.json()
 
         authoring_context = client.get(
             f"/v1/projects/{project['id']}/boq/authoring-context",

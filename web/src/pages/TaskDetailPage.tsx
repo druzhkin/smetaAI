@@ -150,7 +150,9 @@ export function TaskDetailPage({
   const entityHref =
     detail.item.entity_type === "manual_change"
       ? `/projects/${encodeURIComponent(detail.item.project_id)}/manual-changes/${encodeURIComponent(detail.item.entity_id)}`
-      : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
+      : detail.item.entity_type === "passport_fact"
+        ? `/projects/${encodeURIComponent(detail.item.project_id)}/passport/manage`
+        : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
   const evidenceIds = parseIdentifierList(draft.evidenceText);
   const validationError = validateDecisionDraft(draft, detail.project.code);
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -315,6 +317,25 @@ export function TaskDetailPage({
               to={`/projects/${encodeURIComponent(detail.item.project_id)}/evidence/observations/${encodeURIComponent(detail.item.entity_id)}/review`}
             >
               Открыть независимую проверку
+              <Icon name="arrow" size={15} />
+            </Link>
+          </section>
+        )}
+
+      {detail.item.task_type === "PASSPORT_FACT_REVIEW" &&
+        detail.item.entity_type === "passport_fact" && (
+          <section className="dedicated-workflow-callout">
+            <div>
+              <p className="eyebrow">Специализированный workflow</p>
+              <h2>Сверить факт паспорта и независимые источники</h2>
+              <p>
+                Универсальное решение запрещено: экран паспорта повторно
+                проверяет точное значение, текущий комплект, версию требований,
+                квалификации независимых leaf sources и обе optimistic-версии.
+              </p>
+            </div>
+            <Link className="button button--primary" to={entityHref}>
+              Открыть проверку паспорта
               <Icon name="arrow" size={15} />
             </Link>
           </section>

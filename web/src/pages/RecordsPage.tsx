@@ -116,6 +116,13 @@ export function RecordsPage({
               <>
                 <Link
                   className="button button--secondary"
+                  to={`/projects/${encodeURIComponent(projectId)}/passport/manage`}
+                >
+                  <Icon name="shield" size={16} />
+                  Паспорт проекта
+                </Link>
+                <Link
+                  className="button button--secondary"
                   to={`/projects/${encodeURIComponent(projectId)}/evidence/reconcile`}
                 >
                   <Icon name="trace" size={16} />
@@ -235,6 +242,21 @@ export function RecordsPage({
             <RecordList
               records={records}
               renderAction={(record) => {
+                if (
+                  section === "EVIDENCE" &&
+                  record.kind === "PASSPORT_FACT" &&
+                  record.current === true
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/passport/manage`}
+                    >
+                      <Icon name="shield" size={15} />
+                      Открыть паспорт
+                    </Link>
+                  );
+                }
                 if (
                   section === "BOQ_SCOPE" &&
                   record.kind === "BOQ_LINE" &&

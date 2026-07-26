@@ -55,7 +55,10 @@ defines browser authentication, information barriers, deployment, and the
 current limits of the human workflow. The
 [controlled BoQ and nomenclature workflow](docs/boq-nomenclature-workflows.md)
 defines operation-time document-set, evidence, controlled-version, review, and
-analogue invariants.
+analogue invariants. The
+[governed project-passport workflow](docs/project-passport-workflow.md)
+defines the evidence, independence, four-eyes, supersession, and stage-gate
+contract for project facts.
 
 ## Implemented application core
 
@@ -72,8 +75,12 @@ The repository currently connects and integration-tests:
   transactions;
 - fail-closed invalidation of derived data when a newer current document
   revision appears;
-- revisioned project-passport facts, BoQ lines, quantity verification, planned
-  cost components, and attested scope-completeness evaluations;
+- revisioned project-passport facts selected only from exact current-set
+  observations, policy-declared required/independent fields, qualified
+  independence leaves, dedicated stale-safe four-eyes decisions, auditable
+  correction/supersession, late-conflict blocking, and a no-manual-value
+  operator workflow; BoQ lines, quantity verification, planned cost
+  components, and attested scope-completeness evaluations;
 - deterministic critical-attribute nomenclature matching, governed analogues,
   policy-versioned quote normalization with deterministic integrity replay,
   commercially complete/independent source triangulation, price decisions,
@@ -185,9 +192,9 @@ The repository currently connects and integration-tests:
   organisation ownership, actor roles and the complete signed audit chain.
 - PostgreSQL approval-evidence integrity: task identity and scope are
   immutable, only explicit decision or auditable document supersession
-  transitions are accepted, approval records are append-only and unique per
-  task, and deferred constraints require the terminal task status to agree
-  with its immutable decision record.
+  or entity-replacement transitions are accepted, approval records are
+  append-only and unique per task, and deferred constraints require the
+  terminal task status to agree with its immutable decision record.
 
 These are application workflows, not a claim that the complete target system
 or its external operational environment has been delivered.
@@ -244,9 +251,10 @@ ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
 schedulers/monitoring, specialist maintenance surfaces, role-based UAT,
 accessibility evidence, and business qualification of the operator interface
 remain to be completed. Controlled reconciliation, current-set BoQ
-authoring/review, scope execution, deterministic nomenclature assessment, and
-analogue review are implemented; that implementation is not a substitute for
-real provider, methodology, catalog-owner, or user-acceptance evidence.
+authoring/review, governed project-passport authoring/review, scope execution,
+deterministic nomenclature assessment, and analogue review are implemented;
+that implementation is not a substitute for real provider, methodology,
+catalog-owner, or user-acceptance evidence.
 Application actor/organisation quotas are implemented, but independently
 deployed ingress connection/body/time limits, unauthenticated-abuse controls,
 upload concurrency limits, and representative abuse/soak evidence remain
