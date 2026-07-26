@@ -4,11 +4,23 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from tenderguard.application.projects import ProjectService
+from tenderguard.config import Settings
 from tenderguard.domain.access import project_role_mask
-from tenderguard.domain.common import content_hash, ensure_utc
-from tenderguard.domain.enums import ActorRole, ProjectAccessLevel, ProjectMembershipStatus
+from tenderguard.domain.common import content_hash, ensure_utc, utc_now
+from tenderguard.domain.enums import (
+    ActorRole,
+    ProjectAccessLevel,
+    ProjectMembershipStatus,
+    VersionStatus,
+)
 from tenderguard.infrastructure.auth import Actor
-from tenderguard.infrastructure.orm import ApprovalTaskRow, ProjectMembershipRow
+from tenderguard.infrastructure.object_store import ObjectStore
+from tenderguard.infrastructure.orm import (
+    ApprovalTaskRow,
+    ControlledVersionRow,
+    ProjectMembershipRow,
+)
 
 
 def approval_task_updated_at(session: Session, task_id: str) -> datetime:
@@ -51,4 +63,69 @@ def project_memberships(
             created_at=now,
         )
         for principal_id, roles in sorted(roles_by_principal.items())
+    )
+
+
+def add_governed_controlled_version(
+    *,
+    session: Session,
+    settings: Settings,
+    object_store: ObjectStore,
+    row: ControlledVersionRow,
+    organization_id: str,
+    creator: Actor,
+    approver: Actor,
+) -> None:
+    assert creator.organization_id == organization_id
+    assert approver.organization_id == organization_id
+    created_at = utc_now()
+    row.payload = {
+        **row.payload,
+        "_governance": {
+            "organization_id": organization_id,
+            "created_by": creator.actor_id,
+            "created_at": created_at.isoformat(),
+        },
+    }
+    row.content_hash = content_hash(
+        {
+            "kind": row.kind,
+            "version_label": row.version_label,
+            "payload": row.payload,
+        }
+    )
+    row.status = VersionStatus.DRAFT.value
+    row.approved_by = None
+    row.approved_at = None
+    session.add(row)
+    session.flush()
+    projects = ProjectService(
+        session=session,
+        settings=settings,
+        object_store=object_store,
+    )
+    projects.record_event(
+        aggregate_type="controlled_version",
+        aggregate_id=row.id,
+        event_type="controlled_version_created",
+        actor=creator,
+        request_id=f"fixture-create-{row.id}",
+        reason="Create governed integration-test fixture",
+        payload={
+            "kind": row.kind,
+            "version_label": row.version_label,
+            "content_hash": row.content_hash,
+        },
+    )
+    row.status = VersionStatus.APPROVED.value
+    row.approved_by = approver.actor_id
+    row.approved_at = utc_now()
+    projects.record_event(
+        aggregate_type="controlled_version",
+        aggregate_id=row.id,
+        event_type="controlled_version_approved",
+        actor=approver,
+        request_id=f"fixture-approve-{row.id}",
+        reason="Independently approve governed integration-test fixture",
+        payload={"content_hash": row.content_hash, "kind": row.kind},
     )

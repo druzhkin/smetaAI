@@ -176,6 +176,11 @@ Production deployment requires:
   evaluated; changed BoQ/rules/models make it stale.
 - A released calculation points to immutable approved versions of all rule,
   catalog, methodology, rate, FX, and model inputs.
+- A controlled version is accepted only when its complete content hash,
+  organisation metadata, owner roles, four-eyes lifecycle and signed
+  creation/approval audit chain reproduce. PostgreSQL rejects direct approved
+  insertion, basis mutation, invalid transitions and deletion; duplicate bound
+  kinds block calculation and release.
 - Release rereads and hashes the snapshot object, recomputes its input/output
   and snapshot hashes, and compares its document-set and controlled-version
   set with the project's current bindings.

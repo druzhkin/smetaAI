@@ -10,13 +10,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tenderguard.application.audit_integrity import AuditIntegrityService
+from tenderguard.application.controlled_version_integrity import (
+    ControlledVersionIntegrityError,
+    require_controlled_version_integrity,
+)
 from tenderguard.config import Settings
-from tenderguard.domain.audit import verify_chain
 from tenderguard.domain.common import canonical_json, content_hash
-from tenderguard.domain.enums import VersionStatus
 from tenderguard.domain.operational_qualification import QualificationResultEnvelope
-from tenderguard.infrastructure.orm import AuditEventRow, ControlledVersionRow
+from tenderguard.infrastructure.orm import ControlledVersionRow
 
 ProfileT = TypeVar("ProfileT", bound=BaseModel)
 
@@ -37,51 +38,18 @@ def load_approved_profile(
     row = session.scalar(select(ControlledVersionRow).where(ControlledVersionRow.id == version_id))
     if row is None:
         raise LookupError(version_id)
-    expected_row_hash = content_hash(
-        {
-            "kind": row.kind,
-            "version_label": row.version_label,
-            "payload": row.payload,
-        }
-    )
-    governance = row.payload.get("_governance")
-    if (
-        row.kind != expected_kind
-        or row.status != VersionStatus.APPROVED.value
-        or row.content_hash != expected_content_hash
-        or row.content_hash != expected_row_hash
-        or not row.approved_by
-        or row.approved_at is None
-        or not isinstance(governance, dict)
-        or not isinstance(governance.get("created_by"), str)
-        or not governance["created_by"]
-        or row.approved_by == governance["created_by"]
-    ):
-        raise ValueError("Controlled qualification profile is not validly approved and bound")
-    events = [
-        AuditIntegrityService._event(event)
-        for event in session.scalars(
-            select(AuditEventRow)
-            .where(
-                AuditEventRow.aggregate_type == "controlled_version",
-                AuditEventRow.aggregate_id == row.id,
-            )
-            .order_by(AuditEventRow.sequence)
+    try:
+        require_controlled_version_integrity(
+            session=session,
+            settings=settings,
+            row=row,
+            expected_kind=expected_kind,
+            expected_content_hash=expected_content_hash,
         )
-    ]
-    created = [event for event in events if event.event_type == "controlled_version_created"]
-    approved = [event for event in events if event.event_type == "controlled_version_approved"]
-    if (
-        not events
-        or not verify_chain(events, settings.audit_verification_keyring)
-        or len(created) != 1
-        or len(approved) != 1
-        or created[0].payload.get("content_hash") != row.content_hash
-        or approved[0].payload.get("content_hash") != row.content_hash
-        or created[0].actor_id != governance["created_by"]
-        or approved[0].actor_id != row.approved_by
-    ):
-        raise ValueError("Controlled qualification profile audit approval does not verify")
+    except ControlledVersionIntegrityError as error:
+        raise ValueError(
+            "Controlled qualification profile is not validly approved and bound"
+        ) from error
     raw_profile = {key: value for key, value in row.payload.items() if key != "_governance"}
     return profile_type.model_validate(raw_profile), row
 

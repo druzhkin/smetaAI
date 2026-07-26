@@ -12,6 +12,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.controlled_version_integrity import (
+    controlled_version_integrity_valid,
+)
 from tenderguard.application.operational_qualification import load_approved_profile
 from tenderguard.application.snapshot_integrity import read_verified_snapshot
 from tenderguard.application.stage_gates import (
@@ -1603,19 +1606,44 @@ class ProjectService:
                 .where(ProjectControlledVersionRow.project_id == project.id)
             ).scalars()
         )
-        controlled_versions = tuple(
-            ControlledVersion(
-                kind=row.kind,
-                version_id=row.id,
-                content_hash=row.content_hash,
-                status=VersionStatus(row.status),
-                approved_by=row.approved_by,
-                approved_at=ensure_utc(row.approved_at),
-            )
+        invalid_controlled_version_ids = {
+            row.id
             for row in bound_versions
-        )
+            if not controlled_version_integrity_valid(
+                session=self.session,
+                settings=self.settings,
+                row=row,
+                expected_organization_id=project.organization_id,
+            )
+        }
+        versions_by_kind: dict[str, list[ControlledVersionRow]] = {}
+        for row in bound_versions:
+            versions_by_kind.setdefault(row.kind, []).append(row)
+        for rows in versions_by_kind.values():
+            if len(rows) > 1:
+                invalid_controlled_version_ids.update(row.id for row in rows)
+        controlled_version_models: list[ControlledVersion] = []
+        for row in bound_versions:
+            try:
+                controlled_version_models.append(
+                    ControlledVersion(
+                        kind=row.kind,
+                        version_id=row.id,
+                        content_hash=row.content_hash,
+                        status=VersionStatus(row.status),
+                        approved_by=row.approved_by,
+                        approved_at=ensure_utc(row.approved_at),
+                    )
+                )
+            except (TypeError, ValueError):
+                invalid_controlled_version_ids.add(row.id)
+        controlled_versions = tuple(controlled_version_models)
         approval_policy = next(
-            (row for row in bound_versions if row.kind == "approval_policy"),
+            (
+                row
+                for row in bound_versions
+                if row.kind == "approval_policy" and row.id not in invalid_controlled_version_ids
+            ),
             None,
         )
         threshold_raw = (
@@ -1817,10 +1845,7 @@ class ProjectService:
         production_qualified = any(
             row.kind == "production_qualification"
             and row.status == VersionStatus.APPROVED.value
-            and self._approved_controlled_version_valid(
-                row,
-                organization_id=project.organization_id,
-            )
+            and row.id not in invalid_controlled_version_ids
             and self._production_qualification_evidence_valid(
                 row.payload,
                 organization_id=project.organization_id,
@@ -1862,6 +1887,7 @@ class ProjectService:
             max_unverified_cost_share=threshold,
             outstanding_approval_ids=outstanding_approvals,
             controlled_versions=controlled_versions,
+            invalid_controlled_version_ids=tuple(sorted(invalid_controlled_version_ids)),
             snapshot=snapshot,
             snapshot_integrity_valid=snapshot_integrity_valid,
             snapshot_controlled_versions_match=snapshot_controlled_versions_match,
@@ -2572,48 +2598,11 @@ class ProjectService:
         *,
         organization_id: str,
     ) -> bool:
-        governance = row.payload.get("_governance")
-        if (
-            row.status != VersionStatus.APPROVED.value
-            or not row.approved_by
-            or row.approved_at is None
-            or not isinstance(governance, dict)
-            or governance.get("organization_id") != organization_id
-            or not isinstance(governance.get("created_by"), str)
-            or governance.get("created_by") == row.approved_by
-            or content_hash(
-                {
-                    "kind": row.kind,
-                    "version_label": row.version_label,
-                    "payload": row.payload,
-                }
-            )
-            != row.content_hash
-        ):
-            return False
-        events = [
-            self._audit_domain(event)
-            for event in self.session.scalars(
-                select(AuditEventRow)
-                .where(
-                    AuditEventRow.aggregate_type == "controlled_version",
-                    AuditEventRow.aggregate_id == row.id,
-                )
-                .order_by(AuditEventRow.sequence)
-            )
-        ]
-        created = [event for event in events if event.event_type == "controlled_version_created"]
-        approved = [event for event in events if event.event_type == "controlled_version_approved"]
-        return bool(
-            events
-            and verify_chain(events, self.settings.audit_verification_keyring)
-            and len(created) == len(approved) == 1
-            and created[0].actor_id == governance.get("created_by")
-            and created[0].payload.get("kind") == row.kind
-            and created[0].payload.get("version_label") == row.version_label
-            and created[0].payload.get("content_hash") == row.content_hash
-            and approved[0].actor_id == row.approved_by
-            and approved[0].payload.get("content_hash") == row.content_hash
+        return controlled_version_integrity_valid(
+            session=self.session,
+            settings=self.settings,
+            row=row,
+            expected_organization_id=organization_id,
         )
 
     @staticmethod

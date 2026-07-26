@@ -268,6 +268,21 @@ def test_production_qualification_and_normative_engine_fail_closed() -> None:
     assert "PRODUCTION_QUALIFICATION_INCOMPLETE" in codes
 
 
+def test_invalid_controlled_version_integrity_blocks_release() -> None:
+    decision = evaluate_bid_release(
+        good_context().model_copy(
+            update={"invalid_controlled_version_ids": ("calculation-model-v1",)}
+        )
+    )
+    assert not decision.allowed
+    finding = next(
+        item
+        for item in decision.findings
+        if item.code.value == "CONTROLLED_VERSION_INTEGRITY_FAILED"
+    )
+    assert finding.entity_ids == ("calculation-model-v1",)
+
+
 def test_operational_integrity_failure_blocks_release() -> None:
     decision = evaluate_bid_release(
         good_context().model_copy(update={"operational_integrity_valid": False})

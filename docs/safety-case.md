@@ -69,6 +69,14 @@ the calculation-run record before exposing a total. PostgreSQL rejects
 in-place mutation or deletion of calculation runs, atomic inputs, scenario
 runs and release decisions.
 
+Governed versions are subject to the same distrust of persisted status.
+PostgreSQL permits insertion only as an unapproved draft, allows only the
+exact four-eyes approval transition, and rejects basis mutation or deletion.
+Binding, qualification-profile loading, calculation and release independently
+reproduce the content hash and signed creation/approval audit chain. Invalid
+or duplicate bound version kinds create a release blocker rather than being
+silently selected.
+
 Release review is also time-of-check/time-of-use bound. The displayed bid and
 internal decisions have separate hashes over the exact project state/version,
 document set, complete release context and decision. The server rebuilds that

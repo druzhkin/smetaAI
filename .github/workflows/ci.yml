@@ -54,6 +54,7 @@ jobs:
           uv run pytest \
             tests/integration/test_pricing_integrity_postgresql.py \
             tests/integration/test_calculation_integrity_postgresql.py \
+            tests/integration/test_controlled_version_integrity_postgresql.py \
             tests/integration/test_business_qualification_postgresql.py \
             tests/integration/test_production_gate_evidence_postgresql.py
 

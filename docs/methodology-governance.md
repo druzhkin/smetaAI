@@ -62,8 +62,14 @@ Changing the template binding makes an earlier calculation snapshot stale for
 new release/export purposes.
 
 Controlled versions are created in `DRAFT`, approved by another authorised
-person, and explicitly bound to a project. A later version does not silently
-change an existing calculation snapshot.
+person, and explicitly bound to a project. PostgreSQL permits only the exact
+`DRAFT -> APPROVED` lifecycle transition and makes identity, payload and
+approval evidence immutable. Binding, profile loading, calculation and
+release reproduce the content hash, organisation, actor roles, four-eyes
+separation and complete signed audit chain; a status string alone is never
+accepted. A project cannot calculate with ambiguous duplicate version kinds.
+A later version does not silently change an existing calculation snapshot.
+See [controlled-version integrity](controlled-version-integrity.md).
 
 Approval thresholds are organisation-owned values. The application may
 evaluate a configured threshold, but it must not create a monetary threshold,

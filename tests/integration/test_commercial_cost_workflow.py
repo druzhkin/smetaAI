@@ -12,6 +12,7 @@ from tenderguard.application.contracts import (
     ContractService,
 )
 from tenderguard.application.lineage import LineageService
+from tenderguard.application.projects import ProjectService
 from tenderguard.application.stage_gates import pricing_stage_blockers
 from tenderguard.config import Settings
 from tenderguard.domain.calculation import (
@@ -55,7 +56,11 @@ from tenderguard.infrastructure.orm import (
     ProjectRow,
     QuantityRow,
 )
-from tests.integration.support import approval_task_updated_at, project_memberships
+from tests.integration.support import (
+    add_governed_controlled_version,
+    approval_task_updated_at,
+    project_memberships,
+)
 
 
 def test_commercial_cost_model_requires_evidence_independent_recalculation_and_four_eyes(
@@ -73,6 +78,26 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
     store = LocalObjectStore(tmp_path / "objects")
     estimator = Actor("estimator-commercial", "org-1", frozenset({ActorRole.ESTIMATOR}))
     reviewer = Actor("reviewer-commercial", "org-1", frozenset({ActorRole.REVIEWER}))
+    methodology_creator = Actor(
+        "methodology-creator-commercial",
+        "org-1",
+        frozenset({ActorRole.METHODOLOGY_OWNER}),
+    )
+    methodology_approver = Actor(
+        "methodology-approver-commercial",
+        "org-1",
+        frozenset({ActorRole.METHODOLOGY_OWNER}),
+    )
+    catalog_creator = Actor(
+        "catalog-creator-commercial",
+        "org-1",
+        frozenset({ActorRole.CATALOG_OWNER}),
+    )
+    catalog_approver = Actor(
+        "catalog-approver-commercial",
+        "org-1",
+        frozenset({ActorRole.CATALOG_OWNER}),
+    )
     now = datetime(2026, 7, 24, tzinfo=UTC)
 
     versions = (
@@ -217,7 +242,17 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                 now=now,
             )
         )
-        session.add_all(versions)
+        for version in versions:
+            is_catalog = version.kind == "catalog"
+            add_governed_controlled_version(
+                session=session,
+                settings=settings,
+                object_store=store,
+                row=version,
+                organization_id="org-1",
+                creator=catalog_creator if is_catalog else methodology_creator,
+                approver=catalog_approver if is_catalog else methodology_approver,
+            )
         for version, purpose in zip(
             versions,
             (
@@ -948,5 +983,59 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
         assert {item.basis_type for item in derived.values()} == {"DERIVED_COMMERCIAL_COST"}
         assert len(derived["project-logistics"].source_observations) == 3
         assert len(derived["contract-finance"].source_observations) == 3
+
+        duplicate_model = ControlledVersionRow(
+            id="calculation-model-commercial-duplicate",
+            kind="calculation_model",
+            version_label="commercial-duplicate",
+            content_hash="0" * 64,
+            status="DRAFT",
+            payload={
+                "policy": {
+                    "currency": "RUB",
+                    "line_rounding_scale": 2,
+                    "total_rounding_scale": 2,
+                    "rounding_mode": "ROUND_HALF_UP",
+                    "independent_tolerance": "0.00",
+                }
+            },
+            approved_by=None,
+            approved_at=None,
+        )
+        add_governed_controlled_version(
+            session=session,
+            settings=settings,
+            object_store=store,
+            row=duplicate_model,
+            organization_id="org-1",
+            creator=methodology_creator,
+            approver=methodology_approver,
+        )
+        session.add(
+            ProjectControlledVersionRow(
+                project_id=project.id,
+                controlled_version_id=duplicate_model.id,
+                purpose="calculation_model_duplicate",
+                bound_by=methodology_approver.actor_id,
+                bound_at=now,
+            )
+        )
+        session.flush()
+        project.state = ApprovalState.CALCULATION_IN_PROGRESS.value
+        session.flush()
+        ambiguous = calculation.context(actor=estimator, project_id=project.id)
+        assert ambiguous.candidate is None
+        assert ambiguous.blockers == (
+            "A project cannot calculate with ambiguous governed version kinds",
+        )
+        release_context = ProjectService(
+            session=session,
+            settings=settings,
+            object_store=store,
+        ).evaluate_release(actor=estimator, project_id=project.id)
+        assert {
+            "calculation-model-commercial-v1",
+            duplicate_model.id,
+        } <= set(release_context.invalid_controlled_version_ids)
 
     engine.dispose()

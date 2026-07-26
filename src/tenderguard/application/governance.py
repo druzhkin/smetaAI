@@ -7,6 +7,10 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.controlled_version_integrity import (
+    controlled_version_owner_roles,
+    require_controlled_version_integrity,
+)
 from tenderguard.application.projects import ProjectService
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash, ensure_utc, utc_now
@@ -123,13 +127,16 @@ class GovernanceService:
         if row is None:
             raise LookupError(version_id)
         self._require_owner(actor, row.kind)
-        governance = row.payload.get("_governance", {})
-        if governance.get("organization_id") != actor.organization_id:
-            raise LookupError(version_id)
-        if governance.get("created_by") == actor.actor_id:
+        require_controlled_version_integrity(
+            session=self.session,
+            settings=self.settings,
+            row=row,
+            expected_organization_id=actor.organization_id,
+            required_status="DRAFT",
+        )
+        governance = row.payload["_governance"]
+        if governance["created_by"] == actor.actor_id:
             raise ValueError("Controlled version requires four-eyes approval")
-        if row.status != VersionStatus.DRAFT.value:
-            raise ValueError("Only DRAFT controlled versions can be approved")
         if row.kind == "production_gate_evidence_profile":
             profile = ProductionGateEvidenceProfile.model_validate(
                 {key: value for key, value in row.payload.items() if key != "_governance"}
@@ -188,11 +195,12 @@ class GovernanceService:
         if version is None:
             raise LookupError(version_id)
         self._require_owner(actor, version.kind)
-        governance = version.payload.get("_governance", {})
-        if governance.get("organization_id") != actor.organization_id:
-            raise LookupError(version_id)
-        if version.status != VersionStatus.APPROVED.value:
-            raise ValueError("Only APPROVED controlled versions can be bound")
+        require_controlled_version_integrity(
+            session=self.session,
+            settings=self.settings,
+            row=version,
+            expected_organization_id=actor.organization_id,
+        )
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
@@ -210,6 +218,22 @@ class GovernanceService:
                 ProjectControlledVersionRow.purpose == purpose,
             )
         )
+        ambiguous_kind = self.session.scalar(
+            select(ProjectControlledVersionRow)
+            .join(
+                ControlledVersionRow,
+                ControlledVersionRow.id == ProjectControlledVersionRow.controlled_version_id,
+            )
+            .where(
+                ProjectControlledVersionRow.project_id == project.id,
+                ProjectControlledVersionRow.purpose != purpose,
+                ControlledVersionRow.kind == version.kind,
+            )
+        )
+        if ambiguous_kind is not None:
+            raise ValueError(
+                "A project cannot bind the same governed version kind to multiple purposes"
+            )
         if existing:
             self.session.delete(existing)
             self.session.flush()
@@ -255,13 +279,15 @@ class GovernanceService:
         )
         if version is None:
             raise LookupError(version_id)
-        governance = version.payload.get("_governance", {})
-        if governance.get("organization_id") != actor.organization_id:
-            raise LookupError(version_id)
         if version.kind != "adapter_qualification":
             raise ValueError("Controlled version is not an adapter qualification")
-        if version.status != VersionStatus.APPROVED.value or not version.approved_by:
-            raise ValueError("Adapter qualification controlled version is not approved")
+        require_controlled_version_integrity(
+            session=self.session,
+            settings=self.settings,
+            row=version,
+            expected_organization_id=actor.organization_id,
+            expected_kind="adapter_qualification",
+        )
         payload = version.payload
         required = (
             "adapter_name",
@@ -425,14 +451,7 @@ class GovernanceService:
 
     @staticmethod
     def _owner_roles(kind: str) -> tuple[ActorRole, ...]:
-        if kind in {
-            "catalog",
-            "nomenclature_catalog",
-            "nomenclature_equivalence_rules",
-            "equivalence_rules",
-        }:
-            return (ActorRole.CATALOG_OWNER,)
-        return (ActorRole.METHODOLOGY_OWNER,)
+        return controlled_version_owner_roles(kind)
 
     @staticmethod
     def _domain(row: ControlledVersionRow) -> ControlledVersion:

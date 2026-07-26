@@ -48,7 +48,7 @@ def test_postgresql_pricing_evidence_guards_enforce_only_allowed_transitions() -
                     approved_by, approved_at
                 ) VALUES (
                     :policy_id, 'PRICE_POLICY', :version_label, :content_hash,
-                    'APPROVED', CAST('{}' AS json), 'ci-reviewer', now()
+                    'DRAFT', CAST('{}' AS json), NULL, NULL
                 )
                 """
             ),
@@ -57,6 +57,18 @@ def test_postgresql_pricing_evidence_guards_enforce_only_allowed_transitions() -
                 "version_label": f"ci-{suffix}",
                 "content_hash": "a" * 64,
             },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE controlled_versions
+                SET status = 'APPROVED',
+                    approved_by = 'ci-reviewer',
+                    approved_at = now()
+                WHERE id = :policy_id
+                """
+            ),
+            {"policy_id": policy_id},
         )
         connection.execute(
             text(

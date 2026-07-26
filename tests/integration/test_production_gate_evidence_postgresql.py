@@ -45,8 +45,8 @@ def test_postgresql_production_gate_evidence_is_append_only() -> None:
                     approved_by, approved_at
                 ) VALUES (
                     :profile_id, 'production_gate_evidence_profile',
-                    :profile_label, :profile_hash, 'APPROVED',
-                    CAST('{}' AS json), 'profile-approver', now()
+                    :profile_label, :profile_hash, 'DRAFT',
+                    CAST('{}' AS json), NULL, NULL
                 )
                 """
             ),
@@ -55,6 +55,18 @@ def test_postgresql_production_gate_evidence_is_append_only() -> None:
                 "profile_label": f"profile-{suffix}",
                 "profile_hash": "a" * 64,
             },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE controlled_versions
+                SET status = 'APPROVED',
+                    approved_by = 'profile-approver',
+                    approved_at = now()
+                WHERE id = :profile_id
+                """
+            ),
+            {"profile_id": profile_id},
         )
         connection.execute(
             text(

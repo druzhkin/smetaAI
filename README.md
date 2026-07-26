@@ -153,6 +153,10 @@ The repository currently connects and integration-tests:
   Ed25519 external attestations, mandatory internal load/recovery results,
   four-eyes approval, expiry/revocation, PostgreSQL append-only guards, and
   live revalidation during controlled-version approval and bid release.
+- universal governed-version integrity: PostgreSQL accepts only draft
+  creation and the exact four-eyes approval transition, while binding,
+  profile loading, calculation and release reproduce content hashes,
+  organisation ownership, actor roles and the complete signed audit chain.
 
 These are application workflows, not a claim that the complete target system
 or its external operational environment has been delivered.
@@ -224,6 +228,8 @@ Historical, blind and parallel controls are specified in the
 [business qualification contract](docs/business-qualification.md).
 The non-business readiness evidence contract is specified in the
 [production gate evidence registry](docs/production-gate-evidence.md).
+The governed model/rule/catalog lifecycle is specified in
+[controlled-version integrity](docs/controlled-version-integrity.md).
 Open security findings are in
 [the security review](security_best_practices_report.md).
 The untrusted-file boundary is specified in the

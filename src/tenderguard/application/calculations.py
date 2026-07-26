@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from tenderguard.application.approvals import ApprovalService
 from tenderguard.application.boq import CostComponentDraft
+from tenderguard.application.controlled_version_integrity import (
+    require_controlled_version_integrity,
+)
 from tenderguard.application.pricing import PricingService
 from tenderguard.application.projects import ProjectService, ProjectView
 from tenderguard.application.snapshot_integrity import read_verified_snapshot
@@ -533,6 +536,16 @@ class CalculationService:
         if not document_set_revision_id:
             raise ValueError("Current document-set revision is not confirmed")
         rows = self._bound_version_rows(project.id) if version_rows is None else version_rows
+        for row in rows:
+            require_controlled_version_integrity(
+                session=self.session,
+                settings=self.settings,
+                row=row,
+                expected_organization_id=project.organization_id,
+            )
+        bound_kinds = [row.kind for row in rows]
+        if len(bound_kinds) != len(set(bound_kinds)):
+            raise ValueError("A project cannot calculate with ambiguous governed version kinds")
         calculation_models = list(
             self.session.scalars(
                 select(ControlledVersionRow)

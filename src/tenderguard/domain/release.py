@@ -37,6 +37,7 @@ class ReleaseContext(DomainModel):
     max_unverified_cost_share: Decimal | None = Field(default=None, ge=0, le=1)
     outstanding_approval_ids: tuple[str, ...] = ()
     controlled_versions: tuple[ControlledVersion, ...] = ()
+    invalid_controlled_version_ids: tuple[str, ...] = ()
     required_controlled_version_kinds: frozenset[str] = frozenset(
         {
             "methodology",
@@ -217,6 +218,15 @@ def evaluate_bid_release(context: ReleaseContext) -> GateDecision:
                 FindingCode.CONTROLLED_VERSION_NOT_APPROVED,
                 "Required models, catalogs, rules, or methodology are not approved",
                 unapproved_versions,
+            )
+        )
+    if context.invalid_controlled_version_ids:
+        findings.append(
+            _finding(
+                FindingCode.CONTROLLED_VERSION_INTEGRITY_FAILED,
+                "One or more bound governed versions fail content, lifecycle, "
+                "four-eyes, or signed audit verification",
+                context.invalid_controlled_version_ids,
             )
         )
 

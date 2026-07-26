@@ -56,13 +56,13 @@ def test_postgresql_business_qualification_evidence_is_append_only() -> None:
                 ) VALUES
                     (
                         :profile_id, 'business_qualification_profile',
-                        :profile_label, :profile_hash, 'APPROVED',
-                        CAST('{}' AS json), 'owner-b', now()
+                        :profile_label, :profile_hash, 'DRAFT',
+                        CAST('{}' AS json), NULL, NULL
                     ),
                     (
                         :dataset_id, 'business_qualification_dataset',
-                        :dataset_label, :dataset_hash, 'APPROVED',
-                        CAST('{}' AS json), 'owner-b', now()
+                        :dataset_label, :dataset_hash, 'DRAFT',
+                        CAST('{}' AS json), NULL, NULL
                     )
                 """
             ),
@@ -74,6 +74,18 @@ def test_postgresql_business_qualification_evidence_is_append_only() -> None:
                 "dataset_label": f"dataset-{suffix}",
                 "dataset_hash": "b" * 64,
             },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE controlled_versions
+                SET status = 'APPROVED',
+                    approved_by = 'owner-b',
+                    approved_at = now()
+                WHERE id IN (:profile_id, :dataset_id)
+                """
+            ),
+            {"profile_id": profile_id, "dataset_id": dataset_id},
         )
         connection.execute(
             text(
