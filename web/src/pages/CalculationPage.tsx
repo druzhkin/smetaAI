@@ -315,6 +315,13 @@ export function CalculationPage({
         <div className="records-header__actions">
           <Link
             className="button button--secondary"
+            to={`/projects/${encodeURIComponent(projectId)}/scenarios`}
+          >
+            <Icon name="refresh" size={16} />
+            Сценарии
+          </Link>
+          <Link
+            className="button button--secondary"
             to={`/projects/${encodeURIComponent(projectId)}/release`}
           >
             <Icon name="shield" size={16} />

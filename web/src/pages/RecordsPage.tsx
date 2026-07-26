@@ -168,6 +168,15 @@ export function RecordsPage({
                 Сопоставить номенклатуру
               </Link>
             )}
+          {section === "CALCULATION" && (
+            <Link
+              className="button button--secondary"
+              to={`/projects/${encodeURIComponent(projectId)}/scenarios`}
+            >
+              <Icon name="refresh" size={16} />
+              Сценарии
+            </Link>
+          )}
           <StatusPill value={projectQuery.data.state} />
         </div>
       </header>

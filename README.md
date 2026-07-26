@@ -89,7 +89,9 @@ The repository currently connects and integration-tests:
   recursive source-to-document lineage, and integrity checks against the
   current document set and controlled-version bindings;
 - approved-policy scenario calculation from a fixed snapshot, including a
-  separate independent recalculation for each scenario;
+  separate independent recalculation for each scenario, replay-verified
+  persisted comparisons, and a controlled operator screen that submits no
+  financial override values;
 - deterministic Ed25519-signed estimate/audit export packages containing the
   fixed snapshot, recursive lineage, controlled versions, approvals, workflow,
   release decision, and verified project audit chain;

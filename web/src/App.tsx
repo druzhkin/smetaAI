@@ -53,6 +53,10 @@ const NomenclatureReviewPage = lazy(async () => ({
   default: (await import("./pages/NomenclatureReviewPage"))
     .NomenclatureReviewPage,
 }));
+const ScenarioComparisonPage = lazy(async () => ({
+  default: (await import("./pages/ScenarioComparisonPage"))
+    .ScenarioComparisonPage,
+}));
 
 const recordSections = new Set<ProjectRecordSection>([
   "DOCUMENTS",
@@ -368,6 +372,13 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
         rawSection === "release"
       ) {
         page = <ReleasePage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 3 &&
+        rawSection === "scenarios"
+      ) {
+        page = <ScenarioComparisonPage config={config} projectId={projectId} />;
       } else if (
         projectId !== null &&
         projectId !== "" &&

@@ -39,6 +39,8 @@ import type {
   ReleaseAttempt,
   ReleaseGateSet,
   ScopeRun,
+  ScenarioContext,
+  ScenarioExecution,
   WorkItemPage,
   WorkItemDetail,
 } from "./types";
@@ -1053,6 +1055,46 @@ export function executeCurrentCalculation(
       body: {
         expected_row_version: input.expectedRowVersion,
         candidate_hash: input.candidateHash,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getScenarioContext(
+  context: RequestContext,
+  projectId: string,
+  snapshotId?: string,
+  signal?: AbortSignal,
+): Promise<ScenarioContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/scenarios/context`,
+    { snapshot_id: snapshotId },
+    signal,
+  );
+}
+
+export function executeScenario(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    snapshotId: string;
+    scenarioKey: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ScenarioExecution> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/scenarios/calculate`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          snapshot_id: input.snapshotId,
+          scenario_key: input.scenarioKey,
+        },
         reason: input.reason,
       },
     },

@@ -106,6 +106,9 @@ Automated checks cover:
 - primary/independent result mismatch;
 - snapshot-object and calculation-run tampering;
 - stable scenario selectors resolved against the fixed snapshot;
+- scenario comparison context replaying the snapshot, calculation run,
+  approved policy, stored definition, primary result and independent result,
+  with explicit bounded-history truncation;
 - SQLite migration round-trip and real PostgreSQL immutability triggers;
 - API request shape and browser workflows.
 
@@ -116,3 +119,12 @@ methodology prerequisites were shown as hard stops with no signing command.
 Desktop and 390-by-844 layouts produced no browser console errors. This is
 engineering evidence only; it is not historical accuracy, role-based UAT, or
 authority to release a real bid.
+
+Real Chromium QA on 26 July 2026 also exercised the scenario comparison route
+against the full governed integration fixture. It reproduced a 15,760.25 RUB
+base, an 18,835.00 RUB approved-policy scenario, a 3,074.75 RUB delta and the
+independent result; a second idempotency-protected UI command produced a new
+append-only run without submitting any amount or override. Desktop and
+390-by-844 layouts had no application console warning/error or horizontal
+overflow. This remains engineering evidence, not organisation scenario
+qualification or bid-release authority.

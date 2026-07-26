@@ -1821,13 +1821,30 @@ class ProjectReadService:
                 id=row.id,
                 section=ProjectRecordSection.CALCULATION,
                 kind="SCENARIO",
-                title=row.scenario_version,
+                title=self._string(row.payload.get("scenario_key")) or row.scenario_version,
+                subtitle=row.scenario_version,
                 status=row.status,
                 amount=row.grand_total,
+                currency=self._string(
+                    row.payload.get("result", {}).get("primary", {}).get("currency")
+                    if isinstance(row.payload.get("result"), dict)
+                    and isinstance(row.payload.get("result", {}).get("primary"), dict)
+                    else None
+                ),
                 occurred_at=row.created_at,
                 attributes={
                     "base_calculation_run_id": row.base_calculation_run_id,
-                    "independent_validation": row.payload.get("independent_validation"),
+                    "base_snapshot_id": row.payload.get("base_snapshot_id"),
+                    "base_snapshot_hash": row.payload.get("base_snapshot_hash"),
+                    "scenario_policy_version_id": row.scenario_version,
+                    "definition": row.payload.get("definition"),
+                    "independent_validation": (
+                        row.payload.get("result", {}).get("independent")
+                        if isinstance(row.payload.get("result"), dict)
+                        else None
+                    ),
+                    "input_signature": row.payload.get("input_signature"),
+                    "executed_by": row.payload.get("executed_by"),
                 },
             )
             for row in self.session.scalars(scenarios.limit(limit))

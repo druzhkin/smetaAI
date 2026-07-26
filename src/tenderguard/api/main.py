@@ -215,6 +215,7 @@ from .schemas import (
     RiskItemResponse,
     RunScopeRequest,
     RuntimeConfigResponse,
+    ScenarioContextResponse,
     ScenarioExecutionResponse,
     ScopeRunResponse,
     SnapshotLineageResponse,
@@ -2964,6 +2965,23 @@ def create_app(
                 reason=payload.reason,
             )
         return CalculationExecutionResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/scenarios/context",
+        response_model=ScenarioContextResponse,
+    )
+    def get_scenario_context(
+        project_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        snapshot_id: Annotated[str | None, Query(max_length=64)] = None,
+    ) -> ScenarioContextResponse:
+        result = scenario_service(session).context(
+            actor=actor,
+            project_id=project_id,
+            snapshot_id=snapshot_id,
+        )
+        return ScenarioContextResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/scenarios/calculate",

@@ -11,6 +11,7 @@ import {
   decideWorkItem,
   evaluatePriceItem,
   executeCurrentCalculation,
+  executeScenario,
   finalizeNomenclatureAnalogue,
   getBoqAuthoringContext,
   getBoqLineReview,
@@ -20,6 +21,7 @@ import {
   getPriceQuoteCandidate,
   getReconciliationContext,
   getReleaseGates,
+  getScenarioContext,
   normalizePriceQuote,
   proposeNomenclatureAnalogue,
   proposeQuantityChange,
@@ -790,6 +792,75 @@ describe("controlled mutations", () => {
       expected_row_version: 17,
       candidate_hash: "a".repeat(64),
       reason: "Fix the exact server-generated candidate",
+    });
+  });
+
+  it("sends only governed scenario identifiers and the auditable reason", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project_id: "project/1",
+            selected_snapshot_id: "snapshot/1",
+            definitions: [{ scenario_id: "supplier-stress" }],
+            blockers: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            scenario_run_id: "scenario-run-1",
+            base_snapshot_id: "snapshot/1",
+          }),
+          {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getScenarioContext(context, "project/1", "snapshot/1");
+    await executeScenario(context, {
+      projectId: "project/1",
+      snapshotId: "snapshot/1",
+      scenarioKey: "supplier-stress",
+      reason: "Evaluate the approved supplier stress scenario",
+      idempotencyKey: "scenario-operation",
+    });
+
+    const [contextUrl, contextInit] = fetchMock.mock.calls[0] as [
+      URL,
+      RequestInit,
+    ];
+    expect(contextUrl.pathname).toBe(
+      "/v1/projects/project%2F1/scenarios/context",
+    );
+    expect(contextUrl.searchParams.get("snapshot_id")).toBe("snapshot/1");
+    expect(contextInit.method).toBe("GET");
+
+    const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [
+      URL,
+      RequestInit,
+    ];
+    expect(executeUrl.pathname).toBe(
+      "/v1/projects/project%2F1/scenarios/calculate",
+    );
+    expect(executeInit.headers).toMatchObject({
+      "Idempotency-Key": "scenario-operation",
+    });
+    expect(JSON.parse(String(executeInit.body))).toEqual({
+      command: {
+        snapshot_id: "snapshot/1",
+        scenario_key: "supplier-stress",
+      },
+      reason: "Evaluate the approved supplier stress scenario",
     });
   });
 

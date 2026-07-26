@@ -45,6 +45,7 @@ from tenderguard.infrastructure.orm import (
     QuantityRow,
     RiskCalculationRow,
     RiskItemRow,
+    ScenarioRunRow,
 )
 
 
@@ -1381,7 +1382,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
             purpose="price_policy",
         )
-        approve_version(
+        scenario_policy = approve_version(
             "scenario_policy",
             "scenario-policy-1",
             {
@@ -2229,6 +2230,47 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         assert evidence["document"]["revision_id"] == uploaded_payload["document_revision_id"]
         assert len(evidence["source_observations"]) == 2
 
+        scenario_context = client.get(
+            f"/v1/projects/{project['id']}/scenarios/context",
+            headers=operator,
+        )
+        assert scenario_context.status_code == 200, scenario_context.text
+        scenario_context_payload = scenario_context.json()
+        assert scenario_context_payload["project_state"] == "INDEPENDENT_VALIDATION"
+        assert scenario_context_payload["current_document_set_revision_id"] == candidate_id
+        assert (
+            scenario_context_payload["scenario_policy_version_id"] == scenario_policy["version_id"]
+        )
+        assert scenario_context_payload["selected_snapshot_id"] == result["snapshot"]["snapshot_id"]
+        assert scenario_context_payload["snapshots_truncated"] is False
+        assert scenario_context_payload["snapshots"][0]["integrity_valid"] is True
+        assert scenario_context_payload["snapshots"][0]["grand_total"] == "15760.25"
+        assert scenario_context_payload["definitions"][0]["scenario_id"] == "supplier-stress"
+        assert scenario_context_payload["comparisons"] == []
+        assert scenario_context_payload["comparisons_truncated"] is False
+        assert scenario_context_payload["blockers"] == []
+
+        unknown_scenario_snapshot = client.get(
+            f"/v1/projects/{project['id']}/scenarios/context",
+            headers=operator,
+            params={"snapshot_id": "snapshot-that-does-not-exist"},
+        )
+        assert unknown_scenario_snapshot.status_code == 404
+
+        non_normalized_scenario = client.post(
+            f"/v1/projects/{project['id']}/scenarios/calculate",
+            headers=operator,
+            json={
+                "command": {
+                    "snapshot_id": f" {result['snapshot']['snapshot_id']}",
+                    "scenario_key": "supplier-stress",
+                },
+                "reason": "Reject a non-normalized snapshot identity",
+            },
+        )
+        assert non_normalized_scenario.status_code == 422
+        assert "identifiers must be normalized" in non_normalized_scenario.text
+
         scenario = client.post(
             f"/v1/projects/{project['id']}/scenarios/calculate",
             headers=operator,
@@ -2241,8 +2283,63 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
         )
         assert scenario.status_code == 201, scenario.text
-        assert scenario.json()["result"]["primary"]["grand_total"] == "18835.00"
-        assert scenario.json()["result"]["independent"]["passed"] is True
+        scenario_payload = scenario.json()
+        assert scenario_payload["result"]["primary"]["grand_total"] == "18835.00"
+        assert scenario_payload["result"]["independent"]["passed"] is True
+
+        compared_context = client.get(
+            f"/v1/projects/{project['id']}/scenarios/context",
+            headers=operator,
+            params={"snapshot_id": result["snapshot"]["snapshot_id"]},
+        )
+        assert compared_context.status_code == 200, compared_context.text
+        comparison = compared_context.json()["comparisons"][0]
+        assert comparison["scenario_run_id"] == scenario_payload["scenario_run_id"]
+        assert comparison["base_grand_total"] == "15760.25"
+        assert comparison["scenario_grand_total"] == "18835.00"
+        assert comparison["absolute_delta"] == "3074.75"
+        assert comparison["relative_delta_percent"] == "19.5095"
+        assert comparison["independent_validation_passed"] is True
+        assert comparison["integrity_valid"] is True
+        assert compared_context.json()["blockers"] == []
+
+        calculation_records = client.get(
+            f"/v1/projects/{project['id']}/records",
+            headers=operator,
+            params={"section": "CALCULATION", "limit": 100},
+        )
+        assert calculation_records.status_code == 200, calculation_records.text
+        scenario_record = next(
+            item
+            for item in calculation_records.json()["items"]
+            if item["id"] == scenario_payload["scenario_run_id"]
+        )
+        assert scenario_record["title"] == "supplier-stress"
+        assert scenario_record["subtitle"] == scenario_payload["scenario_policy_version_id"]
+        assert scenario_record["currency"] == "RUB"
+        assert scenario_record["attributes"]["independent_validation"]["passed"] is True
+
+        with create_session_factory(engine).begin() as session:
+            stored_scenario = session.get(
+                ScenarioRunRow,
+                scenario_payload["scenario_run_id"],
+            )
+            assert stored_scenario is not None
+            stored_scenario.grand_total += Decimal("1")
+        tampered_context = client.get(
+            f"/v1/projects/{project['id']}/scenarios/context",
+            headers=operator,
+        )
+        assert tampered_context.status_code == 200, tampered_context.text
+        assert tampered_context.json()["comparisons"][0]["integrity_valid"] is False
+        assert "SCENARIO_RUN_INTEGRITY_FAILED" in tampered_context.json()["blockers"]
+        with create_session_factory(engine).begin() as session:
+            stored_scenario = session.get(
+                ScenarioRunRow,
+                scenario_payload["scenario_run_id"],
+            )
+            assert stored_scenario is not None
+            stored_scenario.grand_total -= Decimal("1")
 
         replacement = client.post(
             f"/v1/projects/{project['id']}/documents",

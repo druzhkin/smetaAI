@@ -872,6 +872,97 @@ export interface CalculationExecution {
   };
 }
 
+export interface ScenarioOverride {
+  cost_input_id: string;
+  quantity: string | null;
+  unit_rate: string | null;
+  factor_values: Record<string, string>;
+  evidence_or_assumption_id: string;
+  reason: string;
+}
+
+export interface ScenarioDefinition {
+  scenario_id: string;
+  scenario_version: string;
+  name: string;
+  overrides: ScenarioOverride[];
+}
+
+export interface ScenarioSnapshot {
+  snapshot_id: string;
+  calculation_run_id: string;
+  document_set_revision_id: string;
+  snapshot_hash: string;
+  currency: string | null;
+  grand_total: string | null;
+  independent_validation_passed: boolean | null;
+  created_by: string;
+  created_at: string;
+  integrity_valid: boolean;
+  integrity_error: string | null;
+}
+
+export interface ScenarioComparison {
+  scenario_run_id: string;
+  scenario_key: string;
+  scenario_name: string;
+  base_snapshot_id: string;
+  scenario_policy_version_id: string;
+  status: string;
+  currency: string | null;
+  base_grand_total: string | null;
+  scenario_grand_total: string | null;
+  absolute_delta: string | null;
+  relative_delta_percent: string | null;
+  independent_validation_passed: boolean | null;
+  executed_by: string | null;
+  created_at: string;
+  integrity_valid: boolean;
+  integrity_error: string | null;
+}
+
+export interface ScenarioContext {
+  project_id: string;
+  project_state: ApprovalState;
+  current_document_set_revision_id: string | null;
+  scenario_policy_version_id: string | null;
+  selected_snapshot_id: string | null;
+  snapshots: ScenarioSnapshot[];
+  snapshots_truncated: boolean;
+  definitions: ScenarioDefinition[];
+  comparisons: ScenarioComparison[];
+  comparisons_truncated: boolean;
+  blockers: string[];
+}
+
+export interface ScenarioExecution {
+  scenario_run_id: string;
+  base_snapshot_id: string;
+  scenario_policy_version_id: string;
+  definition: ScenarioDefinition;
+  result: {
+    scenario_id: string;
+    primary: {
+      engine_version: string;
+      currency: string;
+      lines: CalculationLineResult[];
+      category_totals: Record<string, string>;
+      grand_total: string;
+      calculated_at: string;
+    };
+    independent: {
+      validator_version: string;
+      passed: boolean;
+      independently_calculated_total: string;
+      primary_total: string;
+      difference: string;
+      tolerance: string;
+      findings: ValidationFinding[];
+      validated_at: string;
+    };
+  };
+}
+
 export interface DevelopmentIdentity {
   actorId: string;
   organizationId: string;

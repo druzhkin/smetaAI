@@ -112,6 +112,7 @@ from tenderguard.application.risks import (
     RiskItemView,
 )
 from tenderguard.application.scenarios import (
+    ScenarioContextView,
     ScenarioExecutionCommand,
     ScenarioExecutionResult,
 )
@@ -768,6 +769,10 @@ class CalculateScenarioRequest(ApiModel):
 
 
 class ScenarioExecutionResponse(ScenarioExecutionResult):
+    pass
+
+
+class ScenarioContextResponse(ScenarioContextView):
     pass
 
 
