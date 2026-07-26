@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -801,6 +802,33 @@ class IdempotencyRecordRow(Base):
             name="ck_idempotency_completion",
         ),
         Index("ix_idempotency_created_at", "created_at"),
+    )
+
+
+class RateLimitBucketRow(Base):
+    __tablename__ = "rate_limit_buckets"
+
+    scope: Mapped[str] = mapped_column(String(50), primary_key=True)
+    identity_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    window_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ("
+            "'ACTOR_READ', 'ORGANIZATION_READ', "
+            "'ACTOR_MUTATION', 'ORGANIZATION_MUTATION', "
+            "'ACTOR_UPLOAD', 'ORGANIZATION_UPLOAD'"
+            ")",
+            name="ck_rate_limit_bucket_scope",
+        ),
+        CheckConstraint(
+            "request_count >= 1",
+            name="ck_rate_limit_bucket_count",
+        ),
+        Index("ix_rate_limit_buckets_updated_at", "updated_at"),
     )
 
 

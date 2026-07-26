@@ -61,7 +61,8 @@ blocks migration; do not bypass the stop with a hand-written mask.
   Ed25519 export and integration signing identities are valid, an active
   outbound/source/handler qualification set exists for the operator
   organization, a fresh external audit receipt validates against the complete
-  current audit history, and persisted idempotency is mandatory for mutations.
+  current audit history, persisted idempotency is mandatory for mutations, and
+  all distributed actor/organisation quota settings are explicitly configured.
   It returns HTTP 503 otherwise. Connector reachability and scheduler activity
   require separate deployment probes and alerts.
 - Operational readiness remains distinct from bid authority. Project-specific
@@ -69,6 +70,39 @@ blocks migration; do not bypass the stop with a hand-written mask.
   are re-evaluated separately. Staging/production release also rechecks
   WORM/anchor integrity and returns a blocked decision with
   `OPERATIONAL_INTEGRITY_UNAVAILABLE` when it fails.
+
+## Distributed request quotas
+
+Staging and production must set `RATE_LIMIT_ENABLED=true`, a versioned
+`RATE_LIMIT_IDENTITY_KEY_ID`, a secret of at least 32 bytes, one fixed-window
+duration, and separate positive actor/organisation limits for `READ`,
+`MUTATION`, and `UPLOAD`. TenderGuard intentionally provides no financial- or
+capacity-owner thresholds. Approve the values from representative load,
+multipart-abuse, concurrency and soak evidence before deployment.
+
+Every authenticated request consumes both buckets in a separate short
+transaction before business processing. Denied and subsequently invalid
+requests therefore consume capacity. `429` returns the effective actor and
+organisation limits, remaining capacity, window reset, category, and
+`Retry-After`. If PostgreSQL is unavailable, the policy differs between live
+instances, or bucket integrity cannot be reproduced, the API returns `503`
+instead of processing without a quota.
+
+Rotate the identity HMAC key only at an approved window boundary and deploy the
+new key ID, secret and full policy atomically to every instance. Mixed policies
+inside one live window fail closed. Never update, decrement, or delete bucket
+rows directly; PostgreSQL permits only an exact increment or a later-window
+reset to one. Alert on quota `429` rates by category, any quota `503`, policy
+mismatch, database latency, organisation saturation, and repeated actor
+churn.
+
+These controls start after authentication. They do not protect TLS
+termination, unauthenticated OIDC/JWKS work, socket/connection capacity, or
+multipart bytes before the application. Deploy independent ingress request
+size, header, connection, timeout and unauthenticated-IP controls plus upload
+concurrency limits. Application quotas and ingress controls must be exercised
+together in the governed load/security evidence package. See
+`docs/distributed-rate-limiting.md`.
 
 ## Quarantined document intake
 

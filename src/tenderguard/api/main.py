@@ -62,6 +62,11 @@ from tenderguard.application.projects import (
     ProjectView,
 )
 from tenderguard.application.quarantine import QuarantineService
+from tenderguard.application.rate_limits import (
+    DistributedRateLimiter,
+    RateLimitDecision,
+    request_rate_limit_category,
+)
 from tenderguard.application.risks import RiskService
 from tenderguard.application.scenarios import ScenarioService
 from tenderguard.application.workbench import ProjectReadService, ProjectRecordSection
@@ -314,6 +319,58 @@ def create_app(
     application.state.quarantine_store = resolved_quarantine_store
     application.state.authenticator = authenticator
 
+    def rate_limit_headers(decision: RateLimitDecision) -> dict[str, str]:
+        return {
+            "RateLimit-Limit": (
+                f"actor={decision.actor_limit}, organization={decision.organization_limit}"
+            ),
+            "RateLimit-Remaining": str(decision.remaining),
+            "RateLimit-Reset": str(decision.reset_epoch_seconds),
+            "X-RateLimit-Category": decision.category,
+        }
+
+    def enforce_rate_limit(request: Request, actor: Actor) -> None:
+        if not resolved_settings.rate_limit_enabled or getattr(
+            request.state, "rate_limit_checked", False
+        ):
+            return
+        limiter_session = session_factory()
+        try:
+            with limiter_session.begin():
+                decision = DistributedRateLimiter(
+                    session=limiter_session,
+                    settings=resolved_settings,
+                ).consume(
+                    actor=actor,
+                    category=request_rate_limit_category(
+                        method=request.method,
+                        path=request.url.path,
+                        content_type=request.headers.get("content-type"),
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Distributed request quota is unavailable",
+            ) from error
+        finally:
+            limiter_session.close()
+        request.state.rate_limit_checked = True
+        request.state.rate_limit_decision = decision
+        if not decision.allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Distributed actor or organization request quota exceeded",
+                headers={
+                    **rate_limit_headers(decision),
+                    "Retry-After": str(decision.retry_after_seconds),
+                },
+            )
+
+    application.state.enforce_rate_limit = enforce_rate_limit
+
     def get_session(request: Request) -> Iterator[Session]:
         shared_session = request_scoped_session(request)
         if shared_session is not None:
@@ -327,20 +384,24 @@ def create_app(
 
     def get_actor(
         request: Request,
+        response: Response,
         authorization: Annotated[str | None, Header()] = None,
         x_dev_actor: Annotated[str | None, Header()] = None,
         x_dev_organization: Annotated[str | None, Header()] = None,
         x_dev_roles: Annotated[str | None, Header()] = None,
     ) -> Actor:
         shared_actor = request_scoped_actor(request)
-        if shared_actor is not None:
-            return shared_actor
-        return authenticator.authenticate(
+        actor = shared_actor or authenticator.authenticate(
             authorization=authorization,
             dev_actor=x_dev_actor,
             dev_organization=x_dev_organization,
             dev_roles=x_dev_roles,
         )
+        enforce_rate_limit(request, actor)
+        decision = getattr(request.state, "rate_limit_decision", None)
+        if isinstance(decision, RateLimitDecision):
+            response.headers.update(rate_limit_headers(decision))
+        return actor
 
     def service(session: Session) -> ProjectService:
         return ProjectService(
@@ -736,6 +797,11 @@ def create_app(
                 "Ed25519 integration signing key or receipt receiver identity is not configured"
             )
         integration_connectors_qualified = False
+        distributed_rate_limiting = bool(
+            schema_current and resolved_settings.distributed_rate_limit_configured
+        )
+        if not distributed_rate_limiting:
+            notes.append("distributed actor/organization request quotas are unavailable")
         build_identified = bool(resolved_settings.application_build_reference)
         if not build_identified:
             notes.append("immutable application build reference is not configured")
@@ -828,6 +894,7 @@ def create_app(
             and export_signing_configured
             and integration_signing_configured
             and integration_connectors_qualified
+            and distributed_rate_limiting
         )
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -849,6 +916,7 @@ def create_app(
             export_signing_configured=export_signing_configured,
             integration_signing_configured=integration_signing_configured,
             integration_connectors_qualified=integration_connectors_qualified,
+            distributed_rate_limiting=distributed_rate_limiting,
             notes=tuple(notes),
         )
 

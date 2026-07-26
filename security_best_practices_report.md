@@ -107,25 +107,33 @@ qualification evidence are external controls and remain production blockers.
 - Status: **REMEDIATED IN APPLICATION/DATABASE CODE; external trust and
   operational evidence OPEN - production blocker**.
 
-### SEC-005 - Distributed rate limiting and edge multipart controls are absent
+### SEC-005 - Independent edge and upload-concurrency controls are absent
 
 - Rule ID: FASTAPI-RES-001
-- Location: `src/tenderguard/api/security.py:8`
+- Location: `src/tenderguard/api/security.py:8`,
+  `src/tenderguard/application/rate_limits.py:24`,
+  `migrations/versions/fa2c5d7e9014_add_distributed_rate_limit_buckets.py:1`
 - Evidence: the application checks declared and actually streamed body size,
-  including chunked JSON and multipart requests, but has no distributed
-  request/actor quota.
-- Impact: authenticated or unauthenticated request floods can consume workers,
-  OIDC/JWKS calls, multipart parsing, and database connections.
-- Fix: configure independent ingress body limits, timeouts, connection limits,
-  per-actor and per-organisation distributed rate limits, and upload
-  concurrency quotas; verify with load and abuse tests.
+  including chunked JSON and multipart requests. It now atomically consumes
+  independent actor and organisation PostgreSQL buckets for read, mutation and
+  upload traffic before business work. Policy disagreement or store failure
+  returns `503`; over-limit traffic returns `429`; production refuses an
+  incomplete or disabled policy.
+- Impact: authentication and connection work occurs before the application
+  quota. Unauthenticated floods, slow clients, concurrent multipart spooling,
+  and database-connection exhaustion still require a separate ingress/runtime
+  control plane.
+- Fix: configure independent ingress body/header limits, timeouts, connection
+  and unauthenticated-source limits, plus upload concurrency quotas. Approve
+  application thresholds and verify all layers together with load, abuse and
+  soak tests.
 - Repository control added: a four-eyes governed, read-only, bounded load
   qualification runner enforces owner-defined overall and per-endpoint SLOs
   and emits a tamper-evident result. It can measure deployed controls once they
-  exist, but it does not provide those independent edge controls or replace
-  upload, abuse, or soak testing.
-- Status: **APPLICATION BODY LIMIT REMEDIATED; distributed/edge controls
-  OPEN**.
+  exist, but it does not provide independent edge controls or replace upload,
+  abuse, or soak testing.
+- Status: **APPLICATION BODY AND DISTRIBUTED AUTHENTICATED QUOTAS REMEDIATED;
+  EDGE/UNAUTHENTICATED/UPLOAD-CONCURRENCY CONTROLS OPEN**.
 
 ### SEC-006 - Enterprise connector trust is not operationally qualified
 

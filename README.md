@@ -95,6 +95,11 @@ The repository currently connects and integration-tests:
   re-verifies current history plus the live evidence-bucket WORM policy;
 - persisted actor-scoped idempotency for every mutating API operation and a
   deduplicated transactional `audit.event.recorded` outbox stream;
+- atomic PostgreSQL-backed fixed-window quotas for authenticated actors and
+  organisations, with separately governed read/mutation/upload limits,
+  pseudonymous keyed identities, fail-closed policy consistency, explicit
+  `429`/`503` behavior, immutable bucket identities, and mandatory production
+  configuration without invented thresholds;
 - qualification-bound Ed25519 outbound envelopes and exact signed receipts,
   immutable delivery attempts, a durable signed inbox with collision-safe
   deduplication, leased processing, bounded retry/dead-letter, and controlled
@@ -214,6 +219,10 @@ schedulers/monitoring, remaining controlled extraction-correction,
 BoQ-structure/nomenclature/reconciliation
 surfaces, and business qualification of the operator interface remain to be
 completed.
+Application actor/organisation quotas are implemented, but independently
+deployed ingress connection/body/time limits, unauthenticated-abuse controls,
+upload concurrency limits, and representative abuse/soak evidence remain
+production blockers.
 External verification also requires approved out-of-band
 signing-key registries and real endpoint conformance evidence. A successful
 local test run or an empty qualification campaign cannot substitute for

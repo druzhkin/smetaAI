@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, cast
@@ -221,6 +221,11 @@ class IdempotentAPIRoute(APIRoute):
             if request.method not in MUTATING_METHODS:
                 return await original_handler(request)
             settings = cast(Settings, request.app.state.settings)
+            actor: Actor | None = None
+            if settings.rate_limit_enabled:
+                actor = _authenticate_request(request)
+                _enforce_rate_limit(request, actor)
+                request.state.authenticated_actor = actor
             key = request.headers.get("idempotency-key")
             if key is None:
                 if settings.require_idempotency_keys:
@@ -236,8 +241,8 @@ class IdempotentAPIRoute(APIRoute):
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(error),
                 ) from error
-            actor = _authenticate_request(request)
             request_hash = await _request_hash(request, settings=settings)
+            actor = actor or _authenticate_request(request)
             session_factory = cast(
                 sessionmaker[Session],
                 request.app.state.session_factory,
@@ -332,6 +337,14 @@ def _authenticate_request(request: Request) -> Actor:
         dev_organization=request.headers.get("x-dev-organization"),
         dev_roles=request.headers.get("x-dev-roles"),
     )
+
+
+def _enforce_rate_limit(request: Request, actor: Actor) -> None:
+    enforce = cast(
+        Callable[[Request, Actor], None],
+        request.app.state.enforce_rate_limit,
+    )
+    enforce(request, actor)
 
 
 async def _request_hash(request: Request, *, settings: Settings) -> str:

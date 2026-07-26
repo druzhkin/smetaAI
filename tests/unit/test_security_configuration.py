@@ -77,6 +77,7 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "qualified isolated document processor binding" in message
     assert "OIDC web client ID" in message
     assert "immutable application build reference" in message
+    assert "distributed actor/organization rate limiting" in message
 
 
 def test_application_build_reference_must_be_immutable_digest() -> None:
@@ -84,6 +85,18 @@ def test_application_build_reference_must_be_immutable_digest() -> None:
         Settings(
             app_env="test",
             application_build_reference="latest",
+        )
+
+
+def test_enabled_distributed_rate_limit_requires_complete_explicit_policy() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="Enabled distributed rate limiting requires",
+    ):
+        Settings(
+            app_env="test",
+            rate_limit_enabled=True,
+            rate_limit_identity_key_id="incomplete-rate-limit-policy",
         )
 
 
@@ -174,6 +187,16 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         document_processor_adapter="production-intake",
         document_processor_qualification_id="qualification-intake-production",
         document_worker_actor_id="document-worker",
+        rate_limit_enabled=True,
+        rate_limit_identity_key_id="production-rate-limit-key-1",
+        rate_limit_identity_key="production-rate-limit-identity-key-at-least-32-bytes",
+        rate_limit_window_seconds=60,
+        rate_limit_actor_read_requests=120,
+        rate_limit_organization_read_requests=1200,
+        rate_limit_actor_mutation_requests=60,
+        rate_limit_organization_mutation_requests=600,
+        rate_limit_actor_upload_requests=10,
+        rate_limit_organization_upload_requests=100,
         trusted_hosts=["testserver"],
         operator_ui_enabled=False,
     )
@@ -358,6 +381,7 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         assert ready.json()["export_signing_configured"] is True
         assert ready.json()["integration_signing_configured"] is True
         assert ready.json()["integration_connectors_qualified"] is True
+        assert ready.json()["distributed_rate_limiting"] is True
         with sessions.begin() as session:
             integration_qualification = session.get(
                 AdapterQualificationRow,

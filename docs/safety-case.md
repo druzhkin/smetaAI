@@ -33,6 +33,7 @@ all operational qualification evidence remain open.
 | Export | fixed released snapshot, mandatory content hashes, Ed25519 signature, immutable artifact metadata | refuse generation or verification |
 | Audit integrity | per-key hash chains, WORM checkpoint, independent Ed25519 receipt, full current-history verification | readiness 503; investigate tampering or stale anchor |
 | Mutation and integration delivery | persisted request fingerprint/response; transactional outbox; stable external delivery identity; qualification-bound Ed25519 envelope and exact signed receipt; immutable inbound message plus separate processing generation | replay exact HTTP result or reject conflicting key; retry/dead-letter without rewriting evidence; imported business value remains unverified |
+| Request resource control | streamed body limits plus atomic PostgreSQL actor/organisation quotas for read, mutation and upload categories | `429` on exhausted quota; `503` on store/policy/integrity failure |
 | Contract | revisioned evidence-backed obligations tied to approved cost impacts | unresolved contract risk hard stop |
 | Risk | verified register and version-bound deterministic reserve | missing or stale reserve hard stop |
 | Approval | configurable tasks and four-eyes rule | approval hard stop |
@@ -161,6 +162,9 @@ release and operator blocker counts.
   on protected keys, endpoint allowlists/mTLS, qualified service identities,
   contract tests, monitoring, replay drills, and the downstream domain
   verification workflow.
+- Application quotas begin only after authentication. Independent ingress
+  connection, header, timeout, unauthenticated-abuse and upload-concurrency
+  controls plus representative load/abuse/soak evidence remain mandatory.
 
 ## Required production evidence
 

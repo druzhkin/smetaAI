@@ -103,6 +103,40 @@ class Settings(BaseSettings):
         ge=0,
         le=86_400,
     )
+    rate_limit_enabled: bool = False
+    rate_limit_identity_key_id: str | None = None
+    rate_limit_identity_key: SecretStr | None = None
+    rate_limit_window_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    rate_limit_actor_read_requests: int | None = Field(
+        default=None,
+        ge=1,
+        le=10_000_000,
+    )
+    rate_limit_organization_read_requests: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000_000,
+    )
+    rate_limit_actor_mutation_requests: int | None = Field(
+        default=None,
+        ge=1,
+        le=10_000_000,
+    )
+    rate_limit_organization_mutation_requests: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000_000,
+    )
+    rate_limit_actor_upload_requests: int | None = Field(
+        default=None,
+        ge=1,
+        le=10_000_000,
+    )
+    rate_limit_organization_upload_requests: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000_000,
+    )
 
     @model_validator(mode="after")
     def production_is_fail_closed(self) -> Settings:
@@ -129,6 +163,7 @@ class Settings(BaseSettings):
             ),
             ("integration receiver ID", self.integration_receiver_id, 200),
             ("OIDC web client ID", self.oidc_web_client_id, 200),
+            ("rate-limit identity key ID", self.rate_limit_identity_key_id, 200),
         ):
             if value is not None and (
                 not value.strip() or value != value.strip() or len(value) > max_length
@@ -221,6 +256,8 @@ class Settings(BaseSettings):
                 problems.append("qualified isolated document processor binding is incomplete")
             if not self.document_worker_actor_id:
                 problems.append("isolated document worker actor is not configured")
+            if not self.distributed_rate_limit_configured:
+                problems.append("distributed actor/organization rate limiting is incomplete")
             if problems:
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         if self.allow_insecure_dev_auth and self.app_env not in {"development", "test"}:
@@ -246,6 +283,11 @@ class Settings(BaseSettings):
             raise ValueError("Integration HTTP timeout must not exceed the job timeout")
         if self.integration_job_retry_max_seconds < self.integration_job_retry_base_seconds:
             raise ValueError("Integration job retry maximum must be at least the base delay")
+        if self.rate_limit_enabled and not self.distributed_rate_limit_configured:
+            raise ValueError(
+                "Enabled distributed rate limiting requires a key ID, a 32-byte "
+                "identity key, a window, and every actor/organization category limit"
+            )
         return self
 
     @property
@@ -291,6 +333,26 @@ class Settings(BaseSettings):
     @property
     def document_processor_configured(self) -> bool:
         return bool(self.document_processor_adapter and self.document_processor_qualification_id)
+
+    @property
+    def distributed_rate_limit_configured(self) -> bool:
+        key = (
+            self.rate_limit_identity_key.get_secret_value().encode("utf-8")
+            if self.rate_limit_identity_key is not None
+            else b""
+        )
+        return bool(
+            self.rate_limit_enabled
+            and self.rate_limit_identity_key_id
+            and len(key) >= 32
+            and self.rate_limit_window_seconds
+            and self.rate_limit_actor_read_requests
+            and self.rate_limit_organization_read_requests
+            and self.rate_limit_actor_mutation_requests
+            and self.rate_limit_organization_mutation_requests
+            and self.rate_limit_actor_upload_requests
+            and self.rate_limit_organization_upload_requests
+        )
 
 
 @lru_cache

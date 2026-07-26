@@ -756,4 +756,5 @@ class ReadinessResponse(ApiModel):
     export_signing_configured: bool
     integration_signing_configured: bool
     integration_connectors_qualified: bool
+    distributed_rate_limiting: bool
     notes: tuple[str, ...]

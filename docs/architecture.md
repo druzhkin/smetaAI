@@ -30,6 +30,11 @@ Nothing crosses a boundary merely because a model reports high confidence.
 - `identity`: OIDC validation, versioned project membership and scoped roles,
   owner-managed access, qualified service capabilities, and segregation of
   business duties from infrastructure administration.
+- `rate_limits`: PostgreSQL-backed actor and organisation fixed-window quotas
+  for read, mutation, and upload traffic. Keyed pseudonymous identities avoid
+  storing raw subjects; quota consumption commits in a short transaction
+  independent of the business transaction so rejected or rolled-back actions
+  still count.
 - `intake`: separately stored streamed quarantine, qualification-bound malware
   results, leased outbox delivery, bounded retry/dead-letter/replay, worker-only
   bounded archive expansion, manifest, file health, Excel visibility/formula
@@ -204,5 +209,10 @@ Production deployment requires:
   Every retained object and approval is revalidated on release.
 - State transitions and critical reads/writes carry actor, request, reason, and
   prior/new values in audit events.
+- Authenticated traffic consumes both its actor and organisation quota
+  atomically before business work. A policy mismatch across application
+  instances, unavailable quota store, unsupported dialect, or incomplete
+  production configuration fails closed. Quota thresholds are organisation
+  inputs and have no software defaults.
 - `BLOCKED` is a first-class state and cannot be bypassed through API or direct
   workflow transition.
