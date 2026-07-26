@@ -187,6 +187,15 @@ The reviewer must state the reason and select an observation already present
 in the conflict. The resulting derived verified observation, review task, and
 approval record must remain in the audit chain.
 
+Record a manual extraction correction only from the Evidence registry's
+dedicated action. Select a revision from the current confirmed set and preserve
+the exact value, unit, locator, observation time and reason. Exact numeric
+values are decimal strings. The source remains `UNVERIFIED`; a different actor
+with the role assigned by the bound `manual_evidence_policy` must use the
+dedicated review action. If the policy or document set changed, create a new
+observation against the new basis instead of attempting to approve the stale
+task. See `docs/manual-evidence-review.md`.
+
 Before pricing can advance, create every `commercial_cost_model` kind required
 by the bound methodology. Do not enter a lump-sum percentage. Confirm that
 each transport/cargo/rate, mobilisation, cash-flow, funding-rate, and guarantee

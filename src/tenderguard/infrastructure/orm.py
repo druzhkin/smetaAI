@@ -663,6 +663,8 @@ class ApprovalRecordRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    __table_args__ = (UniqueConstraint("task_id", name="uq_approval_records_task_id"),)
+
 
 class WorkflowTransitionRow(Base):
     __tablename__ = "workflow_transitions"

@@ -42,37 +42,54 @@ class ControlledVersion(DomainModel):
 
 
 class EvidenceLocation(DomainModel):
-    document_id: str = Field(min_length=1)
-    document_revision_id: str = Field(min_length=1)
+    document_id: str = Field(min_length=1, max_length=64)
+    document_revision_id: str = Field(min_length=1, max_length=64)
     original_object_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    locator_kind: str = Field(min_length=1)
-    locator: str = Field(min_length=1)
+    locator_kind: str = Field(min_length=1, max_length=100)
+    locator: str = Field(min_length=1, max_length=4000)
     page: int | None = Field(default=None, ge=1)
-    table: str | None = None
-    sheet: str | None = None
-    cell_or_range: str | None = None
+    table: str | None = Field(default=None, max_length=500)
+    sheet: str | None = Field(default=None, max_length=500)
+    cell_or_range: str | None = Field(default=None, max_length=500)
 
 
 class Observation(DomainModel):
-    observation_id: str = Field(min_length=1)
-    field_name: str = Field(min_length=1)
+    observation_id: str = Field(min_length=1, max_length=64)
+    field_name: str = Field(min_length=1, max_length=300)
     value: Any
-    unit: str | None = None
+    unit: str | None = Field(default=None, max_length=100)
     method: EvidenceMethod
-    method_version: str = Field(min_length=1)
+    method_version: str = Field(min_length=1, max_length=200)
     source_priority: int = Field(ge=0)
     location: EvidenceLocation
     observed_at: datetime
-    actor_id: str
+    actor_id: str = Field(min_length=1, max_length=128)
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     status: VerificationStatus = VerificationStatus.UNVERIFIED
 
     @field_validator("value")
     @classmethod
     def reject_floats(cls, value: Any) -> Any:
-        if isinstance(value, float):
-            raise ValueError("Evidence values may not use floating point")
+        if _contains_float(value):
+            raise ValueError("Evidence values may not contain floating point at any nesting level")
         return value
+
+    @field_validator("observed_at")
+    @classmethod
+    def observed_timestamp_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Evidence observation timestamp must include a timezone")
+        return value
+
+
+def _contains_float(value: Any) -> bool:
+    if isinstance(value, float):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_float(item) for item in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_float(item) for item in value)
+    return False
 
 
 class Conflict(DomainModel):

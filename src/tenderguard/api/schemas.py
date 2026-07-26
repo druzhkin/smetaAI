@@ -54,6 +54,10 @@ from tenderguard.application.evidence import (
     ConflictResolutionCommand,
     ConflictResolutionResult,
     ConflictReviewView,
+    ManualEvidenceContextView,
+    ManualEvidenceDecisionCommand,
+    ManualEvidenceDecisionResult,
+    ManualEvidenceReviewView,
     ObservationDraft,
     ReconciliationOutcome,
 )
@@ -271,6 +275,22 @@ class RecordObservationRequest(ApiModel):
 
 
 class ObservationResponse(Observation):
+    pass
+
+
+class ManualEvidenceContextResponse(ManualEvidenceContextView):
+    pass
+
+
+class ManualEvidenceReviewResponse(ManualEvidenceReviewView):
+    pass
+
+
+class DecideManualEvidenceRequest(ManualEvidenceDecisionCommand):
+    pass
+
+
+class ManualEvidenceDecisionResponse(ManualEvidenceDecisionResult):
     pass
 
 

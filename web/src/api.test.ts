@@ -5,6 +5,7 @@ import {
   attemptRelease,
   confirmDocumentSet,
   createProject,
+  decideManualEvidence,
   decideWorkItem,
   evaluatePriceItem,
   executeCurrentCalculation,
@@ -13,6 +14,7 @@ import {
   getPriceQuoteCandidate,
   normalizePriceQuote,
   proposeQuantityChange,
+  recordManualEvidence,
   recordPriceQuoteFromObservation,
   resolveConflict,
   uploadDocument,
@@ -229,6 +231,113 @@ describe("controlled mutations", () => {
       selected_observation_id: "observation-2",
       resolution_reason: "Native table checked against signed source",
       expected_conflict_updated_at: "2026-07-24T18:00:00Z",
+      expected_task_updated_at: "2026-07-24T18:00:01Z",
+    });
+  });
+
+  it("records manual evidence against the exact governed source basis", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          observation_id: "observation-manual-1",
+          status: "UNVERIFIED",
+        }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await recordManualEvidence(context, {
+      projectId: "project/1",
+      policyVersionId: "manual-policy-1",
+      fieldName: "pipeline.nominal_diameter",
+      value: "500.00",
+      unit: "mm",
+      sourcePriority: 10,
+      documentId: "document/1",
+      documentRevisionId: "revision/1",
+      originalObjectHash: "a".repeat(64),
+      locatorKind: "PDF_PAGE_REGION",
+      locator: "page=12;x=0.1;y=0.2;width=0.4;height=0.1",
+      page: 12,
+      table: null,
+      sheet: null,
+      cellOrRange: null,
+      observedAt: "2026-07-24T18:00:00.000Z",
+      reason: "Corrected against drawing revision A",
+      idempotencyKey: "manual-evidence-operation-1",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/v1/projects/project%2F1/evidence/observations");
+    expect(init.headers).toMatchObject({
+      "Idempotency-Key": "manual-evidence-operation-1",
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      draft: {
+        field_name: "pipeline.nominal_diameter",
+        value: "500.00",
+        unit: "mm",
+        method: "MANUAL",
+        method_version: "manual-policy-1",
+        source_priority: 10,
+        location: {
+          document_id: "document/1",
+          document_revision_id: "revision/1",
+          original_object_hash: "a".repeat(64),
+          locator_kind: "PDF_PAGE_REGION",
+          locator: "page=12;x=0.1;y=0.2;width=0.4;height=0.1",
+          page: 12,
+          table: null,
+          sheet: null,
+          cell_or_range: null,
+        },
+        observed_at: "2026-07-24T18:00:00.000Z",
+        confidence: null,
+        adapter_qualification_id: null,
+        basis_metadata: {},
+      },
+      reason: "Corrected against drawing revision A",
+    });
+  });
+
+  it("binds manual evidence review to the exact task version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          approval_id: "approval-1",
+          decision: "APPROVED",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await decideManualEvidence(context, {
+      projectId: "project/1",
+      observationId: "observation/1",
+      decision: "APPROVED",
+      reason: "Independently checked the source page and exact locator",
+      expectedTaskUpdatedAt: "2026-07-24T18:00:01Z",
+      idempotencyKey: "manual-review-operation-1",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe(
+      "/v1/projects/project%2F1/evidence/observations/observation%2F1/manual-review/decision",
+    );
+    expect(init.headers).toMatchObject({
+      "Idempotency-Key": "manual-review-operation-1",
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      decision: "APPROVED",
+      reason: "Independently checked the source page and exact locator",
       expected_task_updated_at: "2026-07-24T18:00:01Z",
     });
   });

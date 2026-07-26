@@ -2,6 +2,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from tenderguard.domain.enums import EvidenceMethod
 from tenderguard.domain.models import EvidenceLocation, Observation
 from tenderguard.domain.reconciliation import reconcile_observations
@@ -74,3 +76,12 @@ def test_independent_agreement_supports_structured_values() -> None:
     )
     assert value == {"work_code": "PIPE_INSTALLATION", "unit": "m"}
     assert conflict is None
+
+
+def test_observation_rejects_nested_floating_point_values() -> None:
+    with pytest.raises(ValueError, match="nesting level"):
+        observation(
+            "obs-float",
+            {"components": [{"quantity": 1.2}]},
+            EvidenceMethod.NATIVE_PARSER,
+        )

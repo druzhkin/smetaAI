@@ -7,6 +7,10 @@ import type {
   ConflictResolutionResult,
   ConflictReview,
   DocumentSetView,
+  EvidenceObservation,
+  ManualEvidenceContext,
+  ManualEvidenceDecisionResult,
+  ManualEvidenceReview,
   NormalizedPrice,
   PriceDecision,
   PriceItemContext,
@@ -318,6 +322,116 @@ export function resolveConflict(
         selected_observation_id: input.selectedObservationId,
         resolution_reason: input.resolutionReason,
         expected_conflict_updated_at: input.expectedConflictUpdatedAt,
+        expected_task_updated_at: input.expectedTaskUpdatedAt,
+      },
+    },
+  );
+}
+
+export function getManualEvidenceContext(
+  context: RequestContext,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ManualEvidenceContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/evidence/manual/context`,
+    undefined,
+    signal,
+  );
+}
+
+export function recordManualEvidence(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    policyVersionId: string;
+    fieldName: string;
+    value: unknown;
+    unit: string | null;
+    sourcePriority: number;
+    documentId: string;
+    documentRevisionId: string;
+    originalObjectHash: string;
+    locatorKind: string;
+    locator: string;
+    page: number | null;
+    table: string | null;
+    sheet: string | null;
+    cellOrRange: string | null;
+    observedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<EvidenceObservation> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/evidence/observations`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: {
+          field_name: input.fieldName,
+          value: input.value,
+          unit: input.unit,
+          method: "MANUAL",
+          method_version: input.policyVersionId,
+          source_priority: input.sourcePriority,
+          location: {
+            document_id: input.documentId,
+            document_revision_id: input.documentRevisionId,
+            original_object_hash: input.originalObjectHash,
+            locator_kind: input.locatorKind,
+            locator: input.locator,
+            page: input.page,
+            table: input.table,
+            sheet: input.sheet,
+            cell_or_range: input.cellOrRange,
+          },
+          observed_at: input.observedAt,
+          confidence: null,
+          adapter_qualification_id: null,
+          basis_metadata: {},
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getManualEvidenceReview(
+  context: RequestContext,
+  projectId: string,
+  observationId: string,
+  signal?: AbortSignal,
+): Promise<ManualEvidenceReview> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/evidence/observations/${encodeURIComponent(observationId)}/manual-review`,
+    undefined,
+    signal,
+  );
+}
+
+export function decideManualEvidence(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    observationId: string;
+    decision: ApprovalDecision;
+    reason: string;
+    expectedTaskUpdatedAt: string;
+    idempotencyKey: string;
+  },
+): Promise<ManualEvidenceDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/evidence/observations/${encodeURIComponent(input.observationId)}/manual-review/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        decision: input.decision,
+        reason: input.reason,
         expected_task_updated_at: input.expectedTaskUpdatedAt,
       },
     },

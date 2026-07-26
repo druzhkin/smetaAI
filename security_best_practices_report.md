@@ -179,6 +179,12 @@ qualification evidence are external controls and remain production blockers.
   qualification backed by a separately approved controlled version and can be
   submitted only by a `SYSTEM` identity; verified observations are derived only
   from exact agreement across distinct qualified independence domains.
+- Manual observations bind an approved project policy and a revision from the
+  current independently confirmed document set, remain immutable and
+  unverified, reject floating point recursively, and require a dedicated
+  four-eyes workflow to create a separate verified derived observation.
+  PostgreSQL protects approval-task scope/transitions and requires one
+  append-only decision record matching each terminal task.
 - Snapshot lineage is resolved from the immutable content-addressed artifact
   through cost inputs, source observations, document revisions and locators.
 - Local and S3 object reads recompute SHA-256 before returning content.

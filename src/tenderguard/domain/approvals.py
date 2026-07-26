@@ -12,7 +12,12 @@ from tenderguard.domain.enums import (
 )
 from tenderguard.domain.models import DomainModel, ValidationFinding
 
-DEDICATED_APPROVAL_TASK_TYPES = frozenset({"CONFLICT_RESOLUTION"})
+DEDICATED_APPROVAL_TASK_TYPES = frozenset(
+    {
+        "CONFLICT_RESOLUTION",
+        "MANUAL_EVIDENCE_REVIEW",
+    }
+)
 
 
 class ApprovalSubject(DomainModel):

@@ -82,9 +82,10 @@ Nothing crosses a boundary merely because a model reports high confidence.
 - `operator_ui`: OIDC Authorization Code + PKCE browser client, role-filtered
   portfolio/work-queue/workbench/record read models, visible release hard
   stops, exact-manifest four-eyes document-set confirmation, source-level
-  conflict resolution with dual optimistic locks, safe same-origin navigation,
-  and backend-enforced information barriers. The UI is never a policy or
-  authorization boundary.
+  conflict resolution with dual optimistic locks, policy/document-bound
+  manual evidence entry with dedicated four-eyes review, safe same-origin
+  navigation, and backend-enforced information barriers. The UI is never a
+  policy or authorization boundary.
 - `integration`: deterministic signed snapshot/audit packages; a transactional
   outbox with stable external delivery identity; qualification-bound Ed25519
   event/receipt envelopes; immutable delivery attempts and inbound messages;
@@ -152,6 +153,12 @@ Production deployment requires:
   read routes.
 - Currency, VAT basis, unit, rounding, and effective date are explicit.
 - Original observations are immutable. Corrections create new observations.
+- A manual correction is always `UNVERIFIED`, must bind the current confirmed
+  document set and approved `manual_evidence_policy`, and can become usable
+  only through a separate derived observation approved by a different actor.
+- Approval task identity/scope is immutable. PostgreSQL accepts only an exact
+  terminal decision or auditable document supersession; one append-only
+  approval record must match every terminal decision.
 - An original upload cannot enter the evidence zone or reach a parser before
   an exact qualified malware result is `CLEAN`; scan-result rows are immutable.
 - A parser may finalize only with the exact current processing lease. Parsing

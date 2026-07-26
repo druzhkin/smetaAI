@@ -137,6 +137,7 @@ from .schemas import (
     CreateProjectRequest,
     CurrentCalculationExecutionRequest,
     DecideApprovalRequest,
+    DecideManualEvidenceRequest,
     DocumentSetResponse,
     EvaluateItemPriceRequest,
     ExportArtifactResponse,
@@ -151,6 +152,9 @@ from .schemas import (
     IntegrationInboxProcessingResponse,
     IntegrationInboxReceiptResponse,
     IntegrationInboxSettlementResponse,
+    ManualEvidenceContextResponse,
+    ManualEvidenceDecisionResponse,
+    ManualEvidenceReviewResponse,
     NomenclatureMatchResponse,
     NormalizedPriceResponse,
     NormalizePriceRequest,
@@ -1857,7 +1861,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     def record_observation(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: RecordObservationRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -1872,6 +1876,60 @@ def create_app(
                 reason=payload.reason,
             )
         return ObservationResponse.model_validate(observation.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/evidence/manual/context",
+        response_model=ManualEvidenceContextResponse,
+    )
+    def get_manual_evidence_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ManualEvidenceContextResponse:
+        context = evidence_service(session).manual_evidence_context(
+            actor=actor,
+            project_id=project_id,
+        )
+        return ManualEvidenceContextResponse.model_validate(context.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/evidence/observations/{observation_id}/manual-review",
+        response_model=ManualEvidenceReviewResponse,
+    )
+    def get_manual_evidence_review(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        observation_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ManualEvidenceReviewResponse:
+        review = evidence_service(session).manual_evidence_review(
+            actor=actor,
+            project_id=project_id,
+            observation_id=observation_id,
+        )
+        return ManualEvidenceReviewResponse.model_validate(review.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/evidence/observations/{observation_id}/manual-review/decision",
+        response_model=ManualEvidenceDecisionResponse,
+    )
+    def decide_manual_evidence(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        observation_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: DecideManualEvidenceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ManualEvidenceDecisionResponse:
+        with mutation_transaction(session):
+            result = evidence_service(session).decide_manual_evidence(
+                actor=actor,
+                project_id=project_id,
+                observation_id=observation_id,
+                command=payload,
+                request_id=request.state.request_id,
+            )
+        return ManualEvidenceDecisionResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/evidence/reconcile",

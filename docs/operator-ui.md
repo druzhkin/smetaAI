@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes nine controlled mutation families:
+The current interface includes ten controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -41,6 +41,15 @@ The current interface includes nine controlled mutation families:
   backend revalidates all qualifications at decision time, rejects the
   conflict-task creator, and prevents the generic approval command from
   closing this task;
+- a technical expert or reviewer may record a manual correction only against
+  a revision selected from the current independently confirmed document set.
+  The browser takes the policy version, document IDs and SHA-256 from the
+  server, requires an exact locator/reason/project acknowledgement, transports
+  exact numbers as strings and rejects nested JSON numbers. The result remains
+  `MANUAL`/`UNVERIFIED`. A separate policy-assigned reviewer screen exposes the
+  immutable value, reason, author, unit, document, hash, locator and task
+  version; self-review and the generic decision API are blocked. Approval
+  creates a separate lineage-linked `RULE_ENGINE`/`VERIFIED` observation;
 - an estimator or technical expert may propose a revision of a current
   verified BoQ quantity only against the exact current quantity, confirmed
   document set, approved quantity/formula rules, approved manual-change policy,
@@ -87,8 +96,8 @@ audit chain. An unsupported file, invalid logical key, stale task or conflict,
 stale document-set candidate, self-confirmation, self-resolution, missing
 role, or unacknowledged command fails closed.
 
-General extraction correction, BoQ structure and nomenclature maintenance,
-reconciliation maintenance, and general-purpose workflow transitions are not
+BoQ structure and nomenclature maintenance, reconciliation maintenance, and
+general-purpose workflow transitions are not
 yet represented as delivered UI operations. Production acceptance also requires
 role-based user testing, accessibility verification, and business-process
 qualification.
@@ -215,6 +224,8 @@ Before production use, retain:
 - dependency and image vulnerability scans tied to the released digest;
 - CSP violation monitoring and authentication-failure alerts;
 - controlled-action workflow tests for every additional mutation surface;
+- manual-evidence policy binding, self-review, stale-document-set, exact-value
+  and rejection/return operator acceptance results;
 - quarantine allowlist, size-limit, retry/idempotency, infected-file, scanner
   outage and dead-letter operator drills;
 - user training and named process-owner approval.

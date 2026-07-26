@@ -936,13 +936,7 @@ class ProjectReadService:
                 subtitle=row.method,
                 status=row.status,
                 occurred_at=row.created_at,
-                attributes={
-                    "method_version": row.method_version,
-                    "value": row.payload.get("value"),
-                    "unit": row.payload.get("unit"),
-                    "locator": row.payload.get("locator"),
-                    "adapter_qualification_id": row.payload.get("adapter_qualification_id"),
-                },
+                attributes=self._observation_attributes(row),
                 links=(
                     ProjectRecordLink(
                         relation="source",
@@ -2557,6 +2551,25 @@ class ProjectReadService:
     @staticmethod
     def _string(value: object) -> str | None:
         return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _observation_attributes(row: ObservationRow) -> dict[str, Any]:
+        raw_observation = row.payload.get("observation")
+        observation = raw_observation if isinstance(raw_observation, dict) else {}
+        raw_location = observation.get("location")
+        location = raw_location if isinstance(raw_location, dict) else {}
+        return {
+            "method_version": row.method_version,
+            "value": observation.get("value"),
+            "unit": observation.get("unit"),
+            "actor_id": observation.get("actor_id"),
+            "observed_at": observation.get("observed_at"),
+            "locator": location.get("locator"),
+            "locator_kind": location.get("locator_kind"),
+            "document_revision_id": row.document_revision_id,
+            "original_object_hash": location.get("original_object_hash"),
+            "adapter_qualification_id": row.payload.get("adapter_qualification_id"),
+        }
 
     @staticmethod
     def _project_view(project: ProjectRow) -> ProjectView:

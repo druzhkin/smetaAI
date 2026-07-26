@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 
 import { ApiError } from "./api";
 import { AuthProvider, useAuth } from "./auth";
@@ -23,6 +23,15 @@ import { TaskDetailPage } from "./pages/TaskDetailPage";
 import { TaskQueuePage } from "./pages/TaskQueuePage";
 import { Link, NavigationProvider, useNavigation } from "./navigation";
 import type { ProjectRecordSection, RuntimeConfig } from "./types";
+
+const ManualEvidenceEntryPage = lazy(async () => ({
+  default: (await import("./pages/ManualEvidenceEntryPage"))
+    .ManualEvidenceEntryPage,
+}));
+const ManualEvidenceReviewPage = lazy(async () => ({
+  default: (await import("./pages/ManualEvidenceReviewPage"))
+    .ManualEvidenceReviewPage,
+}));
 
 const recordSections = new Set<ProjectRecordSection>([
   "DOCUMENTS",
@@ -143,6 +152,39 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
               config={config}
               projectId={projectId}
               changeId={changeId}
+            />
+          );
+        }
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "evidence" &&
+        parts[3] === "manual"
+      ) {
+        page = (
+          <ManualEvidenceEntryPage config={config} projectId={projectId} />
+        );
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 6 &&
+        rawSection === "evidence" &&
+        parts[3] === "observations" &&
+        parts[5] === "review"
+      ) {
+        let observationId: string | null = null;
+        try {
+          observationId = decodeURIComponent(parts[4] ?? "");
+        } catch {
+          observationId = null;
+        }
+        if (observationId !== null && observationId !== "") {
+          page = (
+            <ManualEvidenceReviewPage
+              config={config}
+              projectId={projectId}
+              observationId={observationId}
             />
           );
         }
@@ -281,7 +323,19 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
     </div>
   );
 
-  return <AppShell config={config}>{page}</AppShell>;
+  return (
+    <AppShell config={config}>
+      <Suspense
+        fallback={
+          <div className="page">
+            <LoadingBlock label="Загрузка защищённого рабочего экрана" />
+          </div>
+        }
+      >
+        {page}
+      </Suspense>
+    </AppShell>
+  );
 }
 
 export function App({ config }: { config: RuntimeConfig }) {

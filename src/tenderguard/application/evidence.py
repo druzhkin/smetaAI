@@ -9,6 +9,9 @@ from pydantic import Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.controlled_version_integrity import (
+    require_controlled_version_integrity,
+)
 from tenderguard.application.projects import (
     OptimisticLockError,
     ProjectService,
@@ -18,6 +21,8 @@ from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import (
     ActorRole,
+    ApprovalDecision,
+    ApprovalState,
     EvidenceMethod,
     VerificationStatus,
     VersionStatus,
@@ -39,17 +44,18 @@ from tenderguard.infrastructure.orm import (
     ControlledVersionRow,
     DocumentRevisionRow,
     DocumentRow,
+    DocumentSetRevisionRow,
     ObservationRow,
     ProjectControlledVersionRow,
 )
 
 
 class ObservationDraft(DomainModel):
-    field_name: str
+    field_name: str = Field(min_length=1, max_length=300)
     value: Any
-    unit: str | None = None
+    unit: str | None = Field(default=None, max_length=100)
     method: EvidenceMethod
-    method_version: str
+    method_version: str = Field(min_length=1, max_length=200)
     source_priority: int = Field(ge=0)
     location: EvidenceLocation
     observed_at: datetime
@@ -124,6 +130,75 @@ class ConflictResolutionResult(DomainModel):
     verified_observation: Observation
 
 
+class ManualEvidencePolicy(DomainModel):
+    review_role: ActorRole
+    allowed_project_states: frozenset[ApprovalState] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def reviewer_is_an_independent_technical_role(self) -> ManualEvidencePolicy:
+        if self.review_role not in {
+            ActorRole.REVIEWER,
+            ActorRole.TECHNICAL_EXPERT,
+        }:
+            raise ValueError("Manual evidence review role must be REVIEWER or TECHNICAL_EXPERT")
+        return self
+
+
+class ManualEvidenceDocumentView(DomainModel):
+    document_id: str
+    document_revision_id: str
+    title: str
+    revision_label: str
+    original_filename: str
+    original_object_hash: str
+
+
+class ManualEvidenceContextView(DomainModel):
+    project_id: str
+    project_state: ApprovalState
+    document_set_revision_id: str
+    policy_version_id: str
+    review_role: ActorRole
+    allowed_project_states: tuple[ApprovalState, ...]
+    documents: tuple[ManualEvidenceDocumentView, ...]
+
+
+class ManualEvidenceDecisionCommand(DomainModel):
+    decision: ApprovalDecision
+    reason: str = Field(min_length=1, max_length=4000)
+    expected_task_updated_at: datetime
+
+    @field_validator("expected_task_updated_at")
+    @classmethod
+    def task_timestamp_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Expected task timestamp must include a timezone")
+        return value
+
+
+class ManualEvidenceReviewView(DomainModel):
+    source_observation: Observation
+    source_observation_hash: str
+    submission_reason: str
+    task_id: str
+    task_status: str
+    task_updated_at: datetime
+    task_created_by: str
+    policy_version_id: str
+    document_set_revision_id: str
+    review_role: ActorRole
+    decision_allowed: bool
+    decision_blockers: tuple[str, ...]
+    verified_observation_id: str | None = None
+
+
+class ManualEvidenceDecisionResult(DomainModel):
+    review: ManualEvidenceReviewView
+    approval_id: str
+    decision: ApprovalDecision
+    verified_observation: Observation | None = None
+
+
 class ConflictObservationView(Observation):
     adapter_qualification_id: str | None = None
     adapter_qualification_status: str | None = None
@@ -167,13 +242,16 @@ class EvidenceService:
         request_id: str,
         reason: str,
     ) -> Observation:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("Evidence observation reason must contain 1 to 2000 characters")
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
         if ActorRole.SYSTEM in actor.roles:
-            project_service.get_project(
+            project = project_service.get_project(
                 actor=actor,
                 project_id=project_id,
                 lock=True,
@@ -183,7 +261,7 @@ class EvidenceService:
                 ),
             )
         else:
-            project_service.get_project(
+            project = project_service.get_project(
                 actor=actor,
                 project_id=project_id,
                 lock=True,
@@ -203,6 +281,30 @@ class EvidenceService:
         if draft.location.original_object_hash != revision.object_hash:
             raise ValueError("Evidence location object hash does not match document revision")
         self._validate_adapter(actor, draft)
+        manual_policy_row: ControlledVersionRow | None = None
+        manual_policy: ManualEvidencePolicy | None = None
+        document_set: DocumentSetRevisionRow | None = None
+        if draft.method is EvidenceMethod.MANUAL:
+            manual_policy_row, manual_policy = self._manual_evidence_policy(
+                project_id=project_id,
+                organization_id=actor.organization_id,
+            )
+            if ApprovalState(project.state) not in manual_policy.allowed_project_states:
+                raise ValueError(
+                    "Manual evidence is not allowed in the current project state by policy"
+                )
+            if draft.method_version != manual_policy_row.id:
+                raise ValueError(
+                    "Manual observation method version must equal the bound policy version"
+                )
+            document_set = self._current_document_set(
+                project_id=project_id,
+                document_set_revision_id=project.current_document_set_revision_id,
+            )
+            if revision.id not in document_set.revision_ids:
+                raise ValueError(
+                    "Manual evidence must point to a revision in the confirmed current document set"
+                )
         identity = {
             "project_id": project_id,
             "field_name": draft.field_name,
@@ -233,23 +335,55 @@ class EvidenceService:
             **draft.basis_metadata,
             "observation": observation.model_dump(mode="json"),
             "adapter_qualification_id": draft.adapter_qualification_id,
+            **({"manual_reason": reason} if draft.method is EvidenceMethod.MANUAL else {}),
         }
         existing = self.session.get(ObservationRow, observation.observation_id)
         if existing is not None:
+            if (
+                existing.project_id != project_id
+                or existing.document_revision_id != revision.id
+                or existing.field_name != observation.field_name
+                or existing.method != observation.method.value
+                or existing.method_version != observation.method_version
+                or existing.status != observation.status.value
+                or existing.payload != payload
+            ):
+                raise RuntimeError("Existing observation does not reproduce its identity")
+            if (
+                manual_policy_row is not None
+                and manual_policy is not None
+                and document_set is not None
+            ):
+                self._ensure_manual_evidence_task(
+                    source=existing,
+                    policy_row=manual_policy_row,
+                    policy=manual_policy,
+                    document_set=document_set,
+                    created_by=actor.actor_id,
+                )
             return Observation.model_validate(existing.payload["observation"])
-        self.session.add(
-            ObservationRow(
-                id=observation.observation_id,
-                project_id=project_id,
-                document_revision_id=revision.id,
-                field_name=observation.field_name,
-                method=observation.method.value,
-                method_version=observation.method_version,
-                status=observation.status.value,
-                payload=payload,
-                created_at=utc_now(),
-            )
+        source_row = ObservationRow(
+            id=observation.observation_id,
+            project_id=project_id,
+            document_revision_id=revision.id,
+            field_name=observation.field_name,
+            method=observation.method.value,
+            method_version=observation.method_version,
+            status=observation.status.value,
+            payload=payload,
+            created_at=utc_now(),
         )
+        self.session.add(source_row)
+        if manual_policy_row is not None and manual_policy is not None and document_set is not None:
+            task = self._ensure_manual_evidence_task(
+                source=source_row,
+                policy_row=manual_policy_row,
+                policy=manual_policy,
+                document_set=document_set,
+                created_by=actor.actor_id,
+            )
+        else:
+            task = None
         project_service.record_event(
             aggregate_type="project",
             aggregate_id=project_id,
@@ -264,9 +398,327 @@ class EvidenceService:
                 "method": observation.method,
                 "method_version": observation.method_version,
                 "adapter_qualification_id": draft.adapter_qualification_id,
+                "manual_evidence_review_task_id": task.id if task is not None else None,
             },
         )
         return observation
+
+    def manual_evidence_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+    ) -> ManualEvidenceContextView:
+        project_service = ProjectService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        )
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
+        policy_row, policy = self._manual_evidence_policy(
+            project_id=project_id,
+            organization_id=actor.organization_id,
+        )
+        document_set = self._current_document_set(
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        revisions = list(
+            self.session.execute(
+                select(DocumentRevisionRow, DocumentRow)
+                .join(DocumentRow, DocumentRow.id == DocumentRevisionRow.document_id)
+                .where(
+                    DocumentRow.project_id == project_id,
+                    DocumentRevisionRow.id.in_(tuple(document_set.revision_ids)),
+                )
+            ).all()
+        )
+        revisions_by_id = {revision.id: (revision, document) for revision, document in revisions}
+        if set(revisions_by_id) != set(document_set.revision_ids):
+            raise RuntimeError("Confirmed document set contains a missing project revision")
+        documents = tuple(
+            ManualEvidenceDocumentView(
+                document_id=revisions_by_id[revision_id][1].id,
+                document_revision_id=revision_id,
+                title=revisions_by_id[revision_id][1].title,
+                revision_label=revisions_by_id[revision_id][0].revision_label,
+                original_filename=revisions_by_id[revision_id][0].original_filename,
+                original_object_hash=revisions_by_id[revision_id][0].object_hash,
+            )
+            for revision_id in document_set.revision_ids
+        )
+        return ManualEvidenceContextView(
+            project_id=project_id,
+            project_state=ApprovalState(project.state),
+            document_set_revision_id=document_set.id,
+            policy_version_id=policy_row.id,
+            review_role=policy.review_role,
+            allowed_project_states=tuple(
+                sorted(policy.allowed_project_states, key=lambda state: state.value)
+            ),
+            documents=documents,
+        )
+
+    def manual_evidence_review(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        observation_id: str,
+        lock: bool = False,
+    ) -> ManualEvidenceReviewView:
+        project_service = ProjectService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        )
+        project = project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=lock,
+        )
+        source_statement = select(ObservationRow).where(
+            ObservationRow.id == observation_id,
+            ObservationRow.project_id == project_id,
+        )
+        if lock:
+            source_statement = source_statement.with_for_update()
+        source = self.session.scalar(source_statement)
+        if source is None:
+            raise LookupError(observation_id)
+        observation = Observation.model_validate(source.payload.get("observation"))
+        if (
+            source.method != EvidenceMethod.MANUAL.value
+            or observation.method is not EvidenceMethod.MANUAL
+            or source.status != VerificationStatus.UNVERIFIED.value
+            or observation.status is not VerificationStatus.UNVERIFIED
+        ):
+            raise ValueError("Only an immutable UNVERIFIED manual observation can be reviewed")
+        policy_row, policy = self._manual_evidence_policy(
+            project_id=project_id,
+            organization_id=actor.organization_id,
+        )
+        project_service.get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(policy.review_role,),
+        )
+        document_set = self._current_document_set(
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        task_id = self._manual_evidence_task_id(source.id, policy_row.id)
+        task_statement = select(ApprovalTaskRow).where(
+            ApprovalTaskRow.id == task_id,
+            ApprovalTaskRow.project_id == project_id,
+            ApprovalTaskRow.task_type == "MANUAL_EVIDENCE_REVIEW",
+            ApprovalTaskRow.entity_type == "evidence_observation",
+            ApprovalTaskRow.entity_id == source.id,
+        )
+        if lock:
+            task_statement = task_statement.with_for_update()
+        task = self.session.scalar(task_statement)
+        if task is None:
+            raise RuntimeError("Manual observation has no dedicated review task")
+        blockers = self._manual_evidence_review_blockers(
+            actor=actor,
+            project_state=ApprovalState(project.state),
+            source=source,
+            observation=observation,
+            task=task,
+            policy_row=policy_row,
+            policy=policy,
+            document_set=document_set,
+        )
+        verified_observation_id = None
+        decisions = tuple(
+            self.session.scalars(
+                select(ApprovalRecordRow)
+                .where(ApprovalRecordRow.task_id == task.id)
+                .order_by(ApprovalRecordRow.decided_at.desc(), ApprovalRecordRow.id.desc())
+            )
+        )
+        if decisions:
+            candidate = decisions[0].payload.get("verified_observation_id")
+            if isinstance(candidate, str) and candidate:
+                verified_observation_id = candidate
+        task_updated_at = ensure_utc(task.updated_at)
+        if task_updated_at is None:
+            raise RuntimeError("Manual evidence task update timestamp is missing")
+        return ManualEvidenceReviewView(
+            source_observation=observation,
+            source_observation_hash=content_hash(source.payload),
+            submission_reason=str(source.payload.get("manual_reason", "")),
+            task_id=task.id,
+            task_status=task.status,
+            task_updated_at=task_updated_at,
+            task_created_by=str(task.payload.get("created_by")),
+            policy_version_id=policy_row.id,
+            document_set_revision_id=document_set.id,
+            review_role=policy.review_role,
+            decision_allowed=not blockers,
+            decision_blockers=tuple(blockers),
+            verified_observation_id=verified_observation_id,
+        )
+
+    def decide_manual_evidence(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        observation_id: str,
+        command: ManualEvidenceDecisionCommand,
+        request_id: str,
+    ) -> ManualEvidenceDecisionResult:
+        reason = command.reason.strip()
+        if not reason:
+            raise ValueError("Manual evidence decision reason is required")
+        review = self.manual_evidence_review(
+            actor=actor,
+            project_id=project_id,
+            observation_id=observation_id,
+            lock=True,
+        )
+        if review.decision_blockers:
+            raise ValueError(
+                "Manual evidence review is blocked: " + ", ".join(review.decision_blockers)
+            )
+        expected_task_updated_at = ensure_utc(command.expected_task_updated_at)
+        assert expected_task_updated_at is not None
+        if ensure_utc(review.task_updated_at) != expected_task_updated_at:
+            raise OptimisticLockError(
+                "Manual evidence review task changed after it was loaded; reload before deciding"
+            )
+        source = self.session.get(ObservationRow, observation_id)
+        task = self.session.get(ApprovalTaskRow, review.task_id)
+        assert source is not None
+        assert task is not None
+        source_observation = Observation.model_validate(source.payload["observation"])
+        now = utc_now()
+        approval_id = f"approval-{uuid4()}"
+        verified: Observation | None = None
+        if command.decision is ApprovalDecision.APPROVED:
+            verified_id = (
+                "observation-"
+                + content_hash(
+                    {
+                        "source_observation_id": source.id,
+                        "source_observation_hash": review.source_observation_hash,
+                        "policy_version_id": review.policy_version_id,
+                        "document_set_revision_id": review.document_set_revision_id,
+                        "approval_task_id": task.id,
+                    }
+                )[:24]
+            )
+            verified = source_observation.model_copy(
+                update={
+                    "observation_id": verified_id,
+                    "method": EvidenceMethod.RULE_ENGINE,
+                    "method_version": review.policy_version_id,
+                    "observed_at": now,
+                    "actor_id": actor.actor_id,
+                    "confidence": None,
+                    "status": VerificationStatus.VERIFIED,
+                }
+            )
+            existing = self.session.get(ObservationRow, verified_id)
+            if existing is not None:
+                raise RuntimeError("Manual evidence review already produced a derived observation")
+            basis_metadata = self._validated_basis_metadata(source, source_observation)
+            self.session.add(
+                ObservationRow(
+                    id=verified.observation_id,
+                    project_id=project_id,
+                    document_revision_id=source.document_revision_id,
+                    field_name=verified.field_name,
+                    method=verified.method.value,
+                    method_version=verified.method_version,
+                    status=verified.status.value,
+                    payload={
+                        "observation": verified.model_dump(mode="json"),
+                        "source_observation_ids": [source.id],
+                        "source_observation_hash": review.source_observation_hash,
+                        "derivation_type": "MANUAL_EVIDENCE_REVIEW",
+                        "manual_evidence_policy_version_id": review.policy_version_id,
+                        "document_set_revision_id": review.document_set_revision_id,
+                        "approval_task_id": task.id,
+                        "approval_record_id": approval_id,
+                        **basis_metadata,
+                    },
+                    created_at=now,
+                )
+            )
+        task.status = command.decision.value
+        task.updated_at = now
+        evidence_ids = [source.id]
+        if verified is not None:
+            evidence_ids.append(verified.observation_id)
+        self.session.add(
+            ApprovalRecordRow(
+                id=approval_id,
+                task_id=task.id,
+                decision=command.decision.value,
+                decided_by=actor.actor_id,
+                reason=reason,
+                payload={
+                    "project_id": project_id,
+                    "evidence_ids": evidence_ids,
+                    "source_observation_hash": review.source_observation_hash,
+                    "policy_version_id": review.policy_version_id,
+                    "document_set_revision_id": review.document_set_revision_id,
+                    "expected_task_updated_at": expected_task_updated_at.isoformat(),
+                    "verified_observation_id": (
+                        verified.observation_id if verified is not None else None
+                    ),
+                },
+                decided_at=now,
+            )
+        )
+        ProjectService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        ).record_event(
+            aggregate_type="project",
+            aggregate_id=project_id,
+            event_type="manual_evidence_review_decided",
+            actor=actor,
+            request_id=request_id,
+            reason=reason,
+            payload={
+                "source_observation_id": source.id,
+                "source_observation_hash": review.source_observation_hash,
+                "decision": command.decision,
+                "verified_observation_id": (
+                    verified.observation_id if verified is not None else None
+                ),
+                "approval_task_id": task.id,
+                "approval_record_id": approval_id,
+                "policy_version_id": review.policy_version_id,
+                "document_set_revision_id": review.document_set_revision_id,
+            },
+        )
+        final_review = review.model_copy(
+            update={
+                "task_status": command.decision.value,
+                "task_updated_at": now,
+                "decision_allowed": False,
+                "decision_blockers": ("TASK_NOT_PENDING",),
+                "verified_observation_id": (
+                    verified.observation_id if verified is not None else None
+                ),
+            }
+        )
+        return ManualEvidenceDecisionResult(
+            review=final_review,
+            approval_id=approval_id,
+            decision=command.decision,
+            verified_observation=verified,
+        )
 
     def reconcile(
         self,
@@ -790,6 +1242,221 @@ class EvidenceService:
     @staticmethod
     def _conflict_task_id(conflict_id: str) -> str:
         return f"approval-task-conflict-{content_hash(conflict_id)[:24]}"
+
+    def _manual_evidence_policy(
+        self,
+        *,
+        project_id: str,
+        organization_id: str,
+    ) -> tuple[ControlledVersionRow, ManualEvidencePolicy]:
+        bindings = list(
+            self.session.execute(
+                select(ControlledVersionRow, ProjectControlledVersionRow)
+                .join(
+                    ProjectControlledVersionRow,
+                    ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
+                )
+                .where(
+                    ProjectControlledVersionRow.project_id == project_id,
+                    ProjectControlledVersionRow.purpose == "manual_evidence_policy",
+                )
+            ).all()
+        )
+        if len(bindings) != 1:
+            raise ValueError("Project must bind exactly one approved manual evidence policy")
+        row, _binding = bindings[0]
+        require_controlled_version_integrity(
+            session=self.session,
+            settings=self.settings,
+            row=row,
+            expected_organization_id=organization_id,
+            expected_kind="manual_evidence_policy",
+        )
+        policy = ManualEvidencePolicy.model_validate(
+            {
+                "review_role": row.payload.get("review_role"),
+                "allowed_project_states": row.payload.get("allowed_project_states"),
+            }
+        )
+        return row, policy
+
+    def _current_document_set(
+        self,
+        *,
+        project_id: str,
+        document_set_revision_id: str | None,
+    ) -> DocumentSetRevisionRow:
+        if not document_set_revision_id:
+            raise ValueError("Manual evidence requires a confirmed current document set")
+        row = self.session.scalar(
+            select(DocumentSetRevisionRow).where(
+                DocumentSetRevisionRow.id == document_set_revision_id,
+                DocumentSetRevisionRow.project_id == project_id,
+                DocumentSetRevisionRow.status == "CONFIRMED",
+            )
+        )
+        if row is None:
+            raise ValueError("Manual evidence requires a confirmed current document set")
+        revision_ids = row.revision_ids
+        if (
+            not isinstance(revision_ids, list)
+            or not revision_ids
+            or any(
+                not isinstance(revision_id, str) or not revision_id or len(revision_id) > 64
+                for revision_id in revision_ids
+            )
+            or len(set(revision_ids)) != len(revision_ids)
+            or row.manifest_hash != content_hash(revision_ids)
+            or not row.confirmed_by
+            or row.confirmed_at is None
+            or row.confirmed_by == row.created_by
+        ):
+            raise RuntimeError(
+                "Confirmed current document set manifest and four-eyes evidence do not verify"
+            )
+        return row
+
+    @staticmethod
+    def _manual_evidence_task_id(
+        observation_id: str,
+        policy_version_id: str,
+    ) -> str:
+        return (
+            "approval-task-manual-evidence-"
+            + content_hash(
+                {
+                    "observation_id": observation_id,
+                    "policy_version_id": policy_version_id,
+                }
+            )[:24]
+        )
+
+    def _ensure_manual_evidence_task(
+        self,
+        *,
+        source: ObservationRow,
+        policy_row: ControlledVersionRow,
+        policy: ManualEvidencePolicy,
+        document_set: DocumentSetRevisionRow,
+        created_by: str,
+    ) -> ApprovalTaskRow:
+        observation = Observation.model_validate(source.payload.get("observation"))
+        if (
+            source.project_id != document_set.project_id
+            or source.document_revision_id not in document_set.revision_ids
+            or source.method != EvidenceMethod.MANUAL.value
+            or source.status != VerificationStatus.UNVERIFIED.value
+            or observation.method is not EvidenceMethod.MANUAL
+            or observation.status is not VerificationStatus.UNVERIFIED
+            or source.method_version != policy_row.id
+            or observation.method_version != policy_row.id
+            or source.field_name != observation.field_name
+        ):
+            raise RuntimeError(
+                "Manual evidence source does not reproduce its governed review scope"
+            )
+        task_id = self._manual_evidence_task_id(source.id, policy_row.id)
+        source_hash = content_hash(source.payload)
+        expected_payload = {
+            "created_by": created_by,
+            "source_observation_id": source.id,
+            "source_observation_hash": source_hash,
+            "observation_ids": [source.id],
+            "policy_version_id": policy_row.id,
+            "policy_content_hash": policy_row.content_hash,
+            "document_set_revision_id": document_set.id,
+            "document_revision_id": source.document_revision_id,
+            "review_role": policy.review_role.value,
+        }
+        existing = self.session.get(ApprovalTaskRow, task_id)
+        if existing is not None:
+            if (
+                existing.project_id != source.project_id
+                or existing.task_type != "MANUAL_EVIDENCE_REVIEW"
+                or existing.entity_type != "evidence_observation"
+                or existing.entity_id != source.id
+                or existing.assigned_role != policy.review_role.value
+                or not existing.required
+                or existing.payload != expected_payload
+            ):
+                raise RuntimeError("Existing manual evidence task does not reproduce its identity")
+            return existing
+        now = utc_now()
+        task = ApprovalTaskRow(
+            id=task_id,
+            project_id=source.project_id,
+            task_type="MANUAL_EVIDENCE_REVIEW",
+            entity_type="evidence_observation",
+            entity_id=source.id,
+            assigned_role=policy.review_role.value,
+            status="PENDING",
+            required=True,
+            payload=expected_payload,
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(task)
+        return task
+
+    @staticmethod
+    def _manual_evidence_review_blockers(
+        *,
+        actor: Actor,
+        project_state: ApprovalState,
+        source: ObservationRow,
+        observation: Observation,
+        task: ApprovalTaskRow,
+        policy_row: ControlledVersionRow,
+        policy: ManualEvidencePolicy,
+        document_set: DocumentSetRevisionRow,
+    ) -> list[str]:
+        blockers: list[str] = []
+        expected_payload = {
+            "created_by": observation.actor_id,
+            "source_observation_id": source.id,
+            "source_observation_hash": content_hash(source.payload),
+            "observation_ids": [source.id],
+            "policy_version_id": policy_row.id,
+            "policy_content_hash": policy_row.content_hash,
+            "document_set_revision_id": document_set.id,
+            "document_revision_id": source.document_revision_id,
+            "review_role": policy.review_role.value,
+        }
+        if (
+            source.project_id != document_set.project_id
+            or source.document_revision_id not in document_set.revision_ids
+            or source.field_name != observation.field_name
+            or source.method != observation.method.value
+            or source.method_version != observation.method_version
+            or source.status != observation.status.value
+            or observation.method is not EvidenceMethod.MANUAL
+            or observation.status is not VerificationStatus.UNVERIFIED
+            or source.method_version != policy_row.id
+            or not isinstance(source.payload.get("manual_reason"), str)
+            or not source.payload["manual_reason"].strip()
+        ):
+            blockers.append("MANUAL_EVIDENCE_SCOPE_MISMATCH")
+        if project_state not in policy.allowed_project_states:
+            blockers.append("PROJECT_STATE_NOT_ALLOWED")
+        if (
+            task.task_type != "MANUAL_EVIDENCE_REVIEW"
+            or task.entity_type != "evidence_observation"
+            or task.entity_id != source.id
+            or task.project_id != source.project_id
+            or task.payload != expected_payload
+        ):
+            blockers.append("TASK_INTEGRITY_FAILED")
+        if not task.required:
+            blockers.append("TASK_NOT_REQUIRED")
+        if task.assigned_role != policy.review_role.value:
+            blockers.append("TASK_ROLE_MISMATCH")
+        if task.status != "PENDING":
+            blockers.append("TASK_NOT_PENDING")
+        if observation.actor_id == actor.actor_id:
+            blockers.append("FOUR_EYES_SOURCE_AUTHOR")
+        if task.payload.get("created_by") == actor.actor_id:
+            blockers.append("FOUR_EYES_TASK_CREATOR")
+        return list(dict.fromkeys(blockers))
 
     def _validate_adapter(self, actor: Actor, draft: ObservationDraft) -> None:
         if draft.method is EvidenceMethod.MANUAL:

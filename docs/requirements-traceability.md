@@ -18,7 +18,7 @@ Status values:
 | Scope | Target module | Delivery evidence |
 |---|---|---|
 | 1-3 intake, versions, graph | intake, document graph | controlled project registration and quarantine-upload UI, streamed quarantine, qualified scan state machine, leased outbox retry/dead-letter/replay, short-transaction worker-only bounded manifest/revision processing, exact-manifest read contract, and stale-safe four-eyes revision confirmation UI (`APPLICATION_SLICE`); external scanner/scheduler/sandbox (`PORT`/`OPERATIONS`); graph rules (`DOMAIN_CORE`) |
-| 4 extraction | evidence + worker adapters | qualified immutable observations and independent reconciliation (`APPLICATION_SLICE`), OCR/visual providers (`PORT`) |
+| 4 extraction | evidence + worker adapters | qualified immutable observations and independent reconciliation; governed manual correction binds an approved policy and current confirmed document revision, remains unverified until a dedicated four-eyes review creates a separate derived observation, with UI/API/audit/PostgreSQL controls (`APPLICATION_CORE`); OCR/visual providers (`PORT`) |
 | 5 passport | project passport | revisioned provenance-backed facts, verification and stage blockers (`APPLICATION_CORE`) |
 | 6-8 BoQ, completeness, nomenclature | BoQ, scope, nomenclature | BoQ/quantity revisions, exact cost-component plan, scope attestations, deterministic attribute matching and governed analogues (`APPLICATION_CORE`) |
 | 9-10 norms and normative cost | normative adapter | result validation (`DOMAIN_CORE`); licensed engine (`PORT`, `QUALIFICATION`) |
@@ -27,7 +27,7 @@ Status values:
 | 15 contract and finance | contract, calculation | versioned evidence-bound required terms plus dated cash-flow, piecewise funding-rate, guarantee-fee and day-count model; independent daily recalculation; four-eyes derived cost impact and snapshot lineage (`APPLICATION_CORE`); treasury/indexation/FX feeds and qualification (`PORT`, `QUALIFICATION`) |
 | 16-18 risk, bid price, scenarios | risk, calculation, scenario | verified risk register, model-bound reserve and reserve-to-BoQ binding; server-generated exact atomic-input candidate; no-manual-value calculation UI; fixed snapshot; hash-bound internal/bid release; approved-policy scenarios over fixed snapshots with independent recalculation (`APPLICATION_CORE`); business qualification remains open |
 | 19 independent verification | validation | separate recalculation, mismatch, explicit Decimal rounding/overflow and snapshot/run integrity controls (`APPLICATION_CORE`) |
-| 20 expert approval | workflow | version-bound task planning, evidence-required decisions, four-eyes checks and exact gate-hash/project/target attestation at release; controlled content additionally requires an immutable draft-to-approval lifecycle, content/audit reproduction and PostgreSQL mutation guards (`APPLICATION_CORE`); organisation policy qualification remains open |
+| 20 expert approval | workflow | version-bound task planning, evidence-required decisions, dedicated conflict/manual-evidence workflows, four-eyes checks and exact gate-hash/project/target attestation at release; approval records are unique and append-only in PostgreSQL, task identity/scope is protected, and deferred constraints prevent a terminal task without an exactly matching decision; controlled content additionally requires an immutable draft-to-approval lifecycle and content/audit reproduction (`APPLICATION_CORE`); organisation policy qualification remains open |
 | 21 audit | audit | versioned-key hash chains, verified legacy migration, immutable global checkpoints, four-eyes Ed25519 external receipts, full current-history verification, snapshot-to-document lineage, and live object-lock readiness enforcement (`APPLICATION_CORE`); production anchor provider, WORM evidence and drills (`QUALIFICATION`) |
 | 22 export/integration | integration | deterministic Ed25519-signed estimate/audit package; persisted mutation idempotency; universal outbox; qualification-bound Ed25519 event/receipt contracts; immutable outbound attempts and inbound messages; leased retry/dead-letter processing; collision-safe deduplication and controlled replay (`APPLICATION_CORE`); organization-specific ERP/DMS/BI mappings, deployed workers/schedulers, endpoints, credentials, conformance/load evidence and external trust registry (`PORT`, `OPERATIONS`, `QUALIFICATION`) |
 | 23-24 actuals and calibration | actuals + business qualification | revisioned verified facts, fixed-snapshot comparison, mandatory variance reasons and methodology-owner calibration approval; governed closed historical/blind/parallel campaigns lock system forecasts before references, use exact unrounded metrics, require independent material-discrepancy review, and produce an immutable package revalidated by production release (`APPLICATION_CORE`); organisation dataset, professional comparisons and factual feeds remain `QUALIFICATION`/`PORT` |
@@ -36,8 +36,9 @@ Status values:
 
 All eleven contours map to a named module or explicit integration boundary.
 The current API connects intake, qualified evidence/reconciliation and
-review-task-backed conflict resolution with a dual-version, source-provenance
-operator workflow, passport,
+review-task-backed conflict resolution with a dual-version,
+source-provenance operator workflow, governed manual evidence correction and
+independent review, passport,
 BoQ/quantity, scope attestations, nomenclature/analogue decisions, governed
 pricing/RFQ, contract terms and cost impacts, risk/register reserve,
 calculation, independent validation, controlled scenario execution, expert

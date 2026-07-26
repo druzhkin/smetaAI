@@ -110,6 +110,17 @@ export function RecordsPage({
                 Загрузить документ
               </Link>
             )}
+          {section === "EVIDENCE" &&
+            (auth.roles.includes("TECHNICAL_EXPERT") ||
+              auth.roles.includes("REVIEWER")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/evidence/manual`}
+              >
+                <Icon name="edit" size={16} />
+                Ручное наблюдение
+              </Link>
+            )}
           <StatusPill value={projectQuery.data.state} />
         </div>
       </header>
@@ -226,6 +237,24 @@ export function RecordsPage({
                     >
                       <Icon name="trace" size={15} />
                       Открыть ценовой контур
+                    </Link>
+                  );
+                }
+                if (
+                  section === "EVIDENCE" &&
+                  record.kind === "OBSERVATION" &&
+                  record.subtitle === "MANUAL" &&
+                  record.status === "UNVERIFIED" &&
+                  (auth.roles.includes("REVIEWER") ||
+                    auth.roles.includes("TECHNICAL_EXPERT"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/evidence/observations/${encodeURIComponent(record.id)}/review`}
+                    >
+                      <Icon name="shield" size={15} />
+                      Проверить наблюдение
                     </Link>
                   );
                 }

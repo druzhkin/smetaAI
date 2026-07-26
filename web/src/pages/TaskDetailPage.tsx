@@ -299,6 +299,27 @@ export function TaskDetailPage({
           </section>
         )}
 
+      {detail.item.task_type === "MANUAL_EVIDENCE_REVIEW" &&
+        detail.item.entity_type === "evidence_observation" && (
+          <section className="dedicated-workflow-callout">
+            <div>
+              <p className="eyebrow">Специализированный workflow</p>
+              <h2>Проверить ручное наблюдение и его provenance</h2>
+              <p>
+                Универсальное утверждение запрещено: необходимо сверить исходную
+                редакцию, SHA-256, локатор, единицу и автора записи.
+              </p>
+            </div>
+            <Link
+              className="button button--primary"
+              to={`/projects/${encodeURIComponent(detail.item.project_id)}/evidence/observations/${encodeURIComponent(detail.item.entity_id)}/review`}
+            >
+              Открыть независимую проверку
+              <Icon name="arrow" size={15} />
+            </Link>
+          </section>
+        )}
+
       {detail.item.task_type === "MANUAL_CHANGE" &&
         detail.item.entity_type === "manual_change" && (
           <section className="dedicated-workflow-callout">

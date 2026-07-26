@@ -19,7 +19,7 @@ all operational qualification evidence remain open.
 |---|---|---|
 | Input integrity | archive manifest, hashes, file health, revision graph | block or `DOCUMENTS_INCOMPLETE` |
 | Untrusted file boundary | separate quarantine, qualified exact-hash malware result, leased bounded-retry outbox, worker-only bounded parsing | no evidence promotion; retry or dead-letter with unresolved blocker; `BLOCKED`/`DOCUMENTS_INCOMPLETE` |
-| Extraction | independent observations and reconciliation | conflict; no auto-merge |
+| Extraction | independent observations and reconciliation; policy/document-bound manual correction with dedicated four-eyes review | conflict or unverified source; no auto-merge and no direct manual `VERIFIED` |
 | Scope | WBS/rule/dependency companion-work checks | scope issue; expert review |
 | Quantity | source/formula/unit/geometry/alternatives and checks | unverified quantity hard stop |
 | Nomenclature | explicit critical attributes and match class | reject or expert review |
@@ -108,6 +108,14 @@ reproduce a finite positive rate, unit and ISO currency; those commercial basis
 fields remain on the derived observation while `CONFLICT_RESOLUTION` is stored
 separately as the derivation type. `VERIFIED` is also the sole status used by
 release and operator blocker counts.
+
+Manual correction is a separate distrust boundary. The operator can create
+only an immutable `MANUAL`/`UNVERIFIED` source tied to the current confirmed
+document revision and an approved policy. The dedicated review rechecks the
+source hash, reason, locator, document-set/policy bindings, actor separation and
+task timestamp. Approval creates a new derived observation; it never upgrades
+the manual row in place. PostgreSQL makes the decision record append-only and
+requires it to agree with the terminal task, preventing a status-only approval.
 
 ## Residual risks
 

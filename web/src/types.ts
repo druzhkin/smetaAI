@@ -194,6 +194,48 @@ export interface ConflictResolutionResult {
   verified_observation: EvidenceObservation;
 }
 
+export interface ManualEvidenceDocument {
+  document_id: string;
+  document_revision_id: string;
+  title: string;
+  revision_label: string;
+  original_filename: string;
+  original_object_hash: string;
+}
+
+export interface ManualEvidenceContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  policy_version_id: string;
+  review_role: ActorRole;
+  allowed_project_states: ApprovalState[];
+  documents: ManualEvidenceDocument[];
+}
+
+export interface ManualEvidenceReview {
+  source_observation: EvidenceObservation;
+  source_observation_hash: string;
+  submission_reason: string;
+  task_id: string;
+  task_status: string;
+  task_updated_at: string;
+  task_created_by: string;
+  policy_version_id: string;
+  document_set_revision_id: string;
+  review_role: ActorRole;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+  verified_observation_id: string | null;
+}
+
+export interface ManualEvidenceDecisionResult {
+  review: ManualEvidenceReview;
+  approval_id: string;
+  decision: ApprovalDecision;
+  verified_observation: EvidenceObservation | null;
+}
+
 export interface ApprovalDecisionResult {
   approval_id: string;
   task_id: string;

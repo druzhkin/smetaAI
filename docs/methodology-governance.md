@@ -6,6 +6,8 @@ software defaults.
 The methodology owner must version and approve:
 
 - mandatory document types and critical project-passport fields;
+- manual-evidence reviewer role and the project states in which a correction
+  may be submitted or decided;
 - quantity tolerances, rounding, sign rules, balance rules, and historical
   benchmark versions;
 - WBS/typology/dependency scope-completeness rules;
@@ -30,8 +32,8 @@ The methodology owner must version and approve:
 The application currently binds the following governed content directly into
 stage gates or calculation lineage:
 
-- `document_requirements`, `passport_requirements`, `quantity_policy`, and
-  `scope_rules`;
+- `document_requirements`, `passport_requirements`,
+  `manual_evidence_policy`, `quantity_policy`, and `scope_rules`;
 - `nomenclature_catalog`, `equivalence_rules`, `price_policy`, and
   `approval_thresholds`;
 - `contract_risk_rules`, `risk_model`, `calculation_policy`,
@@ -70,6 +72,12 @@ separation and complete signed audit chain; a status string alone is never
 accepted. A project cannot calculate with ambiguous duplicate version kinds.
 A later version does not silently change an existing calculation snapshot.
 See [controlled-version integrity](controlled-version-integrity.md).
+
+The bound `manual_evidence_policy` has no software fallback. It declares one
+independent technical/reviewer role and a non-empty set of allowed workflow
+states. Manual input remains unverified, and a changed policy or document set
+blocks the existing review rather than rebasing it. See
+[governed manual evidence review](manual-evidence-review.md).
 
 Approval thresholds are organisation-owned values. The application may
 evaluate a configured threshold, but it must not create a monetary threshold,

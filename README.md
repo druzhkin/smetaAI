@@ -124,6 +124,13 @@ The repository currently connects and integration-tests:
   locations, rejects the source author and conflict-task creator, binds both
   optimistic versions, preserves a validated normalized commercial basis, and
   creates a separately verified derived observation;
+- governed manual extraction correction that accepts only a revision from the
+  current independently confirmed document set, binds an approved
+  `manual_evidence_policy`, preserves the exact reason/value/unit/locator and
+  object SHA-256, rejects floating-point values recursively, and creates an
+  immutable `UNVERIFIED` source plus a dedicated four-eyes task. Approval
+  creates a separate lineage-linked `VERIFIED` observation; the generic
+  approval API cannot bypass this workflow;
 - governed BoQ quantity correction that binds immutable before/after states to
   the exact current quantity, confirmed document set, approved rules and
   policy, and project-scoped observations; critical changes require an
@@ -162,6 +169,11 @@ The repository currently connects and integration-tests:
   creation and the exact four-eyes approval transition, while binding,
   profile loading, calculation and release reproduce content hashes,
   organisation ownership, actor roles and the complete signed audit chain.
+- PostgreSQL approval-evidence integrity: task identity and scope are
+  immutable, only explicit decision or auditable document supersession
+  transitions are accepted, approval records are append-only and unique per
+  task, and deferred constraints require the terminal task status to agree
+  with its immutable decision record.
 
 These are application workflows, not a claim that the complete target system
 or its external operational environment has been delivered.
@@ -215,8 +227,8 @@ backup/disaster-recovery evidence, trained users, and named process owners.
 Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
-schedulers/monitoring, remaining controlled extraction-correction,
-BoQ-structure/nomenclature/reconciliation
+schedulers/monitoring, remaining BoQ-structure,
+nomenclature/reconciliation
 surfaces, and business qualification of the operator interface remain to be
 completed.
 Application actor/organisation quotas are implemented, but independently
@@ -249,3 +261,5 @@ Mutation retry and outbox delivery semantics are specified in
 [the reliable-mutations contract](docs/reliable-mutations.md).
 Signed transport, inbox, and replay semantics are specified in
 [the integration-delivery contract](docs/integration-delivery.md).
+Manual correction and four-eyes verification are specified in
+[the governed manual-evidence contract](docs/manual-evidence-review.md).
