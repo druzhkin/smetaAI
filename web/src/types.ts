@@ -235,6 +235,134 @@ export interface PassportDecisionResult {
   decision: ApprovalDecision;
 }
 
+export type ContractTermKind =
+  | "COMPLETION_DATES"
+  | "PHASING"
+  | "PENALTIES"
+  | "RETENTION"
+  | "BID_OR_PERFORMANCE_SECURITY"
+  | "BANK_GUARANTEE"
+  | "ADVANCE"
+  | "PAYMENT_DEFERRAL"
+  | "WARRANTY"
+  | "FIXED_PRICE"
+  | "CURRENCY_RISK"
+  | "DESIGN_ERROR_LIABILITY"
+  | "MOBILISATION"
+  | "DOCUMENTATION"
+  | "INDEXATION_LIMITS"
+  | "ACCEPTANCE_PROCEDURE";
+
+export interface ContractCostImpact {
+  amount: string;
+  currency: string | null;
+  cost_component_line_id: string | null;
+  cost_component_semantic_key: string | null;
+  derived_cost_model_id: string | null;
+  no_cost_reason: string | null;
+}
+
+export interface ContractTerm {
+  term_id: string;
+  kind: ContractTermKind;
+  value: string;
+  observation_ids: string[];
+  independence_source_ids: string[];
+  verified: boolean;
+  cost_impact_resolved: boolean;
+  supersedes_term_id: string | null;
+  is_current: boolean;
+  created_by: string;
+  verified_by: string | null;
+  rules_version_id: string;
+  document_set_revision_id: string;
+  approval_task_id: string;
+  updated_at: string;
+  approval_task_ids: string[];
+  cost_impact_proposal: ContractCostImpact | null;
+  cost_impact_task_statuses: Record<string, string>;
+  cost_impact_approved_by: string | null;
+  cost_impact_finalized_at: string | null;
+}
+
+export interface ContractEvidenceCandidate {
+  observation: EvidenceObservation;
+  adapter_qualification_id: string | null;
+  adapter_status: string | null;
+  adapter_valid_until: string | null;
+  independence_domain: string | null;
+  eligible: boolean;
+  blockers: string[];
+}
+
+export interface ContractTermReview {
+  term: ContractTerm;
+  task_status: string;
+  task_updated_at: string;
+  assigned_role: ActorRole;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface ContractImpactCandidate {
+  derived_cost_model_id: string;
+  amount: string;
+  currency: string;
+  cost_component_line_id: string;
+  cost_component_semantic_key: string;
+  eligible: boolean;
+  blockers: string[];
+}
+
+export interface ContractValidation {
+  assessment: {
+    assessment_version: string;
+    terms: Array<{
+      term_id: string;
+      kind: ContractTermKind;
+      value: string;
+      observation_ids: string[];
+      independence_source_ids: string[];
+      verified: boolean;
+      cost_impact_resolved: boolean;
+      cost_impact_amount: string | null;
+      cost_impact_currency: string | null;
+      cost_input_id: string | null;
+      approved_assumption_id: string | null;
+      derived_cost_model_id: string | null;
+    }>;
+    required_term_kinds: ContractTermKind[];
+  };
+  findings: ValidationFinding[];
+  rules_version_id: string;
+}
+
+export interface ContractContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  rules_version_id: string;
+  rules_content_hash: string;
+  required_term_kinds: ContractTermKind[];
+  independently_verified_term_kinds: ContractTermKind[];
+  evidence_field_names: Partial<Record<ContractTermKind, string>>;
+  review_role: ActorRole;
+  selected_kind: ContractTermKind;
+  terms: ContractTermReview[];
+  evidence_candidates: ContractEvidenceCandidate[];
+  impact_candidates: ContractImpactCandidate[];
+  candidates_truncated: boolean;
+  validation: ContractValidation;
+  unresolved_conflict_ids: string[];
+}
+
+export interface ContractDecisionResult {
+  term: ContractTerm;
+  validation: ContractValidation;
+  approval_id: string;
+  decision: ApprovalDecision;
+}
+
 export interface ConflictObservation extends EvidenceObservation {
   adapter_qualification_id: string | null;
   adapter_qualification_status: string | null;

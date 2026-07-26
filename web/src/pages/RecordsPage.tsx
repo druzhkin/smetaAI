@@ -137,6 +137,18 @@ export function RecordsPage({
                 </Link>
               </>
             )}
+          {section === "CONTRACT_RISK" &&
+            (auth.roles.includes("ESTIMATOR") ||
+              auth.roles.includes("TECHNICAL_EXPERT") ||
+              auth.roles.includes("REVIEWER")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/contract/manage`}
+              >
+                <Icon name="shield" size={16} />
+                Условия договора
+              </Link>
+            )}
           {section === "BOQ_SCOPE" &&
             projectQuery.data.state === "BOQ_IN_PROGRESS" &&
             (auth.roles.includes("ESTIMATOR") ||
@@ -254,6 +266,21 @@ export function RecordsPage({
                     >
                       <Icon name="shield" size={15} />
                       Открыть паспорт
+                    </Link>
+                  );
+                }
+                if (
+                  section === "CONTRACT_RISK" &&
+                  record.kind === "CONTRACT_TERM" &&
+                  record.current === true
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/contract/manage`}
+                    >
+                      <Icon name="shield" size={15} />
+                      Открыть договор
                     </Link>
                   );
                 }

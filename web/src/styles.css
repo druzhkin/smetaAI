@@ -4344,6 +4344,50 @@ kbd,
   line-height: 1.45;
 }
 
+.contract-page .evidence-candidates > label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  margin-top: 8px;
+  cursor: pointer;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+}
+
+.contract-page .evidence-candidates > label:has(input:checked) {
+  background: #e8f0eb;
+  border-color: #a7c2b8;
+}
+
+.contract-page .evidence-candidates > label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.contract-page .evidence-candidates input[type="checkbox"] {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  margin: 2px 0 0;
+  accent-color: var(--forest-bright);
+}
+
+.contract-page .evidence-candidates > label > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.contract-page .evidence-candidates strong,
+.contract-page .evidence-candidates small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .attestation {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);

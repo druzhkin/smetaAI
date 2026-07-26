@@ -72,7 +72,7 @@ from tenderguard.application.scenarios import ScenarioService
 from tenderguard.application.workbench import ProjectReadService, ProjectRecordSection
 from tenderguard.config import Settings, get_settings
 from tenderguard.domain.common import utc_now
-from tenderguard.domain.enums import ActorRole, ApprovalState
+from tenderguard.domain.enums import ActorRole, ApprovalState, ContractTermKind
 from tenderguard.domain.exports import load_signing_material
 from tenderguard.domain.integration import (
     load_integration_signing_material,
@@ -128,6 +128,8 @@ from .schemas import (
     ConfirmDocumentSetRequest,
     ConflictResolutionResponse,
     ConflictReviewResponse,
+    ContractContextResponse,
+    ContractTermDecisionResponse,
     ContractTermResponse,
     ContractTermValidationResponse,
     ContractValidationResponse,
@@ -139,6 +141,7 @@ from .schemas import (
     CreateProjectRequest,
     CurrentCalculationExecutionRequest,
     DecideApprovalRequest,
+    DecideContractTermRequest,
     DecideManualEvidenceRequest,
     DecidePassportFactRequest,
     DocumentSetResponse,
@@ -2576,13 +2579,32 @@ def create_app(
             )
         return PriceDecisionResponse.model_validate(result.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/contract/context",
+        response_model=ContractContextResponse,
+    )
+    def get_contract_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        kind: ContractTermKind | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> ContractContextResponse:
+        result = contract_service(session).context(
+            actor=actor,
+            project_id=project_id,
+            selected_kind=kind,
+            limit=limit,
+        )
+        return ContractContextResponse.model_validate(result.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/contract/terms",
         response_model=ContractTermResponse,
         status_code=status.HTTP_201_CREATED,
     )
     def submit_contract_term(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: SubmitContractTermRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2593,6 +2615,8 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 draft=payload.draft,
+                expected_document_set_revision_id=(payload.expected_document_set_revision_id),
+                rules_version_id=payload.rules_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2603,8 +2627,8 @@ def create_app(
         response_model=ContractTermValidationResponse,
     )
     def verify_contract_term(
-        project_id: str,
-        term_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        term_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: VerifyContractTermRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2615,10 +2639,35 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 term_id=term_id,
+                expected_term_updated_at=payload.expected_term_updated_at,
+                expected_task_updated_at=payload.expected_task_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
         return ContractTermValidationResponse(term=term, validation=validation)
+
+    @application.post(
+        "/v1/projects/{project_id}/contract/terms/{term_id}/decision",
+        response_model=ContractTermDecisionResponse,
+    )
+    def decide_contract_term(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        term_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: DecideContractTermRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ContractTermDecisionResponse:
+        with mutation_transaction(session):
+            result = contract_service(session).decide_term(
+                actor=actor,
+                project_id=project_id,
+                term_id=term_id,
+                command=payload,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ContractTermDecisionResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/contract/terms/{term_id}/cost-impact-proposals",
@@ -2626,8 +2675,8 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     def propose_contract_cost_impact(
-        project_id: str,
-        term_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        term_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: ProposeContractCostImpactRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2639,6 +2688,7 @@ def create_app(
                 project_id=project_id,
                 term_id=term_id,
                 command=payload.command,
+                expected_term_updated_at=payload.expected_term_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2649,8 +2699,8 @@ def create_app(
         response_model=ContractTermValidationResponse,
     )
     def finalize_contract_cost_impact(
-        project_id: str,
-        term_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        term_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: FinalizeContractCostImpactRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2661,6 +2711,7 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 term_id=term_id,
+                expected_term_updated_at=payload.expected_term_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2671,7 +2722,7 @@ def create_app(
         response_model=ContractValidationResponse,
     )
     def validate_contract(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: ValidateContractRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],

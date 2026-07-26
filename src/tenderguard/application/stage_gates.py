@@ -15,6 +15,7 @@ from tenderguard.application.evidence_independence import (
 )
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
+from tenderguard.domain.contract import ContractRequirementsPolicy
 from tenderguard.domain.enums import (
     CostBasisKind,
     EvidenceMethod,
@@ -700,25 +701,37 @@ def pricing_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]
     return tuple(sorted(set(blockers)))
 
 
-def contract_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:
-    rules = session.scalar(
-        select(ControlledVersionRow)
-        .join(
-            ProjectControlledVersionRow,
-            ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
+def contract_stage_blockers(
+    session: Session,
+    settings: Settings,
+    project_id: str,
+) -> tuple[str, ...]:
+    project = session.get(ProjectRow, project_id)
+    if project is None:
+        return ("project:missing",)
+    try:
+        rules = require_bound_controlled_version(
+            session=session,
+            settings=settings,
+            project_id=project_id,
+            organization_id=project.organization_id,
+            purpose="contract_risk_rules",
+            kind="contract_risk_rules",
         )
-        .where(
-            ProjectControlledVersionRow.project_id == project_id,
-            ProjectControlledVersionRow.purpose == "contract_risk_rules",
-            ControlledVersionRow.kind == "contract_risk_rules",
-            ControlledVersionRow.status == VersionStatus.APPROVED.value,
+        document_set = require_confirmed_document_set_integrity(
+            session=session,
+            settings=settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
         )
-    )
-    if rules is None:
-        return ("contract-risk-rules:missing",)
+    except (KeyError, LookupError, TypeError, ValueError):
+        return ("contract:governance-integrity-failed",)
     contract = rules.payload.get("contract")
-    required = contract.get("required_term_kinds") if isinstance(contract, dict) else None
-    if not isinstance(required, list) or not all(isinstance(item, str) for item in required):
+    if not isinstance(contract, dict):
+        return (f"contract-risk-rules:{rules.id}:invalid",)
+    try:
+        policy = ContractRequirementsPolicy.model_validate(contract)
+    except (TypeError, ValueError):
         return (f"contract-risk-rules:{rules.id}:invalid",)
     terms = {
         row.kind: row
@@ -729,14 +742,370 @@ def contract_stage_blockers(session: Session, project_id: str) -> tuple[str, ...
             )
         )
     }
-    return tuple(
-        f"contract-term:{kind}"
-        for kind in sorted(required)
-        if kind not in terms
-        or not terms[kind].verified
-        or not terms[kind].cost_impact_resolved
-        or terms[kind].payload.get("rules_version_id") != rules.id
+    blockers: list[str] = []
+    for kind in sorted(policy.required_term_kinds, key=lambda item: item.value):
+        row = terms.get(kind.value)
+        if row is None:
+            blockers.append(f"contract-term:{kind.value}:missing")
+            continue
+        field_name = policy.evidence_field_names[kind]
+        if session.scalar(
+            select(ConflictRow.id).where(
+                ConflictRow.project_id == project_id,
+                ConflictRow.field_name == field_name,
+                ConflictRow.status != VerificationStatus.VERIFIED.value,
+            )
+        ):
+            blockers.append(f"contract-term:{kind.value}:unresolved-conflict")
+        try:
+            _require_contract_term_integrity(
+                session=session,
+                row=row,
+                policy=policy,
+                rules=rules,
+                document_revision_ids=frozenset(document_set.revision_ids),
+                document_set_revision_id=document_set.id,
+            )
+        except (KeyError, LookupError, TypeError, ValueError):
+            blockers.append(f"contract-term:{kind.value}:integrity-failed")
+    return tuple(sorted(set(blockers)))
+
+
+def _require_contract_term_integrity(
+    *,
+    session: Session,
+    row: ContractTermRow,
+    policy: ContractRequirementsPolicy,
+    rules: ControlledVersionRow,
+    document_revision_ids: frozenset[str],
+    document_set_revision_id: str,
+) -> None:
+    kind = next(item for item in policy.required_term_kinds if item.value == row.kind)
+    field_name = policy.evidence_field_names[kind]
+    observation_ids = row.payload.get("observation_ids")
+    independence_source_ids = row.payload.get("independence_source_ids")
+    review_task_id = row.payload.get("approval_task_id")
+    created_by = row.payload.get("created_by")
+    verified_by = row.payload.get("verified_by")
+    if (
+        not row.is_current
+        or not row.verified
+        or not row.cost_impact_resolved
+        or not isinstance(observation_ids, list)
+        or not observation_ids
+        or len(observation_ids) != len(set(observation_ids))
+        or not isinstance(independence_source_ids, list)
+        or not isinstance(review_task_id, str)
+        or not review_task_id
+        or not isinstance(created_by, str)
+        or not created_by
+        or not isinstance(verified_by, str)
+        or not verified_by
+        or created_by == verified_by
+        or row.payload.get("reviewed_by") != verified_by
+        or row.payload.get("review_decision") != "APPROVED"
+        or row.payload.get("rules_version_id") != rules.id
+        or row.payload.get("rules_content_hash") != rules.content_hash
+        or row.payload.get("document_set_revision_id") != document_set_revision_id
+        or row.payload.get("evidence_field_name") != field_name
+        or row.payload.get("review_role") != policy.review_role.value
+    ):
+        raise ValueError("Verified contract term provenance is invalid")
+    observations = list(
+        session.scalars(
+            select(ObservationRow).where(
+                ObservationRow.project_id == row.project_id,
+                ObservationRow.id.in_(observation_ids),
+            )
+        )
     )
+    by_id = {item.id: item for item in observations}
+    if len(by_id) != len(observation_ids):
+        raise ValueError("Contract term evidence is missing")
+    ordered = tuple(by_id[item] for item in observation_ids)
+    value_hash = content_hash(row.payload.get("value"))
+    for evidence in ordered:
+        observation = Observation.model_validate(evidence.payload.get("observation"))
+        if (
+            evidence.id != observation.observation_id
+            or evidence.document_revision_id != observation.location.document_revision_id
+            or evidence.document_revision_id not in document_revision_ids
+            or evidence.field_name != field_name
+            or evidence.field_name != observation.field_name
+            or evidence.method != observation.method.value
+            or evidence.method_version != observation.method_version
+            or evidence.status != observation.status.value
+            or observation.status
+            not in {VerificationStatus.UNVERIFIED, VerificationStatus.VERIFIED}
+            or (
+                observation.method is EvidenceMethod.MANUAL
+                and observation.status is not VerificationStatus.VERIFIED
+            )
+            or content_hash(observation.value) != value_hash
+            or observation.unit is not None
+        ):
+            raise ValueError("Contract evidence no longer reproduces the term")
+    leaves = resolve_observation_leaves(
+        session,
+        project_id=row.project_id,
+        observations=ordered,
+    )
+    for evidence in leaves:
+        observation = Observation.model_validate(evidence.payload.get("observation"))
+        if (
+            evidence.id != observation.observation_id
+            or evidence.project_id != row.project_id
+            or evidence.document_revision_id != observation.location.document_revision_id
+            or evidence.document_revision_id not in document_revision_ids
+            or evidence.field_name != field_name
+            or evidence.field_name != observation.field_name
+            or evidence.method != observation.method.value
+            or evidence.method_version != observation.method_version
+            or evidence.status != observation.status.value
+            or content_hash(observation.value) != value_hash
+            or observation.unit is not None
+        ):
+            raise ValueError("Contract provenance leaves no longer reproduce the term")
+    if kind in policy.independently_verified_term_kinds:
+        independent_leaves = require_distinct_qualified_independence(
+            session,
+            project_id=row.project_id,
+            observations=ordered,
+        )
+        if tuple(independence_source_ids) != independent_leaves or independent_leaves != tuple(
+            item.id for item in leaves
+        ):
+            raise ValueError("Contract independence sources changed")
+    review_task = session.get(ApprovalTaskRow, review_task_id)
+    if (
+        review_task is None
+        or review_task.project_id != row.project_id
+        or review_task.task_type != "CONTRACT_TERM_REVIEW"
+        or review_task.entity_type != "contract_term"
+        or review_task.assigned_role != policy.review_role.value
+        or not review_task.required
+        or review_task.status != "APPROVED"
+        or review_task.payload.get("created_by") != created_by
+        or review_task.payload.get("observation_ids") != observation_ids
+        or review_task.payload.get("independence_source_ids") != independence_source_ids
+        or review_task.payload.get("rules_version_id") != rules.id
+        or review_task.payload.get("rules_content_hash") != rules.content_hash
+        or review_task.payload.get("document_set_revision_id") != document_set_revision_id
+        or review_task.payload.get("review_role") != policy.review_role.value
+        or not _contract_supersession_chain_contains(
+            session,
+            current=row,
+            ancestor_id=review_task.entity_id,
+        )
+    ):
+        raise ValueError("Contract review task integrity failed")
+    expected_submission_hash = content_hash(
+        {
+            "kind": row.kind,
+            "value": row.payload.get("value"),
+            "evidence_field_name": field_name,
+            "observation_ids": observation_ids,
+            "independence_source_ids": independence_source_ids,
+            "created_by": created_by,
+            "rules_version_id": rules.id,
+            "rules_content_hash": rules.content_hash,
+            "document_set_revision_id": document_set_revision_id,
+            "review_role": policy.review_role.value,
+        }
+    )
+    if review_task.payload.get("term_submission_hash") != expected_submission_hash:
+        raise ValueError("Contract review task no longer reproduces its submission")
+    approval = session.scalar(
+        select(ApprovalRecordRow).where(ApprovalRecordRow.task_id == review_task.id)
+    )
+    if (
+        approval is None
+        or approval.decision != "APPROVED"
+        or approval.decided_by != verified_by
+        or approval.payload.get("term_id") != review_task.entity_id
+        or approval.payload.get("kind") != row.kind
+        or approval.payload.get("evidence_ids") != observation_ids
+        or approval.payload.get("independence_source_ids") != independence_source_ids
+        or approval.payload.get("rules_version_id") != rules.id
+        or approval.payload.get("rules_content_hash") != rules.content_hash
+        or approval.payload.get("document_set_revision_id") != document_set_revision_id
+    ):
+        raise ValueError("Contract review approval integrity failed")
+    decision_event = next(
+        (
+            event
+            for event in session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "project",
+                    AuditEventRow.aggregate_id == row.project_id,
+                    AuditEventRow.event_type == "contract_term_review_decided",
+                )
+                .order_by(AuditEventRow.sequence.desc())
+            )
+            if event.payload.get("term_id") == review_task.entity_id
+        ),
+        None,
+    )
+    if (
+        decision_event is None
+        or decision_event.actor_id != verified_by
+        or decision_event.payload.get("approval_id") != approval.id
+        or decision_event.payload.get("approval_task_id") != review_task.id
+        or decision_event.payload.get("decision") != "APPROVED"
+        or decision_event.payload.get("evidence_ids") != observation_ids
+        or decision_event.payload.get("rules_version_id") != rules.id
+        or decision_event.payload.get("document_set_revision_id") != document_set_revision_id
+    ):
+        raise ValueError("Contract review audit event integrity failed")
+    _require_contract_cost_impact_integrity(session=session, row=row)
+
+
+def _contract_supersession_chain_contains(
+    session: Session,
+    *,
+    current: ContractTermRow,
+    ancestor_id: str,
+) -> bool:
+    seen: set[str] = set()
+    candidate: ContractTermRow | None = current
+    while candidate is not None and candidate.id not in seen:
+        seen.add(candidate.id)
+        if candidate.id == ancestor_id:
+            return True
+        candidate = (
+            session.get(ContractTermRow, candidate.supersedes_term_id)
+            if candidate.supersedes_term_id
+            else None
+        )
+    return False
+
+
+def _require_contract_cost_impact_integrity(
+    *,
+    session: Session,
+    row: ContractTermRow,
+) -> None:
+    impact = row.payload.get("cost_impact")
+    task_ids = row.payload.get("approval_task_ids")
+    approval_id = row.payload.get("cost_impact_approval_id")
+    proposed_by = row.payload.get("cost_impact_proposed_by")
+    approved_by = row.payload.get("cost_impact_approved_by")
+    if (
+        not isinstance(impact, dict)
+        or not isinstance(task_ids, list)
+        or not task_ids
+        or len(task_ids) != len(set(task_ids))
+        or not isinstance(approval_id, str)
+        or not approval_id
+        or not isinstance(proposed_by, str)
+        or not proposed_by
+        or not isinstance(approved_by, str)
+        or not approved_by
+        or proposed_by == approved_by
+    ):
+        raise ValueError("Contract cost impact provenance is invalid")
+    amount = impact.get("amount")
+    if amount in {0, "0", "0.0", "0.00"}:
+        if (
+            not isinstance(impact.get("no_cost_reason"), str)
+            or not impact["no_cost_reason"].strip()
+            or any(
+                impact.get(key) is not None
+                for key in (
+                    "currency",
+                    "cost_component_line_id",
+                    "cost_component_semantic_key",
+                    "derived_cost_model_id",
+                )
+            )
+        ):
+            raise ValueError("Zero contract cost impact is not explicit")
+    else:
+        model = session.get(CommercialCostModelRow, impact.get("derived_cost_model_id"))
+        line = session.get(BoqLineRow, impact.get("cost_component_line_id"))
+        components = line.payload.get("cost_components") if line is not None else None
+        component = (
+            next(
+                (
+                    item
+                    for item in components
+                    if isinstance(item, dict)
+                    and item.get("semantic_key") == impact.get("cost_component_semantic_key")
+                ),
+                None,
+            )
+            if isinstance(components, list)
+            else None
+        )
+        if (
+            model is None
+            or line is None
+            or line.project_id != row.project_id
+            or model.project_id != row.project_id
+            or model.status != "VALIDATED"
+            or not model.is_current
+            or model.model_kind != "CONTRACT_FINANCE"
+            or model.category != "CONTRACT_FINANCE"
+            or model.target_line_id != line.id
+            or model.target_semantic_key != impact.get("cost_component_semantic_key")
+            or model.document_set_revision_id != row.payload.get("document_set_revision_id")
+            or str(model.total) != str(amount)
+            or model.currency != impact.get("currency")
+            or not isinstance(component, dict)
+            or component.get("category") != "CONTRACT_FINANCE"
+            or component.get("basis_kind") != "DERIVED_MODEL"
+        ):
+            raise ValueError("Contract cost impact model no longer reproduces the amount")
+    tasks = list(
+        session.scalars(
+            select(ApprovalTaskRow).where(
+                ApprovalTaskRow.project_id == row.project_id,
+                ApprovalTaskRow.id.in_(task_ids),
+                ApprovalTaskRow.task_type == "CONTRACT_COST_IMPACT",
+                ApprovalTaskRow.entity_type == "contract_term",
+                ApprovalTaskRow.entity_id == row.id,
+                ApprovalTaskRow.status == "APPROVED",
+                ApprovalTaskRow.required.is_(True),
+            )
+        )
+    )
+    if len(tasks) != len(task_ids) or any(
+        task.payload.get("created_by") != proposed_by for task in tasks
+    ):
+        raise ValueError("Contract cost impact task integrity failed")
+    approval = session.get(ApprovalRecordRow, approval_id)
+    if (
+        approval is None
+        or approval.task_id not in task_ids
+        or approval.decision != "APPROVED"
+        or approval.decided_by != approved_by
+        or approval.decided_by == proposed_by
+        or not approval.payload.get("evidence_ids")
+    ):
+        raise ValueError("Contract cost impact approval integrity failed")
+    finalized_event = next(
+        (
+            event
+            for event in session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "project",
+                    AuditEventRow.aggregate_id == row.project_id,
+                    AuditEventRow.event_type == "contract_cost_impact_finalized",
+                )
+                .order_by(AuditEventRow.sequence.desc())
+            )
+            if event.payload.get("term_id") == row.id
+        ),
+        None,
+    )
+    if (
+        finalized_event is None
+        or finalized_event.payload.get("approval_record_id") != approval.id
+        or finalized_event.payload.get("approved_by") != approved_by
+    ):
+        raise ValueError("Contract cost impact audit event integrity failed")
 
 
 def risk_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:

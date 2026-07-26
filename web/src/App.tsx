@@ -38,6 +38,9 @@ const ReconciliationPage = lazy(async () => ({
 const PassportPage = lazy(async () => ({
   default: (await import("./pages/PassportPage")).PassportPage,
 }));
+const ContractPage = lazy(async () => ({
+  default: (await import("./pages/ContractPage")).ContractPage,
+}));
 const BoqAuthoringPage = lazy(async () => ({
   default: (await import("./pages/BoqAuthoringPage")).BoqAuthoringPage,
 }));
@@ -148,6 +151,14 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
         parts[3] === "manage"
       ) {
         page = <PassportPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "contract" &&
+        parts[3] === "manage"
+      ) {
+        page = <ContractPage config={config} projectId={projectId} />;
       } else if (
         projectId !== null &&
         projectId !== "" &&

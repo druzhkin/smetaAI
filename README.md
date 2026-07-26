@@ -252,7 +252,8 @@ schedulers/monitoring, specialist maintenance surfaces, role-based UAT,
 accessibility evidence, and business qualification of the operator interface
 remain to be completed. Controlled reconciliation, current-set BoQ
 authoring/review, governed project-passport authoring/review, scope execution,
-deterministic nomenclature assessment, and analogue review are implemented;
+deterministic nomenclature assessment, analogue review, and governed contract
+term/cost-impact authoring and review are implemented;
 that implementation is not a substitute for real provider, methodology,
 catalog-owner, or user-acceptance evidence.
 Application actor/organisation quotas are implemented, but independently
@@ -287,3 +288,6 @@ Signed transport, inbox, and replay semantics are specified in
 [the integration-delivery contract](docs/integration-delivery.md).
 Manual correction and four-eyes verification are specified in
 [the governed manual-evidence contract](docs/manual-evidence-review.md).
+Contract-term evidence, review, cost impact and independent stage gating are
+specified in
+[the governed contract-risk workflow](docs/contract-risk-workflow.md).

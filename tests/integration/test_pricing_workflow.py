@@ -6,6 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tenderguard.api.main import create_app
+from tenderguard.application.approvals import ApprovalDecisionCommand, ApprovalService
+from tenderguard.application.contracts import (
+    ContractCostImpactCommand,
+    ContractService,
+    ContractTermDecisionCommand,
+    ContractTermDraft,
+)
 from tenderguard.application.pricing import (
     NomenclatureAssessmentDraft,
     NormalizePriceCommand,
@@ -17,7 +24,9 @@ from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import (
     ActorRole,
+    ApprovalDecision,
     ApprovalState,
+    ContractTermKind,
     EvidenceMethod,
     PriceEvidenceClass,
     PriceStatus,
@@ -50,6 +59,7 @@ from tests.integration.support import (
     add_document_set_confirmation_audit,
     add_governed_controlled_version,
     add_project_controlled_version_binding,
+    approval_task_updated_at,
     project_memberships,
 )
 
@@ -72,7 +82,18 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
     procurement = Actor(
         "procurement-1",
         "org-1",
-        frozenset({ActorRole.PROCUREMENT, ActorRole.ESTIMATOR}),
+        frozenset(
+            {
+                ActorRole.PROCUREMENT,
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+            }
+        ),
+    )
+    contract_reviewer = Actor(
+        "contract-reviewer",
+        "org-1",
+        frozenset({ActorRole.REVIEWER}),
     )
     catalog_creator = Actor(
         "catalog-creator",
@@ -138,7 +159,7 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         session.add_all(
             project_memberships(
                 "project-pricing",
-                (procurement,),
+                (procurement, contract_reviewer),
                 owner_id=procurement.actor_id,
                 now=now,
             )
@@ -282,7 +303,12 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                             "threshold": "0.50",
                             "threshold_kind": "RELATIVE_SPREAD",
                             "required": True,
-                        }
+                        },
+                        {
+                            "reason": "CONTRACT_COST_IMPACT",
+                            "assigned_role": "REVIEWER",
+                            "required": True,
+                        },
                     ]
                 },
                 approved_by="methodology-owner",
@@ -296,8 +322,12 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 status="APPROVED",
                 payload={
                     "contract": {
-                        "required_term_kinds": [],
+                        "required_term_kinds": ["FIXED_PRICE"],
                         "independently_verified_term_kinds": [],
+                        "evidence_field_names": {
+                            "FIXED_PRICE": "contract_fixed_price",
+                        },
+                        "review_role": "REVIEWER",
                     }
                 },
                 approved_by="methodology-owner",
@@ -450,6 +480,25 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             actor_id="reviewer-1",
             status=VerificationStatus.VERIFIED,
         )
+        contract_observation = Observation(
+            observation_id="observation-contract-fixed-price",
+            field_name="contract_fixed_price",
+            value="Price is fixed for the contract term",
+            unit=None,
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="contract-rules-v1",
+            source_priority=1,
+            location=EvidenceLocation(
+                document_id="document-1",
+                document_revision_id="revision-1",
+                original_object_hash="f" * 64,
+                locator_kind="clause",
+                locator="contract:fixed-price",
+            ),
+            observed_at=now,
+            actor_id="contract-extractor",
+            status=VerificationStatus.VERIFIED,
+        )
         old_attribute_observation = attribute_observation.model_copy(
             update={
                 "observation_id": "observation-attributes-old-set",
@@ -481,6 +530,17 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                     status=old_attribute_observation.status.value,
                     payload={"observation": old_attribute_observation.model_dump(mode="json")},
                     created_at=now + timedelta(seconds=1),
+                ),
+                ObservationRow(
+                    id=contract_observation.observation_id,
+                    project_id="project-pricing",
+                    document_revision_id="revision-1",
+                    field_name=contract_observation.field_name,
+                    method=contract_observation.method.value,
+                    method_version=contract_observation.method_version,
+                    status=contract_observation.status.value,
+                    payload={"observation": contract_observation.model_dump(mode="json")},
+                    created_at=now,
                 ),
             )
         )
@@ -814,6 +874,84 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
 
         project = session.get(ProjectRow, "project-pricing")
         assert project is not None
+        contract = ContractService(
+            session=session,
+            settings=settings,
+            object_store=store,
+        )
+        contract_context = contract.context(
+            actor=procurement,
+            project_id=project.id,
+            selected_kind=ContractTermKind.FIXED_PRICE,
+            limit=100,
+        )
+        contract_term = contract.submit_term(
+            actor=procurement,
+            project_id=project.id,
+            draft=ContractTermDraft(
+                kind=ContractTermKind.FIXED_PRICE,
+                value="Price is fixed for the contract term",
+                observation_ids=(contract_observation.observation_id,),
+            ),
+            expected_document_set_revision_id=(contract_context.document_set_revision_id),
+            rules_version_id=contract_context.rules_version_id,
+            request_id="request-contract-term",
+            reason="Submit the fixed-price clause",
+        )
+        contract_review = contract.decide_term(
+            actor=contract_reviewer,
+            project_id=project.id,
+            term_id=contract_term.term_id,
+            command=ContractTermDecisionCommand(
+                decision=ApprovalDecision.APPROVED,
+                expected_term_updated_at=contract_term.updated_at,
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    contract_term.approval_task_id,
+                ),
+            ),
+            request_id="request-contract-review",
+            reason="Verify the fixed-price clause against its source",
+        )
+        contract_impact = contract.propose_cost_impact(
+            actor=procurement,
+            project_id=project.id,
+            term_id=contract_review.term.term_id,
+            command=ContractCostImpactCommand(
+                amount=0,
+                no_cost_reason=("Fixed-price exposure is represented by the approved risk model"),
+            ),
+            expected_term_updated_at=contract_review.term.updated_at,
+            request_id="request-contract-impact",
+            reason="Record the controlled cost treatment",
+        )
+        ApprovalService(
+            session=session,
+            settings=settings,
+            object_store=store,
+        ).decide(
+            actor=contract_reviewer,
+            project_id=project.id,
+            task_id=contract_impact.approval_task_ids[0],
+            command=ApprovalDecisionCommand(
+                decision=ApprovalDecision.APPROVED,
+                reason="The contract treatment is explicit and risk-linked",
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    contract_impact.approval_task_ids[0],
+                ),
+                evidence_ids=(contract_observation.observation_id,),
+            ),
+            request_id="request-contract-impact-review",
+        )
+        contract.finalize_cost_impact(
+            actor=procurement,
+            project_id=project.id,
+            term_id=contract_impact.term_id,
+            expected_term_updated_at=contract_impact.updated_at,
+            request_id="request-contract-impact-finalize",
+            reason="Finalize independently approved contract treatment",
+        )
         transitioned = ProjectService(
             session=session,
             settings=settings,

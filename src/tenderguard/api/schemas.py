@@ -47,7 +47,10 @@ from tenderguard.application.commercial_costs import (
     CommercialCostProposalResult,
 )
 from tenderguard.application.contracts import (
+    ContractContextView,
     ContractCostImpactCommand,
+    ContractTermDecisionCommand,
+    ContractTermDecisionResult,
     ContractTermDraft,
     ContractTermView,
     ContractValidationResult,
@@ -496,19 +499,29 @@ class PriceDecisionResponse(PriceDecisionView):
 
 class SubmitContractTermRequest(ApiModel):
     draft: ContractTermDraft
+    expected_document_set_revision_id: str = Field(min_length=1, max_length=64)
+    rules_version_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class VerifyContractTermRequest(ApiModel):
+    expected_term_updated_at: datetime
+    expected_task_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class DecideContractTermRequest(ContractTermDecisionCommand):
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class ProposeContractCostImpactRequest(ApiModel):
     command: ContractCostImpactCommand
+    expected_term_updated_at: datetime
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class FinalizeContractCostImpactRequest(ApiModel):
+    expected_term_updated_at: datetime
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -517,6 +530,14 @@ class ValidateContractRequest(ApiModel):
 
 
 class ContractTermResponse(ContractTermView):
+    pass
+
+
+class ContractTermDecisionResponse(ContractTermDecisionResult):
+    pass
+
+
+class ContractContextResponse(ContractContextView):
     pass
 
 

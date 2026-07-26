@@ -2,10 +2,37 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from tenderguard.domain.enums import ContractTermKind, FindingCode, Severity
+from tenderguard.domain.enums import ActorRole, ContractTermKind, FindingCode, Severity
 from tenderguard.domain.models import DomainModel, ValidationFinding
+
+
+class ContractRequirementsPolicy(DomainModel):
+    required_term_kinds: frozenset[ContractTermKind] = Field(min_length=1)
+    independently_verified_term_kinds: frozenset[ContractTermKind] = frozenset()
+    evidence_field_names: dict[ContractTermKind, str]
+    review_role: ActorRole = ActorRole.REVIEWER
+
+    @model_validator(mode="after")
+    def policy_is_closed_and_reviewable(self) -> ContractRequirementsPolicy:
+        if not self.independently_verified_term_kinds.issubset(self.required_term_kinds):
+            raise ValueError("Independent contract terms must be a subset of required terms")
+        if set(self.evidence_field_names) != set(self.required_term_kinds):
+            raise ValueError("Every required contract term must have exactly one evidence field")
+        if any(
+            not field_name or field_name != field_name.strip() or len(field_name) > 200
+            for field_name in self.evidence_field_names.values()
+        ):
+            raise ValueError("Contract evidence field names must be normalized")
+        if len(set(self.evidence_field_names.values())) != len(self.evidence_field_names):
+            raise ValueError("Contract evidence field names must be unique")
+        if self.review_role not in {
+            ActorRole.REVIEWER,
+            ActorRole.TECHNICAL_EXPERT,
+        }:
+            raise ValueError("Contract review role must be REVIEWER or TECHNICAL_EXPERT")
+        return self
 
 
 class ContractTerm(DomainModel):
@@ -13,6 +40,7 @@ class ContractTerm(DomainModel):
     kind: ContractTermKind
     value: str
     observation_ids: tuple[str, ...] = Field(min_length=1)
+    independence_source_ids: tuple[str, ...] = ()
     verified: bool
     cost_impact_resolved: bool
     cost_impact_amount: Decimal | None = None

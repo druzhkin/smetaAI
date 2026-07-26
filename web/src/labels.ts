@@ -124,6 +124,7 @@ export const taskLabels: Record<string, string> = {
   RFQ_REVIEW: "Проверка RFQ",
   MANUAL_CHANGE_REVIEW: "Проверка ручного изменения",
   PASSPORT_FACT_REVIEW: "Проверка факта паспорта",
+  CONTRACT_TERM_REVIEW: "Проверка договорного условия",
   RISK_REVIEW: "Проверка риска",
 };
 

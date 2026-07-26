@@ -10,6 +10,11 @@ import type {
   CalculationExecution,
   ConflictResolutionResult,
   ConflictReview,
+  ContractContext,
+  ContractDecisionResult,
+  ContractTerm,
+  ContractTermKind,
+  ContractValidation,
   DocumentSetView,
   EvidenceObservation,
   ManualEvidenceContext,
@@ -444,6 +449,152 @@ export function validatePassport(
   return mutate(
     context,
     `/projects/${encodeURIComponent(input.projectId)}/passport/validate`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: { reason: input.reason },
+    },
+  );
+}
+
+export function getContractContext(
+  context: RequestContext,
+  projectId: string,
+  kind?: ContractTermKind,
+  signal?: AbortSignal,
+): Promise<ContractContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/contract/context`,
+    { kind, limit: 100 },
+    signal,
+  );
+}
+
+export function submitContractTerm(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    kind: ContractTermKind;
+    value: string;
+    observationIds: string[];
+    expectedDocumentSetRevisionId: string;
+    rulesVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ContractTerm> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/contract/terms`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: {
+          kind: input.kind,
+          value: input.value,
+          observation_ids: input.observationIds,
+        },
+        expected_document_set_revision_id: input.expectedDocumentSetRevisionId,
+        rules_version_id: input.rulesVersionId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function decideContractTerm(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    termId: string;
+    decision: ApprovalDecision;
+    expectedTermUpdatedAt: string;
+    expectedTaskUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ContractDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/contract/terms/${encodeURIComponent(input.termId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        decision: input.decision,
+        expected_term_updated_at: input.expectedTermUpdatedAt,
+        expected_task_updated_at: input.expectedTaskUpdatedAt,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function proposeContractCostImpact(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    termId: string;
+    command: {
+      amount: string;
+      currency?: string;
+      cost_component_line_id?: string;
+      cost_component_semantic_key?: string;
+      derived_cost_model_id?: string;
+      no_cost_reason?: string;
+    };
+    expectedTermUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ContractTerm> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/contract/terms/${encodeURIComponent(input.termId)}/cost-impact-proposals`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: input.command,
+        expected_term_updated_at: input.expectedTermUpdatedAt,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function finalizeContractCostImpact(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    termId: string;
+    expectedTermUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<{ term: ContractTerm; validation: ContractValidation }> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/contract/terms/${encodeURIComponent(input.termId)}/cost-impact/finalize`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        expected_term_updated_at: input.expectedTermUpdatedAt,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function validateContract(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ContractValidation> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/contract/validate`,
     {
       idempotencyKey: input.idempotencyKey,
       body: { reason: input.reason },

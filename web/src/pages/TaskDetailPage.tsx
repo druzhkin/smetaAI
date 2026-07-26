@@ -152,7 +152,9 @@ export function TaskDetailPage({
       ? `/projects/${encodeURIComponent(detail.item.project_id)}/manual-changes/${encodeURIComponent(detail.item.entity_id)}`
       : detail.item.entity_type === "passport_fact"
         ? `/projects/${encodeURIComponent(detail.item.project_id)}/passport/manage`
-        : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
+        : detail.item.entity_type === "contract_term"
+          ? `/projects/${encodeURIComponent(detail.item.project_id)}/contract/manage`
+          : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
   const evidenceIds = parseIdentifierList(draft.evidenceText);
   const validationError = validateDecisionDraft(draft, detail.project.code);
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -336,6 +338,25 @@ export function TaskDetailPage({
             </div>
             <Link className="button button--primary" to={entityHref}>
               Открыть проверку паспорта
+              <Icon name="arrow" size={15} />
+            </Link>
+          </section>
+        )}
+
+      {detail.item.task_type === "CONTRACT_TERM_REVIEW" &&
+        detail.item.entity_type === "contract_term" && (
+          <section className="dedicated-workflow-callout">
+            <div>
+              <p className="eyebrow">Специализированный workflow</p>
+              <h2>Сверить договорное условие и его источник</h2>
+              <p>
+                Универсальное утверждение запрещено. Договорный экран повторно
+                проверяет актуальный комплект, утверждённую версию правил,
+                точное значение, provenance и optimistic-версии записи и задачи.
+              </p>
+            </div>
+            <Link className="button button--primary" to={entityHref}>
+              Открыть проверку договора
               <Icon name="arrow" size={15} />
             </Link>
           </section>

@@ -851,6 +851,31 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             )
             assert recorded.status_code == 201, recorded.text
             observation_ids.append(recorded.json()["observation_id"])
+        contract_observation = client.post(
+            f"/v1/projects/{project['id']}/evidence/observations",
+            headers=system,
+            json={
+                "draft": {
+                    "field_name": "contract_fixed_price",
+                    "value": "Price is fixed for the contract term",
+                    "method": "TABLE_PARSER",
+                    "method_version": "1.0",
+                    "source_priority": 1,
+                    "location": {
+                        "document_id": uploaded_payload["document_id"],
+                        "document_revision_id": uploaded_payload["document_revision_id"],
+                        "original_object_hash": uploaded_payload["manifest"]["root_sha256"],
+                        "locator_kind": "structured_region",
+                        "locator": "contract:fixed-price",
+                    },
+                    "observed_at": "2026-07-23T10:01:00Z",
+                    "adapter_qualification_id": parser_adapter["version_id"],
+                },
+                "reason": "Extract the fixed-price contract clause",
+            },
+        )
+        assert contract_observation.status_code == 201, contract_observation.text
+        contract_observation_id = contract_observation.json()["observation_id"]
         reconciliation_context = client.get(
             f"/v1/projects/{project['id']}/evidence/reconciliation-context",
             headers=owner_b,
@@ -1271,6 +1296,11 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                         "threshold_kind": "RELATIVE_SPREAD",
                         "required": True,
                     },
+                    {
+                        "reason": "CONTRACT_COST_IMPACT",
+                        "assigned_role": "REVIEWER",
+                        "required": True,
+                    },
                 ]
             },
             purpose="approval_policy",
@@ -1429,8 +1459,12 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             "contract-risk-rules-1",
             {
                 "contract": {
-                    "required_term_kinds": [],
+                    "required_term_kinds": ["FIXED_PRICE"],
                     "independently_verified_term_kinds": [],
+                    "evidence_field_names": {
+                        "FIXED_PRICE": "contract_fixed_price",
+                    },
+                    "review_role": "REVIEWER",
                 }
             },
             purpose="contract_risk_rules",
@@ -2137,6 +2171,110 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         assert nomenclature_review.status_code == 200, nomenclature_review.text
         assert nomenclature_review.json()["match"]["status"] == "VERIFIED"
         assert nomenclature_review.json()["match"]["match"]["match_class"] == "EXACT"
+        contract_context = client.get(
+            f"/v1/projects/{project['id']}/contract/context",
+            headers=operator,
+            params={"kind": "FIXED_PRICE", "limit": 100},
+        )
+        assert contract_context.status_code == 200, contract_context.text
+        contract_context_payload = contract_context.json()
+        assert contract_context_payload["selected_kind"] == "FIXED_PRICE"
+        assert contract_observation_id in {
+            candidate["observation"]["observation_id"]
+            for candidate in contract_context_payload["evidence_candidates"]
+        }
+        contract_term = client.post(
+            f"/v1/projects/{project['id']}/contract/terms",
+            headers=operator,
+            json={
+                "draft": {
+                    "kind": "FIXED_PRICE",
+                    "value": "Price is fixed for the contract term",
+                    "observation_ids": [contract_observation_id],
+                },
+                "expected_document_set_revision_id": contract_context_payload[
+                    "document_set_revision_id"
+                ],
+                "rules_version_id": contract_context_payload["rules_version_id"],
+                "reason": "Submit the fixed-price clause for independent review",
+            },
+        )
+        assert contract_term.status_code == 201, contract_term.text
+        contract_review_context = client.get(
+            f"/v1/projects/{project['id']}/contract/context",
+            headers=owner_b,
+            params={"kind": "FIXED_PRICE", "limit": 100},
+        )
+        assert contract_review_context.status_code == 200, contract_review_context.text
+        contract_review = next(
+            item
+            for item in contract_review_context.json()["terms"]
+            if item["term"]["term_id"] == contract_term.json()["term_id"]
+        )
+        contract_decision = client.post(
+            (
+                f"/v1/projects/{project['id']}/contract/terms/"
+                f"{contract_term.json()['term_id']}/decision"
+            ),
+            headers=owner_b,
+            json={
+                "decision": "APPROVED",
+                "expected_term_updated_at": contract_term.json()["updated_at"],
+                "expected_task_updated_at": contract_review["task_updated_at"],
+                "reason": "The clause and exact source locator agree",
+            },
+        )
+        assert contract_decision.status_code == 200, contract_decision.text
+        reviewed_term = contract_decision.json()["term"]
+        contract_impact = client.post(
+            (
+                f"/v1/projects/{project['id']}/contract/terms/"
+                f"{reviewed_term['term_id']}/cost-impact-proposals"
+            ),
+            headers=operator,
+            json={
+                "command": {
+                    "amount": "0",
+                    "no_cost_reason": (
+                        "Fixed-price exposure is represented by the approved risk model"
+                    ),
+                },
+                "expected_term_updated_at": reviewed_term["updated_at"],
+                "reason": "Record the governed treatment of the fixed-price clause",
+            },
+        )
+        assert contract_impact.status_code == 201, contract_impact.text
+        impact_payload = contract_impact.json()
+        impact_task_id = impact_payload["approval_task_ids"][0]
+        impact_task = client.get(
+            f"/v1/work-items/{impact_task_id}",
+            headers=owner_b,
+        )
+        assert impact_task.status_code == 200, impact_task.text
+        impact_approval = client.post(
+            f"/v1/projects/{project['id']}/approvals/{impact_task_id}/decision",
+            headers=owner_b,
+            json={
+                "decision": "APPROVED",
+                "reason": "The zero deterministic impact and risk treatment are explicit",
+                "expected_task_updated_at": impact_task.json()["item"]["updated_at"],
+                "evidence_ids": [contract_observation_id],
+            },
+        )
+        assert impact_approval.status_code == 200, impact_approval.text
+        finalized_contract = client.post(
+            (
+                f"/v1/projects/{project['id']}/contract/terms/"
+                f"{impact_payload['term_id']}/cost-impact/finalize"
+            ),
+            headers=operator,
+            json={
+                "expected_term_updated_at": impact_payload["updated_at"],
+                "reason": "Finalize the independently approved contract treatment",
+            },
+        )
+        assert finalized_contract.status_code == 200, finalized_contract.text
+        assert finalized_contract.json()["validation"]["findings"] == []
         response = client.post(
             f"/v1/projects/{project['id']}/transitions",
             headers=operator,

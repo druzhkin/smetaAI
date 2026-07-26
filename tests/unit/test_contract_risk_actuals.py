@@ -11,10 +11,12 @@ from tenderguard.domain.actuals import (
 )
 from tenderguard.domain.contract import (
     ContractAssessment,
+    ContractRequirementsPolicy,
     ContractTerm,
     validate_contract,
 )
 from tenderguard.domain.enums import (
+    ActorRole,
     ContractTermKind,
     VarianceReason,
     VerificationStatus,
@@ -40,6 +42,35 @@ def test_contract_cost_cannot_be_separated_from_unresolved_terms() -> None:
     codes = {item.code.value for item in validate_contract(assessment)}
     assert "CONTRACT_COST_IMPACT_UNRESOLVED" in codes
     assert "CONTRACT_TERM_MISSING" in codes
+
+
+def test_contract_policy_is_closed_and_has_no_empty_bypass() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        ContractRequirementsPolicy(
+            required_term_kinds=frozenset(),
+            evidence_field_names={},
+        )
+    with pytest.raises(ValueError, match="subset"):
+        ContractRequirementsPolicy(
+            required_term_kinds=frozenset({ContractTermKind.PENALTIES}),
+            independently_verified_term_kinds=frozenset({ContractTermKind.RETENTION}),
+            evidence_field_names={
+                ContractTermKind.PENALTIES: "contract_penalties",
+            },
+        )
+    with pytest.raises(ValueError, match="exactly one evidence field"):
+        ContractRequirementsPolicy(
+            required_term_kinds=frozenset({ContractTermKind.PENALTIES}),
+            evidence_field_names={},
+        )
+    with pytest.raises(ValueError, match="REVIEWER or TECHNICAL_EXPERT"):
+        ContractRequirementsPolicy(
+            required_term_kinds=frozenset({ContractTermKind.PENALTIES}),
+            evidence_field_names={
+                ContractTermKind.PENALTIES: "contract_penalties",
+            },
+            review_role=ActorRole.ESTIMATOR,
+        )
 
 
 def test_correlated_risk_requires_versioned_correlation_model() -> None:

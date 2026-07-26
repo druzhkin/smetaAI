@@ -27,6 +27,7 @@ from tenderguard.domain.commercial_costs import (
     LogisticsPlan,
     TransportLeg,
 )
+from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import (
     ActorRole,
     ApprovalDecision,
@@ -35,7 +36,10 @@ from tenderguard.domain.enums import (
     ContractCashFlowKind,
     ContractTermKind,
     CostCategory,
+    EvidenceMethod,
+    VerificationStatus,
 )
+from tenderguard.domain.models import EvidenceLocation, Observation
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
@@ -44,6 +48,8 @@ from tenderguard.infrastructure.database import (
 )
 from tenderguard.infrastructure.object_store import LocalObjectStore
 from tenderguard.infrastructure.orm import (
+    ApprovalRecordRow,
+    ApprovalTaskRow,
     BoqLineRow,
     CommercialCostModelRow,
     ContractTermRow,
@@ -57,7 +63,9 @@ from tenderguard.infrastructure.orm import (
     QuantityRow,
 )
 from tests.integration.support import (
+    add_document_set_confirmation_audit,
     add_governed_controlled_version,
+    add_project_controlled_version_binding,
     approval_task_updated_at,
     project_memberships,
 )
@@ -213,6 +221,10 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                 "contract": {
                     "required_term_kinds": ["ADVANCE"],
                     "independently_verified_term_kinds": [],
+                    "evidence_field_names": {
+                        "ADVANCE": "obs-term-advance",
+                    },
+                    "review_role": "REVIEWER",
                 }
             },
             approved_by="methodology-owner",
@@ -265,14 +277,14 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             ),
             strict=True,
         ):
-            session.add(
-                ProjectControlledVersionRow(
-                    project_id="project-commercial",
-                    controlled_version_id=version.id,
-                    purpose=purpose,
-                    bound_by="methodology-owner",
-                    bound_at=now,
-                )
+            add_project_controlled_version_binding(
+                session=session,
+                settings=settings,
+                object_store=store,
+                project_id="project-commercial",
+                version=version,
+                purpose=purpose,
+                actor=(catalog_approver if version.kind == "catalog" else methodology_approver),
             )
         session.add(
             DocumentRow(
@@ -311,12 +323,12 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             DocumentSetRevisionRow(
                 id="document-set-commercial",
                 project_id="project-commercial",
-                manifest_hash="1" * 64,
+                manifest_hash=content_hash(["revision-commercial"]),
                 revision_ids=["revision-commercial"],
                 status="CONFIRMED",
-                created_by="document-controller",
+                created_by=estimator.actor_id,
                 created_at=now,
-                confirmed_by="document-controller-reviewer",
+                confirmed_by=reviewer.actor_id,
                 confirmed_at=now,
             )
         )
@@ -332,6 +344,16 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                 confirmed_by="document-controller-reviewer",
                 confirmed_at=now,
             )
+        )
+        session.flush()
+        document_set = session.get(DocumentSetRevisionRow, "document-set-commercial")
+        assert document_set is not None
+        add_document_set_confirmation_audit(
+            session=session,
+            settings=settings,
+            object_store=store,
+            row=document_set,
+            actor=reviewer,
         )
         session.add(
             BoqLineRow(
@@ -410,6 +432,25 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                 created_at=now,
                 updated_at=now,
             )
+        )
+        advance_observation = Observation(
+            observation_id="obs-term-advance",
+            field_name="obs-term-advance",
+            value="Advance is paid on mobilisation",
+            unit=None,
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="commercial-verification-v1",
+            source_priority=1,
+            location=EvidenceLocation(
+                document_id="document-commercial",
+                document_revision_id="revision-commercial",
+                original_object_hash="f" * 64,
+                locator_kind="clause",
+                locator="contract:advance",
+            ),
+            observed_at=now,
+            actor_id="technical-commercial",
+            status=VerificationStatus.VERIFIED,
         )
         observation_payloads = {
             "obs-route": {
@@ -496,7 +537,7 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                     }
                 ]
             },
-            "obs-term-advance": {"observation": {"value": "Advance is paid on mobilisation"}},
+            "obs-term-advance": {"observation": advance_observation.model_dump(mode="json")},
             "obs-term-retention": {
                 "observation": {"value": "Retention is released at final acceptance"}
             },
@@ -515,8 +556,61 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                     created_at=now,
                 )
             )
+        advance_submission = {
+            "kind": ContractTermKind.ADVANCE.value,
+            "value": "Advance is paid on mobilisation",
+            "evidence_field_name": "obs-term-advance",
+            "observation_ids": ["obs-term-advance"],
+            "independence_source_ids": [],
+            "created_by": "technical-commercial",
+            "rules_version_id": "contract-rules-commercial-v1",
+            "rules_content_hash": versions[-1].content_hash,
+            "document_set_revision_id": "document-set-commercial",
+            "review_role": "REVIEWER",
+        }
         session.add_all(
             (
+                ApprovalTaskRow(
+                    id="legacy-term-advance-review",
+                    project_id="project-commercial",
+                    task_type="CONTRACT_TERM_REVIEW",
+                    entity_type="contract_term",
+                    entity_id="term-advance",
+                    assigned_role="REVIEWER",
+                    status="APPROVED",
+                    required=True,
+                    payload={
+                        "created_by": "technical-commercial",
+                        "term_id": "term-advance",
+                        "term_submission_hash": content_hash(advance_submission),
+                        "observation_ids": ["obs-term-advance"],
+                        "independence_source_ids": [],
+                        "rules_version_id": "contract-rules-commercial-v1",
+                        "rules_content_hash": versions[-1].content_hash,
+                        "document_set_revision_id": "document-set-commercial",
+                        "review_role": "REVIEWER",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                ),
+                ApprovalRecordRow(
+                    id="legacy-term-advance-approval",
+                    task_id="legacy-term-advance-review",
+                    decision="APPROVED",
+                    decided_by=reviewer.actor_id,
+                    reason="Verify governed commercial fixture term",
+                    payload={
+                        "project_id": "project-commercial",
+                        "term_id": "term-advance",
+                        "kind": ContractTermKind.ADVANCE.value,
+                        "evidence_ids": ["obs-term-advance"],
+                        "independence_source_ids": [],
+                        "rules_version_id": "contract-rules-commercial-v1",
+                        "rules_content_hash": versions[-1].content_hash,
+                        "document_set_revision_id": "document-set-commercial",
+                    },
+                    decided_at=now,
+                ),
                 ContractTermRow(
                     id="term-advance",
                     project_id="project-commercial",
@@ -529,10 +623,17 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                         "kind": ContractTermKind.ADVANCE.value,
                         "value": "Advance is paid on mobilisation",
                         "observation_ids": ["obs-term-advance"],
+                        "independence_source_ids": [],
+                        "evidence_field_name": "obs-term-advance",
                         "created_by": "technical-commercial",
                         "verified_by": reviewer.actor_id,
+                        "reviewed_by": reviewer.actor_id,
+                        "review_decision": "APPROVED",
                         "rules_version_id": "contract-rules-commercial-v1",
+                        "rules_content_hash": versions[-1].content_hash,
                         "document_set_revision_id": "document-set-commercial",
+                        "review_role": "REVIEWER",
+                        "approval_task_id": "legacy-term-advance-review",
                     },
                     created_at=now,
                     updated_at=now,
@@ -549,10 +650,17 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                         "kind": ContractTermKind.RETENTION.value,
                         "value": "Retention is released at final acceptance",
                         "observation_ids": ["obs-term-retention"],
+                        "independence_source_ids": [],
+                        "evidence_field_name": "obs-term-retention",
                         "created_by": "technical-commercial",
                         "verified_by": reviewer.actor_id,
+                        "reviewed_by": reviewer.actor_id,
+                        "review_decision": "APPROVED",
                         "rules_version_id": "contract-rules-commercial-v1",
+                        "rules_content_hash": versions[-1].content_hash,
                         "document_set_revision_id": "document-set-commercial",
+                        "review_role": "REVIEWER",
+                        "approval_task_id": "legacy-term-retention-review",
                     },
                     created_at=now,
                     updated_at=now,
@@ -828,6 +936,7 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
                 cost_component_semantic_key="contract-finance",
                 derived_cost_model_id=finalized_finance.model_id,
             ),
+            expected_term_updated_at=now,
             request_id="request-contract-impact",
             reason="Link deterministic financing cost to the contract term",
         )
@@ -856,12 +965,13 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
         session.flush()
         with pytest.raises(
             ValueError,
-            match="current validated finance model",
+            match="Confirmed current document set",
         ):
             contract.finalize_cost_impact(
                 actor=estimator,
                 project_id="project-commercial",
                 term_id=impact.term_id,
+                expected_term_updated_at=impact.updated_at,
                 request_id="request-contract-impact-stale-documents",
                 reason="Must reject a finance model from the prior document set",
             )
@@ -875,6 +985,7 @@ def test_commercial_cost_model_requires_evidence_independent_recalculation_and_f
             actor=estimator,
             project_id="project-commercial",
             term_id=impact.term_id,
+            expected_term_updated_at=impact.updated_at,
             request_id="request-contract-impact-finalization",
             reason="Finalize the approved contract financing impact",
         )

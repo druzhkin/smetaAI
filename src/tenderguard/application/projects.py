@@ -991,7 +991,7 @@ class ProjectService:
             gate_name = "pricing verification"
             blockers = (
                 pricing_stage_blockers(self.session, project.id)
-                + contract_stage_blockers(self.session, project.id)
+                + contract_stage_blockers(self.session, self.settings, project.id)
                 + risk_stage_blockers(self.session, project.id)
             )
         if blockers:
@@ -1573,7 +1573,7 @@ class ProjectService:
         )
         contract_risks = tuple(
             row.id for row in blocking_findings if row.contour == "CONTRACT"
-        ) + contract_stage_blockers(self.session, project.id)
+        ) + contract_stage_blockers(self.session, self.settings, project.id)
         boq_blockers = tuple(
             self.session.scalars(
                 select(BoqLineRow.id).where(
