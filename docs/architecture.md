@@ -83,9 +83,11 @@ Nothing crosses a boundary merely because a model reports high confidence.
   portfolio/work-queue/workbench/record read models, visible release hard
   stops, exact-manifest four-eyes document-set confirmation, source-level
   conflict resolution with dual optimistic locks, policy/document-bound
-  manual evidence entry with dedicated four-eyes review, safe same-origin
-  navigation, and backend-enforced information barriers. The UI is never a
-  policy or authorization boundary.
+  manual evidence entry with dedicated four-eyes review, qualified
+  reconciliation selection, current-set BoQ authoring/stale-safe review,
+  scope completeness execution, deterministic catalog matching and governed
+  analogue review, safe same-origin navigation, and backend-enforced
+  information barriers. The UI is never a policy or authorization boundary.
 - `integration`: deterministic signed snapshot/audit packages; a transactional
   outbox with stable external delivery identity; qualification-bound Ed25519
   event/receipt envelopes; immutable delivery attempts and inbound messages;
@@ -182,6 +184,11 @@ Production deployment requires:
 - Every verified BoQ line declares its expected cost components. Calculation
   inputs must match that set exactly by line and semantic key: no missing,
   duplicate, or unplanned components are accepted.
+- Reconciliation, BoQ authoring/review, and nomenclature assessment reproduce
+  the confirmed document-set manifest, four-eyes identities, ordered
+  timestamp and latest signed project confirmation event at operation time.
+  A verified observation whose document revision is outside that exact set
+  cannot be selected or submitted.
 - Quantity, unit, WBS, category, basis type, rate, currency, and source identity
   are reproduced from current governed records before calculation.
 - A stage-gate attestation is valid only for the exact signed input set it
@@ -190,9 +197,11 @@ Production deployment requires:
   catalog, methodology, rate, FX, and model inputs.
 - A controlled version is accepted only when its complete content hash,
   organisation metadata, owner roles, four-eyes lifecycle and signed
-  creation/approval audit chain reproduce. PostgreSQL rejects direct approved
-  insertion, basis mutation, invalid transitions and deletion; duplicate bound
-  kinds block calculation and release.
+  creation/approval audit chain reproduce. Project use also requires the
+  latest signed binding event for the exact purpose/version/kind/hash/actor.
+  PostgreSQL rejects direct approved insertion, basis mutation, invalid
+  transitions and deletion; duplicate bound kinds block calculation and
+  release.
 - Release rereads and hashes the snapshot object, recomputes its input/output
   and snapshot hashes, and compares its document-set and controlled-version
   set with the project's current bindings.

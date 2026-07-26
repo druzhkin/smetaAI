@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes ten controlled mutation families:
+The current interface includes sixteen controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -50,6 +50,38 @@ The current interface includes ten controlled mutation families:
   immutable value, reason, author, unit, document, hash, locator and task
   version; self-review and the generic decision API are blocked. Approval
   creates a separate lineage-linked `RULE_ENGINE`/`VERIFIED` observation;
+- a reviewer or technical expert may reconcile two or more raw automatic
+  observations only from a server-built context for the exact confirmed
+  document set and approved reconciliation rule version. The screen exposes
+  method, version, qualification, independence domain, locator and blockers.
+  It rejects duplicate sources, manual/derived inputs, same-domain adapters
+  and client-selected rule substitution. Disagreement creates a `Conflict`;
+  the browser never merges it;
+- an estimator or technical expert may create a BoQ line only from a
+  server-listed verified observation in the reproduced current document-set
+  manifest. Work code and unit must match that evidence, cost-component
+  semantic keys are unique, and the line remains `IN_REVIEW`;
+- a different technical expert or reviewer may verify the exact current BoQ
+  revision. The review screen exposes WBS, complete component plan, source
+  observations and server blockers; submission binds the line's
+  timezone-aware `updated_at`. Author self-review, stale timestamps,
+  superseded document sets and old-set evidence fail closed;
+- in `BOQ_REVIEW`, a reviewer or technical expert may run the approved
+  Scope Completeness Engine for a WBS node. The server binds the current BoQ
+  signature and controlled rule pack and persists findings; an empty UI list
+  is not treated as evidence unless the evaluation is recorded;
+- procurement or a technical expert may assess a BoQ component against the
+  current approved catalog. The browser selects only the semantic component,
+  canonical item and verified technical-attribute observation; it does not
+  submit a match class. The server reproduces the unique current BoQ
+  component, catalog audit chain, critical attributes, document set and
+  evidence before calculating `EXACT`, `INSUFFICIENT_DATA`, or
+  `TECHNICALLY_UNACCEPTABLE`;
+- a technical expert may propose only an explicitly permitted functional or
+  conditionally acceptable analogue. The review screen shows the immutable
+  attribute matrix and approval tasks. Finalization is disabled until the
+  server revalidates the current equivalence-rule version and every mandatory
+  independent approval record;
 - an estimator or technical expert may propose a revision of a current
   verified BoQ quantity only against the exact current quantity, confirmed
   document set, approved quantity/formula rules, approved manual-change policy,
@@ -96,10 +128,10 @@ audit chain. An unsupported file, invalid logical key, stale task or conflict,
 stale document-set candidate, self-confirmation, self-resolution, missing
 role, or unacknowledged command fails closed.
 
-BoQ structure and nomenclature maintenance, reconciliation maintenance, and
-general-purpose workflow transitions are not
-yet represented as delivered UI operations. Production acceptance also requires
-role-based user testing, accessibility verification, and business-process
+General-purpose workflow transitions and several specialist maintenance
+surfaces are not represented as operator mutations. Production acceptance
+still requires role-based user testing, accessibility verification,
+organisation-owned methodology/catalog qualification, and business-process
 qualification.
 
 ## Browser authentication

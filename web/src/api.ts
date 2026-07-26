@@ -2,6 +2,10 @@ import type {
   ApprovalDecision,
   ApprovalDecisionResult,
   ApprovalState,
+  BoqAuthoringContext,
+  BoqCostComponent,
+  BoqLine,
+  BoqLineReview,
   CalculationContext,
   CalculationExecution,
   ConflictResolutionResult,
@@ -11,6 +15,10 @@ import type {
   ManualEvidenceContext,
   ManualEvidenceDecisionResult,
   ManualEvidenceReview,
+  NomenclatureContext,
+  NomenclatureMatchClass,
+  NomenclatureMatchView,
+  NomenclatureReviewContext,
   NormalizedPrice,
   PriceDecision,
   PriceItemContext,
@@ -26,8 +34,11 @@ import type {
   QuantityManualChange,
   QuantitySubmission,
   QuarantinedUpload,
+  ReconciliationContext,
+  ReconciliationOutcome,
   ReleaseAttempt,
   ReleaseGateSet,
+  ScopeRun,
   WorkItemPage,
   WorkItemDetail,
 } from "./types";
@@ -438,6 +449,44 @@ export function decideManualEvidence(
   );
 }
 
+export function getReconciliationContext(
+  context: RequestContext,
+  projectId: string,
+  fieldName?: string,
+  signal?: AbortSignal,
+): Promise<ReconciliationContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/evidence/reconciliation-context`,
+    { field_name: fieldName, limit: 100 },
+    signal,
+  );
+}
+
+export function reconcileEvidence(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    observationIds: string[];
+    reconciliationVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ReconciliationOutcome> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/evidence/reconcile`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        observation_ids: input.observationIds,
+        reconciliation_version_id: input.reconciliationVersionId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
 export function getWorkbench(
   context: RequestContext,
   projectId: string,
@@ -587,6 +636,117 @@ export function getQuantityChangeContext(
   );
 }
 
+export function getBoqAuthoringContext(
+  context: RequestContext,
+  projectId: string,
+  evidenceFieldName: string,
+  signal?: AbortSignal,
+): Promise<BoqAuthoringContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/boq/authoring-context`,
+    { evidence_field_name: evidenceFieldName, limit: 100 },
+    signal,
+  );
+}
+
+export function createBoqLine(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    lineKey: string;
+    wbsNodeId: string;
+    workCode: string;
+    description: string;
+    unit: string;
+    evidenceObservationIds: string[];
+    costComponents: BoqCostComponent[];
+    criticalQuantity: boolean;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<BoqLine> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/lines`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: {
+          line_key: input.lineKey,
+          wbs_node_id: input.wbsNodeId,
+          work_code: input.workCode,
+          description: input.description,
+          unit: input.unit,
+          evidence_observation_ids: input.evidenceObservationIds,
+          cost_components: input.costComponents,
+          critical_quantity: input.criticalQuantity,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getBoqLineReview(
+  context: RequestContext,
+  projectId: string,
+  lineId: string,
+  signal?: AbortSignal,
+): Promise<BoqLineReview> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/boq/lines/${encodeURIComponent(lineId)}/review`,
+    undefined,
+    signal,
+  );
+}
+
+export function verifyBoqLine(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    lineId: string;
+    expectedLineUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<BoqLine> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/lines/${encodeURIComponent(input.lineId)}/verify`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        expected_line_updated_at: input.expectedLineUpdatedAt,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function runScopeCompleteness(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    wbsNodeId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ScopeRun> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/scope-evaluations`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        wbs_node_id: input.wbsNodeId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
 export function proposeQuantityChange(
   context: RequestContext,
   input: {
@@ -654,6 +814,114 @@ export function getPriceItemContext(
     `/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(itemId)}/context`,
     undefined,
     signal,
+  );
+}
+
+export function getNomenclatureContext(
+  context: RequestContext,
+  projectId: string,
+  options: {
+    catalogQuery?: string;
+    evidenceFieldName: string;
+  },
+  signal?: AbortSignal,
+): Promise<NomenclatureContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/nomenclature/context`,
+    {
+      catalog_query: options.catalogQuery,
+      evidence_field_name: options.evidenceFieldName,
+      limit: 100,
+    },
+    signal,
+  );
+}
+
+export function assessNomenclature(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    sourceItemId: string;
+    canonicalItemId: string;
+    sourceAttributesObservationId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<NomenclatureMatchView> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/nomenclature/assessments`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: {
+          source_item_id: input.sourceItemId,
+          canonical_item_id: input.canonicalItemId,
+          source_attributes_observation_id: input.sourceAttributesObservationId,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getNomenclatureReview(
+  context: RequestContext,
+  projectId: string,
+  matchId: string,
+  signal?: AbortSignal,
+): Promise<NomenclatureReviewContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/nomenclature/${encodeURIComponent(matchId)}/review`,
+    undefined,
+    signal,
+  );
+}
+
+export function proposeNomenclatureAnalogue(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    matchId: string;
+    analogueClass: Exclude<
+      NomenclatureMatchClass,
+      "EXACT" | "TECHNICALLY_UNACCEPTABLE" | "INSUFFICIENT_DATA"
+    >;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<NomenclatureMatchView> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/nomenclature/${encodeURIComponent(input.matchId)}/analogue-proposals`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: { analogue_class: input.analogueClass },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function finalizeNomenclatureAnalogue(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    matchId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<NomenclatureMatchView> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/nomenclature/${encodeURIComponent(input.matchId)}/finalize`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: { reason: input.reason },
+    },
   );
 }
 

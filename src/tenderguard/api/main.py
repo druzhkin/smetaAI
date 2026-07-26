@@ -108,7 +108,9 @@ from .schemas import (
     AuditAnchorStatusResponse,
     AuditCheckpointResponse,
     BindControlledVersionRequest,
+    BoqAuthoringContextResponse,
     BoqLineResponse,
+    BoqLineReviewResponse,
     BuildApprovalPlanRequest,
     BusinessQualificationCampaignDetailResponse,
     BusinessQualificationCampaignResponse,
@@ -155,7 +157,9 @@ from .schemas import (
     ManualEvidenceContextResponse,
     ManualEvidenceDecisionResponse,
     ManualEvidenceReviewResponse,
+    NomenclatureContextResponse,
     NomenclatureMatchResponse,
+    NomenclatureReviewContextResponse,
     NormalizedPriceResponse,
     NormalizePriceRequest,
     ObservationResponse,
@@ -186,6 +190,7 @@ from .schemas import (
     ReadinessResponse,
     ReceiveIntegrationMessageRequest,
     ReconcileObservationsRequest,
+    ReconciliationContextResponse,
     ReconciliationResponse,
     RecordActualRequest,
     RecordMalwareScanResultRequest,
@@ -1931,6 +1936,25 @@ def create_app(
             )
         return ManualEvidenceDecisionResponse.model_validate(result.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/evidence/reconciliation-context",
+        response_model=ReconciliationContextResponse,
+    )
+    def get_reconciliation_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        field_name: Annotated[str | None, Query(max_length=300)] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> ReconciliationContextResponse:
+        context = evidence_service(session).reconciliation_context(
+            actor=actor,
+            project_id=project_id,
+            field_name=field_name,
+            limit=limit,
+        )
+        return ReconciliationContextResponse.model_validate(context.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/evidence/reconcile",
         response_model=ReconciliationResponse,
@@ -2056,6 +2080,25 @@ def create_app(
             )
         return PassportValidationResponse.model_validate(validation.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/boq/authoring-context",
+        response_model=BoqAuthoringContextResponse,
+    )
+    def get_boq_authoring_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        evidence_field_name: Annotated[str, Query(min_length=1, max_length=300)] = ("boq_line"),
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> BoqAuthoringContextResponse:
+        context = boq_service(session).authoring_context(
+            actor=actor,
+            project_id=project_id,
+            evidence_field_name=evidence_field_name,
+            limit=limit,
+        )
+        return BoqAuthoringContextResponse.model_validate(context.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/boq/lines",
         response_model=BoqLineResponse,
@@ -2078,6 +2121,23 @@ def create_app(
             )
         return BoqLineResponse.model_validate(line.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/boq/lines/{line_id}/review",
+        response_model=BoqLineReviewResponse,
+    )
+    def get_boq_line_review(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        line_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BoqLineReviewResponse:
+        review = boq_service(session).line_review(
+            actor=actor,
+            project_id=project_id,
+            line_id=line_id,
+        )
+        return BoqLineReviewResponse.model_validate(review.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/boq/lines/{line_id}/verify",
         response_model=BoqLineResponse,
@@ -2095,6 +2155,7 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 line_id=line_id,
+                expected_line_updated_at=payload.expected_line_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2225,6 +2286,46 @@ def create_app(
                 reason=payload.reason,
             )
         return ScopeRunResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/nomenclature/context",
+        response_model=NomenclatureContextResponse,
+    )
+    def get_nomenclature_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        catalog_query: Annotated[str | None, Query(max_length=200)] = None,
+        evidence_field_name: Annotated[str, Query(min_length=1, max_length=300)] = (
+            "technical_attributes"
+        ),
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> NomenclatureContextResponse:
+        context = pricing_service(session).nomenclature_context(
+            actor=actor,
+            project_id=project_id,
+            catalog_query=catalog_query,
+            evidence_field_name=evidence_field_name,
+            limit=limit,
+        )
+        return NomenclatureContextResponse.model_validate(context.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/nomenclature/{match_id}/review",
+        response_model=NomenclatureReviewContextResponse,
+    )
+    def get_nomenclature_review_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        match_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> NomenclatureReviewContextResponse:
+        context = pricing_service(session).nomenclature_review_context(
+            actor=actor,
+            project_id=project_id,
+            match_id=match_id,
+        )
+        return NomenclatureReviewContextResponse.model_validate(context.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/nomenclature/assessments",

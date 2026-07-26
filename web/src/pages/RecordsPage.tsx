@@ -113,12 +113,59 @@ export function RecordsPage({
           {section === "EVIDENCE" &&
             (auth.roles.includes("TECHNICAL_EXPERT") ||
               auth.roles.includes("REVIEWER")) && (
+              <>
+                <Link
+                  className="button button--secondary"
+                  to={`/projects/${encodeURIComponent(projectId)}/evidence/reconcile`}
+                >
+                  <Icon name="trace" size={16} />
+                  Независимая сверка
+                </Link>
+                <Link
+                  className="button button--primary"
+                  to={`/projects/${encodeURIComponent(projectId)}/evidence/manual`}
+                >
+                  <Icon name="edit" size={16} />
+                  Ручное наблюдение
+                </Link>
+              </>
+            )}
+          {section === "BOQ_SCOPE" &&
+            projectQuery.data.state === "BOQ_IN_PROGRESS" &&
+            (auth.roles.includes("ESTIMATOR") ||
+              auth.roles.includes("TECHNICAL_EXPERT")) && (
               <Link
                 className="button button--primary"
-                to={`/projects/${encodeURIComponent(projectId)}/evidence/manual`}
+                to={`/projects/${encodeURIComponent(projectId)}/boq/new`}
               >
-                <Icon name="edit" size={16} />
-                Ручное наблюдение
+                <Icon name="plus" size={16} />
+                Новая строка BoQ
+              </Link>
+            )}
+          {section === "BOQ_SCOPE" &&
+            projectQuery.data.state === "BOQ_REVIEW" &&
+            (auth.roles.includes("REVIEWER") ||
+              auth.roles.includes("TECHNICAL_EXPERT")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/boq/scope-review`}
+              >
+                <Icon name="shield" size={16} />
+                Проверить полноту
+              </Link>
+            )}
+          {section === "BOQ_SCOPE" &&
+            ["PRICING_IN_PROGRESS", "RFQ_REQUIRED"].includes(
+              projectQuery.data.state,
+            ) &&
+            (auth.roles.includes("PROCUREMENT") ||
+              auth.roles.includes("TECHNICAL_EXPERT")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/nomenclature/new`}
+              >
+                <Icon name="plus" size={16} />
+                Сопоставить номенклатуру
               </Link>
             )}
           <StatusPill value={projectQuery.data.state} />
@@ -183,6 +230,25 @@ export function RecordsPage({
                   section === "BOQ_SCOPE" &&
                   record.kind === "BOQ_LINE" &&
                   record.current === true &&
+                  record.status === "IN_REVIEW" &&
+                  (auth.roles.includes("REVIEWER") ||
+                    auth.roles.includes("TECHNICAL_EXPERT"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/boq-lines/${encodeURIComponent(record.id)}/review`}
+                    >
+                      <Icon name="shield" size={15} />
+                      Проверить строку
+                    </Link>
+                  );
+                }
+                if (
+                  section === "BOQ_SCOPE" &&
+                  record.kind === "BOQ_LINE" &&
+                  record.current === true &&
+                  record.status === "VERIFIED" &&
                   record.attributes.quantity_status !== "MISSING" &&
                   (auth.roles.includes("ESTIMATOR") ||
                     auth.roles.includes("TECHNICAL_EXPERT"))
@@ -208,6 +274,25 @@ export function RecordsPage({
                     >
                       <Icon name="trace" size={15} />
                       Открыть изменение
+                    </Link>
+                  );
+                }
+                if (
+                  section === "BOQ_SCOPE" &&
+                  record.kind === "NOMENCLATURE_MATCH" &&
+                  record.current === true &&
+                  record.status !== "VERIFIED" &&
+                  (auth.roles.includes("PROCUREMENT") ||
+                    auth.roles.includes("TECHNICAL_EXPERT") ||
+                    auth.roles.includes("REVIEWER"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/nomenclature/${encodeURIComponent(record.id)}/review`}
+                    >
+                      <Icon name="shield" size={15} />
+                      Проверить сопоставление
                     </Link>
                   );
                 }

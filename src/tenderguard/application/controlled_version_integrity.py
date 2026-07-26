@@ -10,7 +10,11 @@ from tenderguard.config import Settings
 from tenderguard.domain.audit import AuditEvent, verify_chain
 from tenderguard.domain.common import content_hash, ensure_utc
 from tenderguard.domain.enums import ActorRole, VersionStatus
-from tenderguard.infrastructure.orm import AuditEventRow, ControlledVersionRow
+from tenderguard.infrastructure.orm import (
+    AuditEventRow,
+    ControlledVersionRow,
+    ProjectControlledVersionRow,
+)
 
 
 class ControlledVersionIntegrityError(ValueError):
@@ -156,6 +160,110 @@ def controlled_version_integrity_valid(
     except (ArithmeticError, KeyError, LookupError, TypeError, ValueError):
         return False
     return True
+
+
+def require_bound_controlled_version(
+    *,
+    session: Session,
+    settings: Settings,
+    project_id: str,
+    organization_id: str,
+    purpose: str,
+    kind: str,
+    expected_version_id: str | None = None,
+) -> ControlledVersionRow:
+    """Return one exact project binding only after reproducing its approval.
+
+    The database uniqueness constraint is necessary but not sufficient: this
+    check also rejects a missing binding, a purpose/kind substitution, a
+    client-selected stale version, cross-organisation content, or an approval
+    whose audit chain no longer verifies.
+    """
+
+    rows = list(
+        session.scalars(
+            select(ControlledVersionRow)
+            .join(
+                ProjectControlledVersionRow,
+                ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
+            )
+            .where(
+                ProjectControlledVersionRow.project_id == project_id,
+                ProjectControlledVersionRow.purpose == purpose,
+            )
+        )
+    )
+    if len(rows) != 1:
+        raise ControlledVersionIntegrityError(
+            f"Project must bind exactly one controlled version for purpose {purpose}"
+        )
+    row = rows[0]
+    binding = session.scalar(
+        select(ProjectControlledVersionRow).where(
+            ProjectControlledVersionRow.project_id == project_id,
+            ProjectControlledVersionRow.controlled_version_id == row.id,
+            ProjectControlledVersionRow.purpose == purpose,
+        )
+    )
+    if (
+        binding is None
+        or row.kind != kind
+        or binding.project_id != project_id
+        or binding.purpose != purpose
+        or not binding.bound_by
+        or ensure_utc(binding.bound_at) is None
+        or (expected_version_id is not None and row.id != expected_version_id)
+    ):
+        raise ControlledVersionIntegrityError(
+            "Controlled version binding identity, purpose, or requested version does not verify"
+        )
+    require_controlled_version_integrity(
+        session=session,
+        settings=settings,
+        row=row,
+        expected_organization_id=organization_id,
+        expected_kind=kind,
+    )
+    project_events = [
+        _event(event)
+        for event in session.scalars(
+            select(AuditEventRow)
+            .where(
+                AuditEventRow.aggregate_type == "project",
+                AuditEventRow.aggregate_id == project_id,
+            )
+            .order_by(AuditEventRow.sequence)
+        )
+    ]
+    purpose_events = [
+        event
+        for event in project_events
+        if event.event_type == "controlled_version_bound"
+        and event.payload.get("purpose") == purpose
+    ]
+    latest_binding_event = purpose_events[-1] if purpose_events else None
+    owner_role_values = {role.value for role in controlled_version_owner_roles(row.kind)}
+    bound_at = ensure_utc(binding.bound_at)
+    if (
+        not project_events
+        or not verify_chain(project_events, settings.audit_verification_keyring)
+        or latest_binding_event is None
+        or bound_at is None
+        or latest_binding_event.actor_id != binding.bound_by
+        or not owner_role_values.intersection(latest_binding_event.actor_roles)
+        or latest_binding_event.occurred_at < bound_at
+        or latest_binding_event.payload
+        != {
+            "version_id": row.id,
+            "kind": row.kind,
+            "purpose": purpose,
+            "content_hash": row.content_hash,
+        }
+    ):
+        raise ControlledVersionIntegrityError(
+            "Controlled version binding audit chain does not verify"
+        )
+    return row
 
 
 def _parse_governance_timestamp(value: str) -> datetime:

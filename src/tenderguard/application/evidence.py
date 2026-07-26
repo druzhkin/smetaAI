@@ -10,7 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tenderguard.application.controlled_version_integrity import (
+    require_bound_controlled_version,
     require_controlled_version_integrity,
+)
+from tenderguard.application.document_set_integrity import (
+    require_confirmed_document_set_integrity,
 )
 from tenderguard.application.projects import (
     OptimisticLockError,
@@ -25,7 +29,6 @@ from tenderguard.domain.enums import (
     ApprovalState,
     EvidenceMethod,
     VerificationStatus,
-    VersionStatus,
 )
 from tenderguard.domain.models import (
     Conflict,
@@ -109,6 +112,27 @@ class ReconciliationOutcome(DomainModel):
     agreed_value: Any | None = None
     verified_observation_id: str | None = None
     conflict: Conflict | None = None
+
+
+class ReconciliationCandidateView(DomainModel):
+    observation: Observation
+    adapter_qualification_id: str | None
+    adapter_status: str | None
+    adapter_valid_until: date | None
+    independence_domain: str | None
+    eligible: bool
+    blockers: tuple[str, ...] = ()
+
+
+class ReconciliationContextView(DomainModel):
+    project_id: str
+    document_set_revision_id: str
+    reconciliation_version_id: str
+    available_field_names: tuple[str, ...]
+    field_names_truncated: bool
+    selected_field_name: str | None = None
+    candidates: tuple[ReconciliationCandidateView, ...] = ()
+    candidates_truncated: bool = False
 
 
 class ConflictResolutionCommand(DomainModel):
@@ -297,7 +321,7 @@ class EvidenceService:
                 raise ValueError(
                     "Manual observation method version must equal the bound policy version"
                 )
-            document_set = self._current_document_set(
+            document_set = self._confirmed_current_document_set(
                 project_id=project_id,
                 document_set_revision_id=project.current_document_set_revision_id,
             )
@@ -423,7 +447,7 @@ class EvidenceService:
             project_id=project_id,
             organization_id=actor.organization_id,
         )
-        document_set = self._current_document_set(
+        document_set = self._confirmed_current_document_set(
             project_id=project_id,
             document_set_revision_id=project.current_document_set_revision_id,
         )
@@ -507,7 +531,7 @@ class EvidenceService:
             project_id=project_id,
             required_roles=(policy.review_role,),
         )
-        document_set = self._current_document_set(
+        document_set = self._confirmed_current_document_set(
             project_id=project_id,
             document_set_revision_id=project.current_document_set_revision_id,
         )
@@ -730,32 +754,36 @@ class EvidenceService:
         request_id: str,
         reason: str,
     ) -> ReconciliationOutcome:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("Reconciliation reason must contain 1 to 2000 characters")
+        if len(observation_ids) != len(set(observation_ids)):
+            raise ValueError("Reconciliation observation IDs must be unique")
         project_service = ProjectService(
             session=self.session,
             settings=self.settings,
             object_store=self.object_store,
         )
-        project_service.get_project(
+        project = project_service.get_project(
             actor=actor,
             project_id=project_id,
             lock=True,
             required_roles=(ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT),
         )
-        rule_version = self.session.scalar(
-            select(ControlledVersionRow)
-            .join(
-                ProjectControlledVersionRow,
-                ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
-            )
-            .where(
-                ControlledVersionRow.id == reconciliation_version_id,
-                ControlledVersionRow.kind == "reconciliation_rules",
-                ControlledVersionRow.status == VersionStatus.APPROVED.value,
-                ProjectControlledVersionRow.project_id == project_id,
-            )
+        rule_version = require_bound_controlled_version(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            organization_id=actor.organization_id,
+            purpose="reconciliation_rules",
+            kind="reconciliation_rules",
+            expected_version_id=reconciliation_version_id,
         )
-        if rule_version is None:
-            raise ValueError("A bound approved reconciliation_rules version is required")
+        reconciliation_version_id = rule_version.id
+        document_set = self._confirmed_current_document_set(
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
         rows = list(
             self.session.scalars(
                 select(ObservationRow).where(
@@ -766,6 +794,10 @@ class EvidenceService:
         )
         if len(rows) != len(set(observation_ids)):
             raise ValueError("One or more evidence observations do not exist")
+        if any(row.document_revision_id not in document_set.revision_ids for row in rows):
+            raise ValueError(
+                "Reconciliation observations must belong to the confirmed current document set"
+            )
         rows.sort(key=lambda row: row.id)
         observations = tuple(Observation.model_validate(row.payload["observation"]) for row in rows)
         self._validate_independence_domains(
@@ -779,7 +811,14 @@ class EvidenceService:
         if value is None and conflict is None:
             raise ValueError("At least two independent observations are required")
         if conflict is not None:
-            if self.session.get(ConflictRow, conflict.conflict_id) is None:
+            existing_conflict = self.session.get(ConflictRow, conflict.conflict_id)
+            if existing_conflict is not None:
+                self._require_existing_conflict_integrity(
+                    project_id=project_id,
+                    conflict=conflict,
+                    row=existing_conflict,
+                )
+            else:
                 now = utc_now()
                 self.session.add(
                     ConflictRow(
@@ -844,7 +883,42 @@ class EvidenceService:
             confidence=None,
             status=VerificationStatus.VERIFIED,
         )
-        if self.session.get(ObservationRow, verified.observation_id) is not None:
+        verified_payload = {
+            "observation": verified.model_dump(mode="json"),
+            "source_observation_ids": sorted(observation_ids),
+            "reconciliation_version_id": reconciliation_version_id,
+            **basis_metadata,
+        }
+        existing_verified = self.session.get(ObservationRow, verified.observation_id)
+        if existing_verified is not None:
+            existing_observation = Observation.model_validate(
+                existing_verified.payload.get("observation")
+            )
+            replay_observation = verified.model_copy(
+                update={
+                    "observed_at": existing_observation.observed_at,
+                    "actor_id": existing_observation.actor_id,
+                }
+            )
+            replay_payload = {
+                "observation": replay_observation.model_dump(mode="json"),
+                "source_observation_ids": sorted(observation_ids),
+                "reconciliation_version_id": reconciliation_version_id,
+                **basis_metadata,
+            }
+            if (
+                existing_verified.project_id != project_id
+                or existing_verified.document_revision_id
+                != replay_observation.location.document_revision_id
+                or existing_verified.field_name != replay_observation.field_name
+                or existing_verified.method != replay_observation.method.value
+                or existing_verified.method_version != replay_observation.method_version
+                or existing_verified.status != replay_observation.status.value
+                or existing_verified.payload != replay_payload
+            ):
+                raise ValueError(
+                    "Existing reconciled observation does not reproduce the deterministic result"
+                )
             return ReconciliationOutcome(
                 agreed_value=value,
                 verified_observation_id=verified.observation_id,
@@ -858,12 +932,7 @@ class EvidenceService:
                 method=verified.method.value,
                 method_version=verified.method_version,
                 status=verified.status.value,
-                payload={
-                    "observation": verified.model_dump(mode="json"),
-                    "source_observation_ids": sorted(observation_ids),
-                    "reconciliation_version_id": reconciliation_version_id,
-                    **basis_metadata,
-                },
+                payload=verified_payload,
                 created_at=utc_now(),
             )
         )
@@ -883,6 +952,141 @@ class EvidenceService:
         return ReconciliationOutcome(
             agreed_value=value,
             verified_observation_id=verified.observation_id,
+        )
+
+    def _require_existing_conflict_integrity(
+        self,
+        *,
+        project_id: str,
+        conflict: Conflict,
+        row: ConflictRow,
+    ) -> None:
+        task = self.session.get(ApprovalTaskRow, self._conflict_task_id(conflict.conflict_id))
+        if (
+            row.project_id != project_id
+            or row.field_name != conflict.field_name
+            or row.status != conflict.status.value
+            or row.payload != conflict.model_dump(mode="json")
+            or task is None
+            or task.project_id != project_id
+            or task.task_type != "CONFLICT_RESOLUTION"
+            or task.entity_type != "evidence_conflict"
+            or task.entity_id != conflict.conflict_id
+            or task.assigned_role != ActorRole.REVIEWER.value
+            or task.status != "PENDING"
+            or not task.required
+            or task.payload.get("observation_ids") != list(conflict.observation_ids)
+            or not isinstance(task.payload.get("created_by"), str)
+            or not task.payload["created_by"]
+        ):
+            raise ValueError(
+                "Existing evidence conflict or its mandatory review task does not reproduce"
+            )
+
+    def reconciliation_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        field_name: str | None,
+        limit: int,
+    ) -> ReconciliationContextView:
+        if limit < 1 or limit > 100:
+            raise ValueError("Reconciliation context limit must be between 1 and 100")
+        project = ProjectService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        ).get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT),
+        )
+        rules = require_bound_controlled_version(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            organization_id=actor.organization_id,
+            purpose="reconciliation_rules",
+            kind="reconciliation_rules",
+        )
+        document_set = self._confirmed_current_document_set(
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        raw_fields = list(
+            self.session.scalars(
+                select(ObservationRow.field_name)
+                .where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                    ObservationRow.status == VerificationStatus.UNVERIFIED.value,
+                )
+                .distinct()
+                .order_by(ObservationRow.field_name)
+                .limit(501)
+            )
+        )
+        available_fields = tuple(raw_fields[:500])
+        selected_field = field_name.strip() if field_name is not None else None
+        if selected_field == "":
+            selected_field = None
+        if selected_field is not None and len(selected_field) > 300:
+            raise ValueError("Reconciliation field name exceeds 300 characters")
+        candidates: tuple[ReconciliationCandidateView, ...] = ()
+        candidates_truncated = False
+        if selected_field is not None:
+            rows = list(
+                self.session.scalars(
+                    select(ObservationRow)
+                    .where(
+                        ObservationRow.project_id == project_id,
+                        ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                        ObservationRow.field_name == selected_field,
+                        ObservationRow.status == VerificationStatus.UNVERIFIED.value,
+                    )
+                    .order_by(ObservationRow.created_at.desc(), ObservationRow.id)
+                    .limit(limit + 1)
+                )
+            )
+            candidates_truncated = len(rows) > limit
+            rows = rows[:limit]
+            qualification_ids = {
+                qualification_id
+                for row in rows
+                if isinstance(
+                    qualification_id := row.payload.get("adapter_qualification_id"),
+                    str,
+                )
+                and qualification_id
+            }
+            qualifications = {
+                row.id: row
+                for row in self.session.scalars(
+                    select(AdapterQualificationRow).where(
+                        AdapterQualificationRow.id.in_(tuple(qualification_ids))
+                    )
+                )
+            }
+            candidates = tuple(
+                self._reconciliation_candidate_view(
+                    row=row,
+                    qualification=qualifications.get(
+                        str(row.payload.get("adapter_qualification_id"))
+                    ),
+                    organization_id=actor.organization_id,
+                )
+                for row in rows
+            )
+        return ReconciliationContextView(
+            project_id=project_id,
+            document_set_revision_id=document_set.id,
+            reconciliation_version_id=rules.id,
+            available_field_names=available_fields,
+            field_names_truncated=len(raw_fields) > 500,
+            selected_field_name=selected_field,
+            candidates=candidates,
+            candidates_truncated=candidates_truncated,
         )
 
     def resolve_conflict(
@@ -1280,41 +1484,18 @@ class EvidenceService:
         )
         return row, policy
 
-    def _current_document_set(
+    def _confirmed_current_document_set(
         self,
         *,
         project_id: str,
         document_set_revision_id: str | None,
     ) -> DocumentSetRevisionRow:
-        if not document_set_revision_id:
-            raise ValueError("Manual evidence requires a confirmed current document set")
-        row = self.session.scalar(
-            select(DocumentSetRevisionRow).where(
-                DocumentSetRevisionRow.id == document_set_revision_id,
-                DocumentSetRevisionRow.project_id == project_id,
-                DocumentSetRevisionRow.status == "CONFIRMED",
-            )
+        return require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=document_set_revision_id,
         )
-        if row is None:
-            raise ValueError("Manual evidence requires a confirmed current document set")
-        revision_ids = row.revision_ids
-        if (
-            not isinstance(revision_ids, list)
-            or not revision_ids
-            or any(
-                not isinstance(revision_id, str) or not revision_id or len(revision_id) > 64
-                for revision_id in revision_ids
-            )
-            or len(set(revision_ids)) != len(revision_ids)
-            or row.manifest_hash != content_hash(revision_ids)
-            or not row.confirmed_by
-            or row.confirmed_at is None
-            or row.confirmed_by == row.created_by
-        ):
-            raise RuntimeError(
-                "Confirmed current document set manifest and four-eyes evidence do not verify"
-            )
-        return row
 
     @staticmethod
     def _manual_evidence_task_id(
@@ -1533,10 +1714,14 @@ class EvidenceService:
             if qualification is None:
                 raise ValueError("An observation adapter qualification is unavailable")
             if (
-                row.field_name != observation.field_name
+                row.id != observation.observation_id
+                or row.document_revision_id != observation.location.document_revision_id
+                or row.field_name != observation.field_name
                 or row.method != observation.method.value
                 or row.method_version != observation.method_version
                 or row.status != observation.status.value
+                or observation.status is not VerificationStatus.UNVERIFIED
+                or observation.method in {EvidenceMethod.MANUAL, EvidenceMethod.RULE_ENGINE}
                 or qualification.adapter_version != row.method_version
                 or row.method not in qualification.payload.get("supported_methods", [])
                 or qualification.payload.get("organization_id") != organization_id
@@ -1547,6 +1732,62 @@ class EvidenceService:
                 )
             ):
                 raise ValueError("An observation no longer matches its qualified adapter identity")
+
+    @staticmethod
+    def _reconciliation_candidate_view(
+        *,
+        row: ObservationRow,
+        qualification: AdapterQualificationRow | None,
+        organization_id: str,
+    ) -> ReconciliationCandidateView:
+        observation = Observation.model_validate(row.payload["observation"])
+        qualification_id = row.payload.get("adapter_qualification_id")
+        blockers: list[str] = []
+        if (
+            row.id != observation.observation_id
+            or row.document_revision_id != observation.location.document_revision_id
+            or row.field_name != observation.field_name
+            or row.method != observation.method.value
+            or row.method_version != observation.method_version
+            or row.status != observation.status.value
+            or observation.status is not VerificationStatus.UNVERIFIED
+        ):
+            blockers.append("EVIDENCE_INTEGRITY_FAILED")
+        if observation.method in {EvidenceMethod.MANUAL, EvidenceMethod.RULE_ENGINE}:
+            blockers.append("AUTOMATIC_SOURCE_REQUIRED")
+        if not isinstance(qualification_id, str) or not qualification_id or qualification is None:
+            blockers.append("QUALIFICATION_MISSING")
+        elif (
+            qualification.status != "APPROVED"
+            or qualification.adapter_version != observation.method_version
+            or observation.method.value not in qualification.payload.get("supported_methods", [])
+            or qualification.payload.get("organization_id") != organization_id
+            or qualification.payload.get("service_actor_id") != observation.actor_id
+        ):
+            blockers.append("QUALIFICATION_IDENTITY_FAILED")
+        if (
+            qualification is not None
+            and qualification.valid_until is not None
+            and qualification.valid_until < utc_now().date()
+        ):
+            blockers.append("QUALIFICATION_EXPIRED")
+        independence_domain = (
+            qualification.payload.get("independence_domain") if qualification is not None else None
+        )
+        if not isinstance(independence_domain, str) or not independence_domain:
+            blockers.append("INDEPENDENCE_DOMAIN_MISSING")
+            independence_domain = None
+        return ReconciliationCandidateView(
+            observation=observation,
+            adapter_qualification_id=(
+                qualification_id if isinstance(qualification_id, str) and qualification_id else None
+            ),
+            adapter_status=qualification.status if qualification is not None else None,
+            adapter_valid_until=(qualification.valid_until if qualification is not None else None),
+            independence_domain=independence_domain,
+            eligible=not blockers,
+            blockers=tuple(blockers),
+        )
 
     @staticmethod
     def _conflict_observation_view(

@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,17 +36,22 @@ from tenderguard.infrastructure.orm import (
     AdapterQualificationRow,
     BoqLineRow,
     ControlledVersionRow,
+    DocumentSetRevisionRow,
     NormalizedPriceRow,
     ObservationRow,
     PriceDecisionRow,
-    ProjectControlledVersionRow,
     ProjectRow,
     QuantityRow,
     RfqRequestRow,
     RiskCalculationRow,
     RiskItemRow,
 )
-from tests.integration.support import project_memberships
+from tests.integration.support import (
+    add_document_set_confirmation_audit,
+    add_governed_controlled_version,
+    add_project_controlled_version_binding,
+    project_memberships,
+)
 
 
 def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
@@ -68,6 +73,26 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         "procurement-1",
         "org-1",
         frozenset({ActorRole.PROCUREMENT, ActorRole.ESTIMATOR}),
+    )
+    catalog_creator = Actor(
+        "catalog-creator",
+        "org-1",
+        frozenset({ActorRole.CATALOG_OWNER}),
+    )
+    catalog_approver = Actor(
+        "catalog-approver",
+        "org-1",
+        frozenset({ActorRole.CATALOG_OWNER, ActorRole.APPROVER}),
+    )
+    methodology_creator = Actor(
+        "methodology-creator",
+        "org-1",
+        frozenset({ActorRole.METHODOLOGY_OWNER}),
+    )
+    methodology_approver = Actor(
+        "methodology-approver",
+        "org-1",
+        frozenset({ActorRole.METHODOLOGY_OWNER}),
     )
     now = datetime(2026, 7, 23, tzinfo=UTC)
     basis = CommercialBasis(
@@ -91,11 +116,25 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 code="PRICE-1",
                 name="Pricing workflow",
                 state=ApprovalState.PRICING_IN_PROGRESS.value,
+                current_document_set_revision_id="document-set-pricing",
                 row_version=1,
                 created_at=now,
                 updated_at=now,
             )
         )
+        pricing_revision_ids = ["revision-1", "revision-2", "revision-3"]
+        document_set = DocumentSetRevisionRow(
+            id="document-set-pricing",
+            project_id="project-pricing",
+            manifest_hash=content_hash(pricing_revision_ids),
+            revision_ids=pricing_revision_ids,
+            status="CONFIRMED",
+            created_by=procurement.actor_id,
+            created_at=now,
+            confirmed_by=catalog_approver.actor_id,
+            confirmed_at=now,
+        )
+        session.add(document_set)
         session.add_all(
             project_memberships(
                 "project-pricing",
@@ -103,6 +142,13 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 owner_id=procurement.actor_id,
                 now=now,
             )
+        )
+        add_document_set_confirmation_audit(
+            session=session,
+            settings=settings,
+            object_store=store,
+            row=document_set,
+            actor=catalog_approver,
         )
         session.add(
             BoqLineRow(
@@ -282,7 +328,17 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 approved_at=now,
             ),
         )
-        session.add_all(versions)
+        for version in versions:
+            catalog_owned = version.kind == "catalog"
+            add_governed_controlled_version(
+                session=session,
+                settings=settings,
+                object_store=store,
+                row=version,
+                organization_id="org-1",
+                creator=(catalog_creator if catalog_owned else methodology_creator),
+                approver=(catalog_approver if catalog_owned else methodology_approver),
+            )
         for version, purpose in zip(
             versions,
             (
@@ -294,14 +350,14 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             ),
             strict=True,
         ):
-            session.add(
-                ProjectControlledVersionRow(
-                    project_id="project-pricing",
-                    controlled_version_id=version.id,
-                    purpose=purpose,
-                    bound_by=version.approved_by or "owner",
-                    bound_at=now,
-                )
+            add_project_controlled_version_binding(
+                session=session,
+                settings=settings,
+                object_store=store,
+                project_id="project-pricing",
+                version=version,
+                purpose=purpose,
+                actor=(catalog_approver if version.kind == "catalog" else methodology_approver),
             )
         risk_item_id = "risk-item-pricing-test"
         session.add(
@@ -393,17 +449,38 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             actor_id="reviewer-1",
             status=VerificationStatus.VERIFIED,
         )
-        session.add(
-            ObservationRow(
-                id=attribute_observation.observation_id,
-                project_id="project-pricing",
-                document_revision_id="revision-1",
-                field_name=attribute_observation.field_name,
-                method=attribute_observation.method.value,
-                method_version=attribute_observation.method_version,
-                status=attribute_observation.status.value,
-                payload={"observation": attribute_observation.model_dump(mode="json")},
-                created_at=now,
+        old_attribute_observation = attribute_observation.model_copy(
+            update={
+                "observation_id": "observation-attributes-old-set",
+                "location": attribute_observation.location.model_copy(
+                    update={"document_revision_id": "revision-old"}
+                ),
+            }
+        )
+        session.add_all(
+            (
+                ObservationRow(
+                    id=attribute_observation.observation_id,
+                    project_id="project-pricing",
+                    document_revision_id="revision-1",
+                    field_name=attribute_observation.field_name,
+                    method=attribute_observation.method.value,
+                    method_version=attribute_observation.method_version,
+                    status=attribute_observation.status.value,
+                    payload={"observation": attribute_observation.model_dump(mode="json")},
+                    created_at=now,
+                ),
+                ObservationRow(
+                    id=old_attribute_observation.observation_id,
+                    project_id="project-pricing",
+                    document_revision_id="revision-old",
+                    field_name=old_attribute_observation.field_name,
+                    method=old_attribute_observation.method.value,
+                    method_version=old_attribute_observation.method_version,
+                    status=old_attribute_observation.status.value,
+                    payload={"observation": old_attribute_observation.model_dump(mode="json")},
+                    created_at=now + timedelta(seconds=1),
+                ),
             )
         )
 
@@ -522,6 +599,86 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
 
     with factory.begin() as session:
         service = PricingService(session=session, settings=settings, object_store=store)
+        with pytest.raises(ValueError, match="limit must be between 1 and 100"):
+            service.nomenclature_context(
+                actor=procurement,
+                project_id="project-pricing",
+                catalog_query="pipe",
+                evidence_field_name="technical_attributes",
+                limit=0,
+            )
+        with pytest.raises(ValueError, match="field name must contain"):
+            service.nomenclature_context(
+                actor=procurement,
+                project_id="project-pricing",
+                catalog_query="pipe",
+                evidence_field_name="   ",
+                limit=100,
+            )
+        with pytest.raises(ValueError, match="query exceeds 200"):
+            service.nomenclature_context(
+                actor=procurement,
+                project_id="project-pricing",
+                catalog_query="x" * 201,
+                evidence_field_name="technical_attributes",
+                limit=100,
+            )
+        project = session.get(ProjectRow, "project-pricing")
+        assert project is not None
+        project.state = ApprovalState.DRAFT.value
+        with pytest.raises(
+            ValueError,
+            match="require PRICING_IN_PROGRESS or RFQ_REQUIRED",
+        ):
+            service.nomenclature_context(
+                actor=procurement,
+                project_id="project-pricing",
+                catalog_query="pipe",
+                evidence_field_name="technical_attributes",
+                limit=100,
+            )
+        project.state = ApprovalState.PRICING_IN_PROGRESS.value
+        context = service.nomenclature_context(
+            actor=procurement,
+            project_id="project-pricing",
+            catalog_query="pipe",
+            evidence_field_name="technical_attributes",
+            limit=1,
+        )
+        assert {
+            candidate.observation.observation_id for candidate in context.evidence_candidates
+        } == {"observation-attributes"}
+        assert not context.evidence_candidates_truncated
+        with pytest.raises(LookupError, match="missing-match"):
+            service.nomenclature_review_context(
+                actor=procurement,
+                project_id="project-pricing",
+                match_id="missing-match",
+            )
+        with pytest.raises(ValueError, match="reason must contain"):
+            service.assess_nomenclature(
+                actor=procurement,
+                project_id="project-pricing",
+                draft=NomenclatureAssessmentDraft(
+                    source_item_id="pipe-source",
+                    canonical_item_id="pipe-canonical",
+                    source_attributes_observation_id="observation-attributes",
+                ),
+                request_id="request-nomenclature-blank-reason",
+                reason=" ",
+            )
+        with pytest.raises(ValueError, match="confirmed current document set"):
+            service.assess_nomenclature(
+                actor=procurement,
+                project_id="project-pricing",
+                draft=NomenclatureAssessmentDraft(
+                    source_item_id="pipe-source",
+                    canonical_item_id="pipe-canonical",
+                    source_attributes_observation_id="observation-attributes-old-set",
+                ),
+                request_id="request-nomenclature-old-evidence",
+                reason="Prove that old-set technical evidence is rejected",
+            )
         match = service.assess_nomenclature(
             actor=procurement,
             project_id="project-pricing",

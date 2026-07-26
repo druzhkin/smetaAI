@@ -236,6 +236,33 @@ export interface ManualEvidenceDecisionResult {
   verified_observation: EvidenceObservation | null;
 }
 
+export interface ReconciliationCandidate {
+  observation: EvidenceObservation;
+  adapter_qualification_id: string | null;
+  adapter_status: string | null;
+  adapter_valid_until: string | null;
+  independence_domain: string | null;
+  eligible: boolean;
+  blockers: string[];
+}
+
+export interface ReconciliationContext {
+  project_id: string;
+  document_set_revision_id: string;
+  reconciliation_version_id: string;
+  available_field_names: string[];
+  field_names_truncated: boolean;
+  selected_field_name: string | null;
+  candidates: ReconciliationCandidate[];
+  candidates_truncated: boolean;
+}
+
+export interface ReconciliationOutcome {
+  agreed_value: unknown | null;
+  verified_observation_id: string | null;
+  conflict: EvidenceConflict | null;
+}
+
 export interface ApprovalDecisionResult {
   approval_id: string;
   task_id: string;
@@ -361,6 +388,95 @@ export interface ProjectWorkbench {
   latest_total: string | null;
   latest_currency: string | null;
   generated_at: string;
+}
+
+export type CostCategory =
+  | "LABOUR"
+  | "PLANT"
+  | "MATERIAL"
+  | "SUBCONTRACT"
+  | "LOGISTICS"
+  | "MOBILISATION"
+  | "CONTRACT_FINANCE"
+  | "RISK"
+  | "OVERHEAD"
+  | "PROFIT"
+  | "TAX";
+
+export type CostBasisKind =
+  | "MARKET"
+  | "NORMATIVE"
+  | "APPROVED_ASSUMPTION"
+  | "RISK_MODEL"
+  | "DERIVED_MODEL";
+
+export interface BoqCostComponent {
+  semantic_key: string;
+  category: CostCategory;
+  basis_kind: CostBasisKind;
+  sign: -1 | 1;
+  factor_ids: string[];
+}
+
+export interface BoqLine {
+  line_id: string;
+  line_key: string;
+  wbs_node_id: string;
+  work_code: string;
+  description: string;
+  unit: string;
+  status: string;
+  critical_quantity: boolean;
+  cost_components: BoqCostComponent[];
+  supersedes_line_id: string | null;
+  is_current: boolean;
+  updated_at: string;
+}
+
+export interface BoqEvidenceCandidate {
+  observation: EvidenceObservation;
+  work_code: string;
+  unit: string;
+}
+
+export interface BoqAuthoringContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  evidence_field_name: string;
+  evidence_candidates: BoqEvidenceCandidate[];
+  candidates_truncated: boolean;
+}
+
+export interface BoqLineReview {
+  line: BoqLine;
+  created_by: string;
+  document_set_revision_id: string;
+  evidence_observations: EvidenceObservation[];
+  verification_allowed: boolean;
+  verification_blockers: string[];
+}
+
+export interface ScopeFinding {
+  finding_id: string;
+  rule_id: string;
+  wbs_node_id: string;
+  required_work_code: string;
+  severity: string;
+  reason: string;
+  supporting_entity_ids: string[];
+  resolved: boolean;
+  resolved_by: string | null;
+  resolution_reason: string | null;
+}
+
+export interface ScopeRun {
+  evaluation: {
+    rule_pack_version_id: string;
+    evaluated_work_codes: string[];
+    findings: ScopeFinding[];
+  } | null;
+  validation_findings: ValidationFinding[];
 }
 
 export type QuantityOperation =
@@ -581,6 +697,70 @@ export interface PriceDecision {
   approval_task_ids: string[];
   rfq_request_id: string | null;
   project_state: string;
+}
+
+export type NomenclatureMatchClass =
+  | "EXACT"
+  | "FUNCTIONAL_ANALOGUE"
+  | "CONDITIONALLY_ACCEPTABLE_ANALOGUE"
+  | "TECHNICALLY_UNACCEPTABLE"
+  | "INSUFFICIENT_DATA";
+
+export interface NomenclatureMatch {
+  match_id: string;
+  source_item_id: string;
+  canonical_item_id: string | null;
+  match_class: NomenclatureMatchClass;
+  required_critical_attributes: string[];
+  source_attributes: Record<string, string>;
+  canonical_attributes: Record<string, string>;
+  mismatched_attributes: string[];
+  missing_attributes: string[];
+  verified_by: string | null;
+  verified_at: string | null;
+}
+
+export interface NomenclatureMatchView {
+  match: NomenclatureMatch;
+  status: string;
+  catalog_version_id: string;
+  supersedes_match_id: string | null;
+  approval_task_ids: string[];
+}
+
+export interface CatalogItem {
+  canonical_item_id: string;
+  attributes: Record<string, string>;
+  critical_attributes: string[];
+  critical_price: boolean;
+}
+
+export interface NomenclatureEvidenceCandidate {
+  observation: EvidenceObservation;
+  attributes: Record<string, string>;
+}
+
+export interface NomenclatureContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  catalog_version_id: string;
+  catalog_items: CatalogItem[];
+  catalog_items_truncated: boolean;
+  evidence_field_name: string;
+  evidence_candidates: NomenclatureEvidenceCandidate[];
+  evidence_candidates_truncated: boolean;
+}
+
+export interface NomenclatureReviewContext {
+  match: NomenclatureMatchView;
+  source_attributes_observation_id: string;
+  source_observation: EvidenceObservation;
+  proposal_reason: string | null;
+  equivalence_rule_version_id: string | null;
+  approval_task_statuses: Record<string, string>;
+  finalization_allowed: boolean;
+  finalization_blockers: string[];
 }
 
 export interface AppliedCalculationFactor {

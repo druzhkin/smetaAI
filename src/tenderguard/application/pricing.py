@@ -11,6 +11,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tenderguard.application.approvals import ApprovalService
+from tenderguard.application.controlled_version_integrity import (
+    require_bound_controlled_version,
+)
+from tenderguard.application.document_set_integrity import (
+    require_confirmed_document_set_integrity,
+    require_observation_in_document_set,
+)
 from tenderguard.application.evidence_independence import (
     require_distinct_qualified_independence,
 )
@@ -28,7 +35,6 @@ from tenderguard.domain.enums import (
     PriceEvidenceClass,
     PriceStatus,
     VerificationStatus,
-    VersionStatus,
 )
 from tenderguard.domain.models import (
     CommercialBasis,
@@ -52,13 +58,13 @@ from tenderguard.infrastructure.orm import (
     AdapterQualificationRow,
     ApprovalRecordRow,
     ApprovalTaskRow,
+    BoqLineRow,
     ControlledVersionRow,
     NomenclatureMatchRow,
     NormalizedPriceRow,
     ObservationRow,
     PriceDecisionRow,
     PriceQuoteRow,
-    ProjectControlledVersionRow,
     ProjectRow,
     RfqRequestRow,
 )
@@ -76,6 +82,41 @@ class NomenclatureMatchView(DomainModel):
     catalog_version_id: str
     supersedes_match_id: str | None = None
     approval_task_ids: tuple[str, ...] = ()
+
+
+class CatalogItemView(DomainModel):
+    canonical_item_id: str
+    attributes: dict[str, str]
+    critical_attributes: tuple[str, ...]
+    critical_price: bool
+
+
+class NomenclatureEvidenceCandidateView(DomainModel):
+    observation: Observation
+    attributes: dict[str, str]
+
+
+class NomenclatureContextView(DomainModel):
+    project_id: str
+    project_state: ApprovalState
+    document_set_revision_id: str
+    catalog_version_id: str
+    catalog_items: tuple[CatalogItemView, ...]
+    catalog_items_truncated: bool
+    evidence_field_name: str
+    evidence_candidates: tuple[NomenclatureEvidenceCandidateView, ...]
+    evidence_candidates_truncated: bool
+
+
+class NomenclatureReviewContextView(DomainModel):
+    match: NomenclatureMatchView
+    source_attributes_observation_id: str
+    source_observation: Observation
+    proposal_reason: str | None = None
+    equivalence_rule_version_id: str | None = None
+    approval_task_statuses: dict[str, str] = Field(default_factory=dict)
+    finalization_allowed: bool
+    finalization_blockers: tuple[str, ...]
 
 
 class AnalogueProposalCommand(DomainModel):
@@ -223,6 +264,179 @@ class PricingService:
         self.settings = settings
         self.object_store = object_store
 
+    def nomenclature_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        catalog_query: str | None,
+        evidence_field_name: str,
+        limit: int,
+    ) -> NomenclatureContextView:
+        if limit < 1 or limit > 100:
+            raise ValueError("Nomenclature context limit must be between 1 and 100")
+        evidence_field_name = evidence_field_name.strip()
+        if not evidence_field_name or len(evidence_field_name) > 300:
+            raise ValueError("Nomenclature evidence field name must contain 1 to 300 characters")
+        normalized_query = catalog_query.strip().casefold() if catalog_query else ""
+        if len(normalized_query) > 200:
+            raise ValueError("Nomenclature catalog query exceeds 200 characters")
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(ActorRole.PROCUREMENT, ActorRole.TECHNICAL_EXPERT),
+        )
+        if ApprovalState(project.state) not in {
+            ApprovalState.PRICING_IN_PROGRESS,
+            ApprovalState.RFQ_REQUIRED,
+        }:
+            raise ValueError("Nomenclature changes require PRICING_IN_PROGRESS or RFQ_REQUIRED")
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project.id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        catalog = self._bound_version(project.id, "catalog", "catalog")
+        all_items = self._validated_catalog_items(catalog)
+        matching_items = [
+            item
+            for item in all_items
+            if not normalized_query
+            or normalized_query
+            in " ".join(
+                (
+                    item.canonical_item_id,
+                    *item.attributes.keys(),
+                    *item.attributes.values(),
+                )
+            ).casefold()
+        ]
+        rows = list(
+            self.session.scalars(
+                select(ObservationRow)
+                .where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                    ObservationRow.field_name == evidence_field_name,
+                    ObservationRow.status == VerificationStatus.VERIFIED.value,
+                )
+                .order_by(ObservationRow.created_at.desc(), ObservationRow.id)
+                .limit(limit + 1)
+            )
+        )
+        evidence_candidates: list[NomenclatureEvidenceCandidateView] = []
+        for row in rows[:limit]:
+            observation = self._validated_observation(row)
+            if isinstance(observation.value, dict) and all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in observation.value.items()
+            ):
+                evidence_candidates.append(
+                    NomenclatureEvidenceCandidateView(
+                        observation=observation,
+                        attributes={
+                            str(key): str(value) for key, value in observation.value.items()
+                        },
+                    )
+                )
+        return NomenclatureContextView(
+            project_id=project_id,
+            project_state=ApprovalState(project.state),
+            document_set_revision_id=document_set.id,
+            catalog_version_id=catalog.id,
+            catalog_items=tuple(matching_items[:limit]),
+            catalog_items_truncated=len(matching_items) > limit,
+            evidence_field_name=evidence_field_name,
+            evidence_candidates=tuple(evidence_candidates),
+            evidence_candidates_truncated=len(rows) > limit,
+        )
+
+    def nomenclature_review_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        match_id: str,
+    ) -> NomenclatureReviewContextView:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.PROCUREMENT,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
+        )
+        row = self.session.scalar(
+            select(NomenclatureMatchRow).where(
+                NomenclatureMatchRow.id == match_id,
+                NomenclatureMatchRow.project_id == project_id,
+            )
+        )
+        if row is None:
+            raise LookupError(match_id)
+        blockers = self._nomenclature_match_integrity_blockers(project, row)
+        task_ids = tuple(row.payload.get("approval_task_ids", []))
+        tasks = list(
+            self.session.scalars(
+                select(ApprovalTaskRow).where(
+                    ApprovalTaskRow.project_id == project_id,
+                    ApprovalTaskRow.id.in_(task_ids),
+                )
+            )
+        )
+        task_statuses = {task.id: task.status for task in tasks}
+        if ApprovalState(project.state) not in {
+            ApprovalState.PRICING_IN_PROGRESS,
+            ApprovalState.RFQ_REQUIRED,
+        }:
+            blockers.append("PROJECT_STATE_NOT_ALLOWED")
+        if not row.is_current:
+            blockers.append("MATCH_SUPERSEDED")
+        if row.status != VerificationStatus.IN_REVIEW.value:
+            blockers.append("MATCH_NOT_IN_REVIEW")
+        if not task_ids:
+            blockers.append("APPROVAL_TASKS_MISSING")
+        elif set(task_statuses) != set(task_ids):
+            blockers.append("APPROVAL_TASKS_INCOMPLETE")
+        elif any(status != "APPROVED" for status in task_statuses.values()):
+            blockers.append("APPROVALS_NOT_COMPLETE")
+        approval_count = len(
+            list(
+                self.session.scalars(
+                    select(ApprovalRecordRow).where(
+                        ApprovalRecordRow.task_id.in_(task_ids),
+                        ApprovalRecordRow.decision == "APPROVED",
+                    )
+                )
+            )
+        )
+        if task_ids and approval_count != len(task_ids):
+            blockers.append("APPROVAL_RECORDS_INCOMPLETE")
+        source_observation_id = row.payload.get("source_attributes_observation_id")
+        if not isinstance(source_observation_id, str) or not source_observation_id:
+            raise RuntimeError("Nomenclature match source observation identity is missing")
+        source_observation = self._validated_observation(
+            self._verified_observation(project_id, source_observation_id)
+        )
+        proposal_reason = row.payload.get("proposal_reason")
+        equivalence_rule_version_id = row.payload.get("equivalence_rule_version_id")
+        return NomenclatureReviewContextView(
+            match=self._match_view(row),
+            source_attributes_observation_id=source_observation_id,
+            source_observation=source_observation,
+            proposal_reason=(proposal_reason if isinstance(proposal_reason, str) else None),
+            equivalence_rule_version_id=(
+                equivalence_rule_version_id
+                if isinstance(equivalence_rule_version_id, str)
+                else None
+            ),
+            approval_task_statuses=task_statuses,
+            finalization_allowed=not blockers,
+            finalization_blockers=tuple(dict.fromkeys(blockers)),
+        )
+
     def assess_nomenclature(
         self,
         *,
@@ -232,18 +446,32 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NomenclatureMatchView:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("Nomenclature assessment reason must contain 1 to 2000 characters")
         project = self._require_pricing_state(
             actor,
             project_id,
             required_roles=(ActorRole.PROCUREMENT, ActorRole.TECHNICAL_EXPERT),
         )
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project.id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        self._require_current_boq_item(project.id, draft.source_item_id)
         catalog = self._bound_version(project.id, "catalog", "catalog")
         item = self._catalog_item(catalog, draft.canonical_item_id)
         observation = self._verified_observation(
             project.id,
             draft.source_attributes_observation_id,
         )
-        source_attributes = observation.payload.get("observation", {}).get("value")
+        require_observation_in_document_set(
+            document_revision_ids=document_set.revision_ids,
+            document_revision_id=observation.document_revision_id,
+        )
+        source_attributes = self._validated_observation(observation).value
         if not isinstance(source_attributes, dict) or not all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in source_attributes.items()
@@ -307,7 +535,7 @@ class PricingService:
                 "assessed_by": actor.actor_id,
                 "assessment_method": "DETERMINISTIC_CRITICAL_ATTRIBUTE_COMPARISON",
                 "critical_price": bool(item.get("critical_price")),
-                "document_set_revision_id": project.current_document_set_revision_id,
+                "document_set_revision_id": document_set.id,
             },
             created_at=now,
             updated_at=now,
@@ -342,6 +570,9 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NomenclatureMatchView:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("Nomenclature analogue reason must contain 1 to 2000 characters")
         project = self._require_pricing_state(
             actor,
             project_id,
@@ -443,6 +674,9 @@ class PricingService:
         request_id: str,
         reason: str,
     ) -> NomenclatureMatchView:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("Nomenclature finalization reason must contain 1 to 2000 characters")
         project = self._require_pricing_state(
             actor,
             project_id,
@@ -1814,6 +2048,10 @@ class PricingService:
             MatchClass.INSUFFICIENT_DATA.value,
         }:
             raise ValueError("Item lacks a verified technically acceptable nomenclature match")
+        project = self.session.get(ProjectRow, project_id)
+        if project is None:
+            raise LookupError(project_id)
+        self._require_nomenclature_match_integrity(project, row)
         return row
 
     def _current_match(
@@ -1832,6 +2070,10 @@ class PricingService:
         )
         if row is None:
             raise LookupError(match_id)
+        project = self.session.get(ProjectRow, project_id)
+        if project is None:
+            raise LookupError(project_id)
+        self._require_nomenclature_match_integrity(project, row)
         return row
 
     def _verified_observation(
@@ -1848,7 +2090,153 @@ class PricingService:
         )
         if row is None:
             raise ValueError("A verified project-scoped observation is required")
+        self._validated_observation(row)
         return row
+
+    @staticmethod
+    def _validated_observation(row: ObservationRow) -> Observation:
+        observation = Observation.model_validate(row.payload.get("observation"))
+        if (
+            row.id != observation.observation_id
+            or row.document_revision_id != observation.location.document_revision_id
+            or row.field_name != observation.field_name
+            or row.method != observation.method.value
+            or row.method_version != observation.method_version
+            or row.status != observation.status.value
+            or observation.status is not VerificationStatus.VERIFIED
+        ):
+            raise RuntimeError("Verified nomenclature evidence identity does not reproduce")
+        return observation
+
+    def _require_current_boq_item(self, project_id: str, item_id: str) -> None:
+        lines = list(
+            self.session.scalars(
+                select(BoqLineRow).where(
+                    BoqLineRow.project_id == project_id,
+                    BoqLineRow.status == VerificationStatus.VERIFIED.value,
+                    BoqLineRow.is_current.is_(True),
+                )
+            )
+        )
+        occurrences = 0
+        for line in lines:
+            components = line.payload.get("cost_components")
+            if not isinstance(components, list):
+                raise RuntimeError("Verified BoQ line cost-component plan is invalid")
+            occurrences += sum(
+                1
+                for component in components
+                if isinstance(component, dict) and component.get("semantic_key") == item_id
+            )
+        if occurrences != 1:
+            raise ValueError(
+                "Nomenclature source item must identify exactly one current verified "
+                "BoQ cost component"
+            )
+
+    def _nomenclature_match_integrity_blockers(
+        self,
+        project: ProjectRow,
+        row: NomenclatureMatchRow,
+    ) -> list[str]:
+        blockers: list[str] = []
+        try:
+            match = NomenclatureMatch.model_validate(row.payload.get("match"))
+        except (TypeError, ValueError):
+            return ["MATCH_PAYLOAD_INVALID"]
+        if (
+            row.id != match.match_id
+            or row.source_item_id != match.source_item_id
+            or row.canonical_item_id != match.canonical_item_id
+            or row.match_class != match.match_class.value
+        ):
+            blockers.append("MATCH_IDENTITY_FAILED")
+        try:
+            self._require_current_boq_item(project.id, row.source_item_id)
+        except (LookupError, RuntimeError, ValueError):
+            blockers.append("BOQ_ITEM_NOT_CURRENT")
+        try:
+            catalog = self._bound_version(project.id, "catalog", "catalog")
+        except (LookupError, RuntimeError, ValueError):
+            catalog = None
+            blockers.append("CATALOG_INTEGRITY_FAILED")
+        if catalog is not None:
+            if row.catalog_version_id != catalog.id:
+                blockers.append("CATALOG_VERSION_MISMATCH")
+            elif not isinstance(row.canonical_item_id, str) or not row.canonical_item_id:
+                blockers.append("CATALOG_ITEM_INVALID")
+            else:
+                try:
+                    item = self._catalog_item(catalog, row.canonical_item_id)
+                except (LookupError, RuntimeError, ValueError):
+                    blockers.append("CATALOG_ITEM_INVALID")
+                else:
+                    if match.canonical_attributes != item[
+                        "attributes"
+                    ] or match.required_critical_attributes != frozenset(
+                        item["critical_attributes"]
+                    ):
+                        blockers.append("CATALOG_ATTRIBUTES_MISMATCH")
+        try:
+            document_set = require_confirmed_document_set_integrity(
+                session=self.session,
+                settings=self.settings,
+                project_id=project.id,
+                document_set_revision_id=project.current_document_set_revision_id,
+            )
+        except (LookupError, RuntimeError, TypeError, ValueError):
+            document_set = None
+            blockers.append("DOCUMENT_SET_INTEGRITY_FAILED")
+        if document_set is None or row.payload.get("document_set_revision_id") != document_set.id:
+            blockers.append("DOCUMENT_SET_MISMATCH")
+        source_observation_id = row.payload.get("source_attributes_observation_id")
+        if not isinstance(source_observation_id, str) or not source_observation_id:
+            blockers.append("SOURCE_OBSERVATION_MISSING")
+        else:
+            try:
+                observation = self._validated_observation(
+                    self._verified_observation(project.id, source_observation_id)
+                )
+            except (LookupError, RuntimeError, TypeError, ValueError):
+                blockers.append("SOURCE_OBSERVATION_INVALID")
+            else:
+                if (
+                    document_set is None
+                    or observation.location.document_revision_id not in document_set.revision_ids
+                ):
+                    blockers.append("SOURCE_DOCUMENT_SET_INVALID")
+                if (
+                    not isinstance(observation.value, dict)
+                    or not all(
+                        isinstance(key, str) and isinstance(value, str)
+                        for key, value in observation.value.items()
+                    )
+                    or match.source_attributes != observation.value
+                ):
+                    blockers.append("SOURCE_ATTRIBUTES_MISMATCH")
+        equivalence_version_id = row.payload.get("equivalence_rule_version_id")
+        if equivalence_version_id is not None:
+            try:
+                equivalence = self._bound_version(
+                    project.id,
+                    "nomenclature_equivalence_rules",
+                    "nomenclature_equivalence_rules",
+                )
+            except (LookupError, RuntimeError, ValueError):
+                blockers.append("EQUIVALENCE_RULE_INTEGRITY_FAILED")
+            else:
+                if equivalence.id != equivalence_version_id:
+                    blockers.append("EQUIVALENCE_RULE_VERSION_MISMATCH")
+        return list(dict.fromkeys(blockers))
+
+    def _require_nomenclature_match_integrity(
+        self,
+        project: ProjectRow,
+        row: NomenclatureMatchRow,
+    ) -> None:
+        blockers = self._nomenclature_match_integrity_blockers(project, row)
+        if blockers:
+            raise ValueError("Nomenclature match integrity failed: " + ", ".join(blockers))
 
     def _bound_version(
         self,
@@ -1856,33 +2244,92 @@ class PricingService:
         purpose: str,
         kind: str,
     ) -> ControlledVersionRow:
-        row = self.session.scalar(
-            select(ControlledVersionRow)
-            .join(
-                ProjectControlledVersionRow,
-                ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
-            )
-            .where(
-                ProjectControlledVersionRow.project_id == project_id,
-                ProjectControlledVersionRow.purpose == purpose,
-                ControlledVersionRow.kind == kind,
-                ControlledVersionRow.status == VersionStatus.APPROVED.value,
-            )
+        project = self.session.get(ProjectRow, project_id)
+        if project is None:
+            raise LookupError(project_id)
+        return require_bound_controlled_version(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            organization_id=project.organization_id,
+            purpose=purpose,
+            kind=kind,
         )
-        if row is None:
-            raise ValueError(f"A bound approved {kind} version is required")
-        return row
 
     @staticmethod
+    def _validated_catalog_items(
+        catalog: ControlledVersionRow,
+    ) -> tuple[CatalogItemView, ...]:
+        raw_items = catalog.payload.get("items")
+        if not isinstance(raw_items, dict) or not raw_items:
+            raise ValueError("Approved catalog contains no canonical items")
+        items: list[CatalogItemView] = []
+        for canonical_item_id, raw_item in raw_items.items():
+            if (
+                not isinstance(canonical_item_id, str)
+                or not canonical_item_id
+                or canonical_item_id != canonical_item_id.strip()
+                or len(canonical_item_id) > 128
+                or not isinstance(raw_item, dict)
+            ):
+                raise ValueError("Approved catalog item identity is invalid")
+            attributes = raw_item.get("attributes")
+            critical_attributes = raw_item.get("critical_attributes")
+            critical_price = raw_item.get("critical_price")
+            if (
+                not isinstance(attributes, dict)
+                or not attributes
+                or not all(
+                    isinstance(key, str)
+                    and key
+                    and key == key.strip()
+                    and len(key) <= 200
+                    and isinstance(value, str)
+                    and value
+                    and value == value.strip()
+                    and len(value) <= 1000
+                    for key, value in attributes.items()
+                )
+                or not isinstance(critical_attributes, list)
+                or not critical_attributes
+                or not all(
+                    isinstance(attribute, str) and attribute in attributes
+                    for attribute in critical_attributes
+                )
+                or len(critical_attributes) != len(set(critical_attributes))
+                or not isinstance(critical_price, bool)
+            ):
+                raise ValueError("Approved catalog item attributes or criticality are invalid")
+            items.append(
+                CatalogItemView(
+                    canonical_item_id=canonical_item_id,
+                    attributes={str(key): str(value) for key, value in attributes.items()},
+                    critical_attributes=tuple(critical_attributes),
+                    critical_price=critical_price,
+                )
+            )
+        return tuple(sorted(items, key=lambda item: item.canonical_item_id))
+
     def _catalog_item(
+        self,
         catalog: ControlledVersionRow,
         canonical_item_id: str,
     ) -> dict[str, Any]:
-        items = catalog.payload.get("items")
-        item = items.get(canonical_item_id) if isinstance(items, dict) else None
-        if not isinstance(item, dict):
+        item = next(
+            (
+                item
+                for item in self._validated_catalog_items(catalog)
+                if item.canonical_item_id == canonical_item_id
+            ),
+            None,
+        )
+        if item is None:
             raise ValueError("Canonical item is absent from the approved catalog")
-        return item
+        return {
+            "attributes": item.attributes,
+            "critical_attributes": list(item.critical_attributes),
+            "critical_price": item.critical_price,
+        }
 
     @staticmethod
     def _policy_reference(

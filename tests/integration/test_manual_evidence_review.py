@@ -42,11 +42,12 @@ from tenderguard.infrastructure.orm import (
     DocumentRow,
     DocumentSetRevisionRow,
     ObservationRow,
-    ProjectControlledVersionRow,
     ProjectRow,
 )
 from tests.integration.support import (
+    add_document_set_confirmation_audit,
     add_governed_controlled_version,
+    add_project_controlled_version_binding,
     project_memberships,
 )
 
@@ -228,6 +229,21 @@ def test_manual_evidence_review_fails_closed_after_document_set_drift(
         )
         project = session.get(ProjectRow, "project-manual-evidence")
         assert project is not None
+        previous_set = session.get(DocumentSetRevisionRow, "document-set-v1")
+        replacement_set = session.get(DocumentSetRevisionRow, "document-set-v2")
+        assert previous_set is not None
+        assert replacement_set is not None
+        previous_set.status = "SUPERSEDED"
+        replacement_set.status = "CONFIRMED"
+        replacement_set.confirmed_by = reviewer.actor_id
+        replacement_set.confirmed_at = datetime.now(UTC)
+        add_document_set_confirmation_audit(
+            session=session,
+            settings=settings,
+            object_store=store,
+            row=replacement_set,
+            actor=reviewer,
+        )
         project.current_document_set_revision_id = "document-set-v2"
         project.row_version += 1
 
@@ -430,6 +446,19 @@ def _setup(
                 now=now,
             )
         )
+        document_set_v1 = _document_set(
+            set_id="document-set-v1",
+            revision_ids=["revision-v1"],
+            now=now,
+        )
+        document_set_v2 = _document_set(
+            set_id="document-set-v2",
+            revision_ids=["revision-v2"],
+            now=now,
+        )
+        document_set_v2.status = "DRAFT"
+        document_set_v2.confirmed_by = None
+        document_set_v2.confirmed_at = None
         session.add_all(
             (
                 DocumentRow(
@@ -473,17 +502,16 @@ def _setup(
                     object_hash=object_hash_v2,
                     now=now,
                 ),
-                _document_set(
-                    set_id="document-set-v1",
-                    revision_ids=["revision-v1"],
-                    now=now,
-                ),
-                _document_set(
-                    set_id="document-set-v2",
-                    revision_ids=["revision-v2"],
-                    now=now,
-                ),
+                document_set_v1,
+                document_set_v2,
             )
+        )
+        add_document_set_confirmation_audit(
+            session=session,
+            settings=settings,
+            object_store=store,
+            row=document_set_v1,
+            actor=reviewer,
         )
         policy = ControlledVersionRow(
             id="manual-evidence-policy-v1",
@@ -510,14 +538,14 @@ def _setup(
             creator=creator,
             approver=approver,
         )
-        session.add(
-            ProjectControlledVersionRow(
-                project_id="project-manual-evidence",
-                controlled_version_id=policy.id,
-                purpose="manual_evidence_policy",
-                bound_by=creator.actor_id,
-                bound_at=now,
-            )
+        add_project_controlled_version_binding(
+            session=session,
+            settings=settings,
+            object_store=store,
+            project_id="project-manual-evidence",
+            version=policy,
+            purpose="manual_evidence_policy",
+            actor=creator,
         )
 
     return settings, factory, store, actors, engine

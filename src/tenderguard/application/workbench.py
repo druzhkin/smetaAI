@@ -1080,8 +1080,8 @@ class ProjectReadService:
                 attributes={
                     "line_key": row.line_key,
                     "planned_components": row.payload.get(
-                        "expected_cost_components",
-                        [],
+                        "cost_components",
+                        row.payload.get("expected_cost_components", []),
                     ),
                     "quantity_status": (
                         quantity_by_line[row.id].status if row.id in quantity_by_line else "MISSING"

@@ -222,10 +222,21 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
                         supersedes_line_id=None,
                         is_current=True,
                         payload={
-                            "expected_cost_components": [
-                                "LABOUR",
-                                "MATERIAL",
-                                "LOGISTICS",
+                            "cost_components": [
+                                {
+                                    "semantic_key": "installation-labour",
+                                    "category": "LABOUR",
+                                    "basis_kind": "NORMATIVE",
+                                    "sign": 1,
+                                    "factor_ids": [],
+                                },
+                                {
+                                    "semantic_key": "pipe-material",
+                                    "category": "MATERIAL",
+                                    "basis_kind": "MARKET",
+                                    "sign": 1,
+                                    "factor_ids": [],
+                                },
                             ]
                         },
                         created_at=now,
@@ -624,8 +635,27 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
                 params={"section": section},
             )
             assert response.status_code == 200, response.text
-            actual_kinds = {item["kind"] for item in response.json()["items"]}
+            items = response.json()["items"]
+            actual_kinds = {item["kind"] for item in items}
             assert expected_kinds <= actual_kinds
+            if section == "BOQ_SCOPE":
+                line_record = next(item for item in items if item["kind"] == "BOQ_LINE")
+                assert line_record["attributes"]["planned_components"] == [
+                    {
+                        "semantic_key": "installation-labour",
+                        "category": "LABOUR",
+                        "basis_kind": "NORMATIVE",
+                        "sign": 1,
+                        "factor_ids": [],
+                    },
+                    {
+                        "semantic_key": "pipe-material",
+                        "category": "MATERIAL",
+                        "basis_kind": "MARKET",
+                        "sign": 1,
+                        "factor_ids": [],
+                    },
+                ]
 
         audit_records = client.get(
             f"/v1/projects/{primary_id}/records",

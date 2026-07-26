@@ -29,8 +29,10 @@ PostgreSQL rejects:
 
 ## Read-time verification
 
-Binding, adapter activation, operational profile loading, calculation and
-release reproduce the row instead of trusting its status. Verification checks:
+Binding, adapter activation, operational profile loading, reconciliation,
+BoQ/quantity policy use, scope evaluation, nomenclature/catalog/analogue
+decisions, pricing, calculation and release reproduce the row instead of
+trusting its status. Verification checks:
 
 1. the full content hash;
 2. organisation ownership;
@@ -38,7 +40,10 @@ release reproduce the row instead of trusting its status. Verification checks:
 4. creation and approval actor roles;
 5. four-eyes separation;
 6. lifecycle timestamps;
-7. the complete signed two-event audit chain and exact event payloads.
+7. the complete signed two-event version audit chain and exact event payloads;
+8. for project-bound use, the valid complete project audit chain and the
+   latest exact `controlled_version_bound` event for that purpose, including
+   version, kind, hash, owner role, actor and binding time.
 
 Calculation rejects any invalid or ambiguous bound version kind. Release
 reports every invalid bound version through

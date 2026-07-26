@@ -2,22 +2,34 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyQuantityManualChange,
+  assessNomenclature,
   attemptRelease,
   confirmDocumentSet,
+  createBoqLine,
   createProject,
   decideManualEvidence,
   decideWorkItem,
   evaluatePriceItem,
   executeCurrentCalculation,
+  finalizeNomenclatureAnalogue,
+  getBoqAuthoringContext,
+  getBoqLineReview,
   getCalculationContext,
-  getReleaseGates,
+  getNomenclatureContext,
+  getNomenclatureReview,
   getPriceQuoteCandidate,
+  getReconciliationContext,
+  getReleaseGates,
   normalizePriceQuote,
+  proposeNomenclatureAnalogue,
   proposeQuantityChange,
+  reconcileEvidence,
   recordManualEvidence,
   recordPriceQuoteFromObservation,
   resolveConflict,
+  runScopeCompleteness,
   uploadDocument,
+  verifyBoqLine,
   type RequestContext,
 } from "./api";
 
@@ -339,6 +351,181 @@ describe("controlled mutations", () => {
       decision: "APPROVED",
       reason: "Independently checked the source page and exact locator",
       expected_task_updated_at: "2026-07-24T18:00:01Z",
+    });
+  });
+
+  it("binds reconciliation and BoQ mutations to governed server context", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ status: "OK" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getReconciliationContext(context, "project/1", "pipeline/diameter");
+    await reconcileEvidence(context, {
+      projectId: "project/1",
+      observationIds: ["observation/1", "observation/2"],
+      reconciliationVersionId: "reconciliation/r3",
+      reason: "Independent extraction methods reconciled",
+      idempotencyKey: "reconciliation-operation",
+    });
+    await getBoqAuthoringContext(context, "project/1", "boq/line");
+    await createBoqLine(context, {
+      projectId: "project/1",
+      lineKey: "WBS-01-L001",
+      wbsNodeId: "WBS-01",
+      workCode: "PIPE-LAYING",
+      description: "Pipeline installation",
+      unit: "m",
+      evidenceObservationIds: ["observation/boq"],
+      costComponents: [
+        {
+          semantic_key: "material/pipe",
+          category: "MATERIAL",
+          basis_kind: "MARKET",
+          factor_ids: ["waste/factor"],
+          sign: 1,
+        },
+      ],
+      criticalQuantity: true,
+      reason: "Created from verified BoQ extraction",
+      idempotencyKey: "boq-create-operation",
+    });
+    await getBoqLineReview(context, "project/1", "line/1");
+    await verifyBoqLine(context, {
+      projectId: "project/1",
+      lineId: "line/1",
+      expectedLineUpdatedAt: "2026-07-24T18:30:00Z",
+      reason: "Independent WBS and evidence review completed",
+      idempotencyKey: "boq-verify-operation",
+    });
+    await runScopeCompleteness(context, {
+      projectId: "project/1",
+      wbsNodeId: "WBS-01",
+      reason: "Run approved scope dependency rules",
+      idempotencyKey: "scope-operation",
+    });
+
+    const calls = fetchMock.mock.calls as [URL, RequestInit][];
+    expect(calls[0]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/evidence/reconciliation-context",
+    );
+    expect(calls[0]?.[0].searchParams.get("field_name")).toBe(
+      "pipeline/diameter",
+    );
+    expect(calls[1]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/evidence/reconcile",
+    );
+    expect(JSON.parse(String(calls[1]?.[1].body))).toEqual({
+      observation_ids: ["observation/1", "observation/2"],
+      reconciliation_version_id: "reconciliation/r3",
+      reason: "Independent extraction methods reconciled",
+    });
+    expect(calls[2]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/boq/authoring-context",
+    );
+    expect(calls[3]?.[0].pathname).toBe("/v1/projects/project%2F1/boq/lines");
+    expect(JSON.parse(String(calls[3]?.[1].body))).toEqual({
+      draft: {
+        line_key: "WBS-01-L001",
+        wbs_node_id: "WBS-01",
+        work_code: "PIPE-LAYING",
+        description: "Pipeline installation",
+        unit: "m",
+        evidence_observation_ids: ["observation/boq"],
+        cost_components: [
+          {
+            semantic_key: "material/pipe",
+            category: "MATERIAL",
+            basis_kind: "MARKET",
+            factor_ids: ["waste/factor"],
+            sign: 1,
+          },
+        ],
+        critical_quantity: true,
+      },
+      reason: "Created from verified BoQ extraction",
+    });
+    expect(calls[4]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/boq/lines/line%2F1/review",
+    );
+    expect(JSON.parse(String(calls[5]?.[1].body))).toEqual({
+      expected_line_updated_at: "2026-07-24T18:30:00Z",
+      reason: "Independent WBS and evidence review completed",
+    });
+    expect(calls[5]?.[1].headers).toMatchObject({
+      "Idempotency-Key": "boq-verify-operation",
+    });
+    expect(calls[6]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/boq/scope-evaluations",
+    );
+  });
+
+  it("never sends client-calculated nomenclature conclusions", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ status: "OK" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getNomenclatureContext(context, "project/1", {
+      catalogQuery: "pump/500",
+      evidenceFieldName: "technical/attributes",
+    });
+    await assessNomenclature(context, {
+      projectId: "project/1",
+      sourceItemId: "material/pipe",
+      canonicalItemId: "catalog/pipe-500",
+      sourceAttributesObservationId: "observation/attributes",
+      reason: "Assess exact governed attributes",
+      idempotencyKey: "nomenclature-assess-operation",
+    });
+    await getNomenclatureReview(context, "project/1", "match/1");
+    await proposeNomenclatureAnalogue(context, {
+      projectId: "project/1",
+      matchId: "match/1",
+      analogueClass: "FUNCTIONAL_ANALOGUE",
+      reason: "All mismatches covered by equivalence rules",
+      idempotencyKey: "nomenclature-propose-operation",
+    });
+    await finalizeNomenclatureAnalogue(context, {
+      projectId: "project/1",
+      matchId: "match/2",
+      reason: "All independent approval tasks are complete",
+      idempotencyKey: "nomenclature-finalize-operation",
+    });
+
+    const calls = fetchMock.mock.calls as [URL, RequestInit][];
+    expect(calls[0]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/nomenclature/context",
+    );
+    expect(calls[0]?.[0].searchParams.get("catalog_query")).toBe("pump/500");
+    expect(JSON.parse(String(calls[1]?.[1].body))).toEqual({
+      draft: {
+        source_item_id: "material/pipe",
+        canonical_item_id: "catalog/pipe-500",
+        source_attributes_observation_id: "observation/attributes",
+      },
+      reason: "Assess exact governed attributes",
+    });
+    expect(String(calls[1]?.[1].body)).not.toContain("match_class");
+    expect(calls[2]?.[0].pathname).toBe(
+      "/v1/projects/project%2F1/nomenclature/match%2F1/review",
+    );
+    expect(JSON.parse(String(calls[3]?.[1].body))).toEqual({
+      command: { analogue_class: "FUNCTIONAL_ANALOGUE" },
+      reason: "All mismatches covered by equivalence rules",
+    });
+    expect(JSON.parse(String(calls[4]?.[1].body))).toEqual({
+      reason: "All independent approval tasks are complete",
     });
   });
 

@@ -19,6 +19,8 @@ from tenderguard.infrastructure.object_store import ObjectStore
 from tenderguard.infrastructure.orm import (
     ApprovalTaskRow,
     ControlledVersionRow,
+    DocumentSetRevisionRow,
+    ProjectControlledVersionRow,
     ProjectMembershipRow,
 )
 
@@ -128,4 +130,75 @@ def add_governed_controlled_version(
         request_id=f"fixture-approve-{row.id}",
         reason="Independently approve governed integration-test fixture",
         payload={"content_hash": row.content_hash, "kind": row.kind},
+    )
+
+
+def add_project_controlled_version_binding(
+    *,
+    session: Session,
+    settings: Settings,
+    object_store: ObjectStore,
+    project_id: str,
+    version: ControlledVersionRow,
+    purpose: str,
+    actor: Actor,
+) -> ProjectControlledVersionRow:
+    bound_at = utc_now()
+    binding = ProjectControlledVersionRow(
+        project_id=project_id,
+        controlled_version_id=version.id,
+        purpose=purpose,
+        bound_by=actor.actor_id,
+        bound_at=bound_at,
+    )
+    session.add(binding)
+    session.flush()
+    ProjectService(
+        session=session,
+        settings=settings,
+        object_store=object_store,
+    ).record_event(
+        aggregate_type="project",
+        aggregate_id=project_id,
+        event_type="controlled_version_bound",
+        actor=actor,
+        request_id=f"fixture-bind-{project_id}-{purpose}",
+        reason="Bind governed integration-test fixture to the project",
+        payload={
+            "version_id": version.id,
+            "kind": version.kind,
+            "purpose": purpose,
+            "content_hash": version.content_hash,
+        },
+    )
+    return binding
+
+
+def add_document_set_confirmation_audit(
+    *,
+    session: Session,
+    settings: Settings,
+    object_store: ObjectStore,
+    row: DocumentSetRevisionRow,
+    actor: Actor,
+) -> None:
+    assert row.confirmed_by == actor.actor_id
+    assert row.confirmed_at is not None
+    session.flush()
+    ProjectService(
+        session=session,
+        settings=settings,
+        object_store=object_store,
+    ).record_event(
+        aggregate_type="project",
+        aggregate_id=row.project_id,
+        event_type="document_set_confirmed",
+        actor=actor,
+        request_id=f"fixture-confirm-{row.id}",
+        reason="Independently confirm integration-test document set",
+        payload={
+            "document_set_revision_id": row.id,
+            "manifest_hash": row.manifest_hash,
+            "revision_ids": row.revision_ids,
+        },
     )

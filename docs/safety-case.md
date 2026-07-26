@@ -19,10 +19,10 @@ all operational qualification evidence remain open.
 |---|---|---|
 | Input integrity | archive manifest, hashes, file health, revision graph | block or `DOCUMENTS_INCOMPLETE` |
 | Untrusted file boundary | separate quarantine, qualified exact-hash malware result, leased bounded-retry outbox, worker-only bounded parsing | no evidence promotion; retry or dead-letter with unresolved blocker; `BLOCKED`/`DOCUMENTS_INCOMPLETE` |
-| Extraction | independent observations and reconciliation; policy/document-bound manual correction with dedicated four-eyes review | conflict or unverified source; no auto-merge and no direct manual `VERIFIED` |
-| Scope | WBS/rule/dependency companion-work checks | scope issue; expert review |
+| Extraction | independent observations and reconciliation with reproduced qualification/domain/rule/document-set integrity; policy/document-bound manual correction with dedicated four-eyes review | conflict or unverified source; no auto-merge, old-set reuse, or direct manual `VERIFIED` |
+| Scope | current-set four-eyes BoQ, WBS/rule/dependency companion-work checks and immutable input signature | stale line rejection, scope issue, or expert review |
 | Quantity | source/formula/unit/geometry/alternatives and checks | unverified quantity hard stop |
-| Nomenclature | explicit critical attributes and match class | reject or expert review |
+| Nomenclature | reproduced catalog audit chain, unique current BoQ component, current-set attributes, explicit critical attributes and server-derived match class | reject, insufficient-data blocker, or governed analogue expert review |
 | Normative | approved engine/basis/version/applicability | normative calculation unavailable |
 | Price | qualified source classes, normalized commercial basis, policy-explicit decimal rounding, deterministic replay, triangulation and spread review | `RFQ_REQUIRED` or expert review |
 | Logistics/finance | typed capacity/cash-flow models, exact observation-value binding, controlled completeness and dual recalculation | blocked model; no derived cost basis |

@@ -32,6 +32,27 @@ const ManualEvidenceReviewPage = lazy(async () => ({
   default: (await import("./pages/ManualEvidenceReviewPage"))
     .ManualEvidenceReviewPage,
 }));
+const ReconciliationPage = lazy(async () => ({
+  default: (await import("./pages/ReconciliationPage")).ReconciliationPage,
+}));
+const BoqAuthoringPage = lazy(async () => ({
+  default: (await import("./pages/BoqAuthoringPage")).BoqAuthoringPage,
+}));
+const BoqLineReviewPage = lazy(async () => ({
+  default: (await import("./pages/BoqLineReviewPage")).BoqLineReviewPage,
+}));
+const ScopeCompletenessPage = lazy(async () => ({
+  default: (await import("./pages/ScopeCompletenessPage"))
+    .ScopeCompletenessPage,
+}));
+const NomenclatureAssessmentPage = lazy(async () => ({
+  default: (await import("./pages/NomenclatureAssessmentPage"))
+    .NomenclatureAssessmentPage,
+}));
+const NomenclatureReviewPage = lazy(async () => ({
+  default: (await import("./pages/NomenclatureReviewPage"))
+    .NomenclatureReviewPage,
+}));
 
 const recordSections = new Set<ProjectRecordSection>([
   "DOCUMENTS",
@@ -113,6 +134,84 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
       }
       const rawSection = parts[2];
       if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "evidence" &&
+        parts[3] === "reconcile"
+      ) {
+        page = <ReconciliationPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "boq" &&
+        parts[3] === "new"
+      ) {
+        page = <BoqAuthoringPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "boq" &&
+        parts[3] === "scope-review"
+      ) {
+        page = <ScopeCompletenessPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 5 &&
+        rawSection === "boq-lines" &&
+        parts[4] === "review"
+      ) {
+        let lineId: string | null = null;
+        try {
+          lineId = decodeURIComponent(parts[3] ?? "");
+        } catch {
+          lineId = null;
+        }
+        if (lineId !== null && lineId !== "") {
+          page = (
+            <BoqLineReviewPage
+              config={config}
+              projectId={projectId}
+              lineId={lineId}
+            />
+          );
+        }
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "nomenclature" &&
+        parts[3] === "new"
+      ) {
+        page = (
+          <NomenclatureAssessmentPage config={config} projectId={projectId} />
+        );
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 5 &&
+        rawSection === "nomenclature" &&
+        parts[4] === "review"
+      ) {
+        let matchId: string | null = null;
+        try {
+          matchId = decodeURIComponent(parts[3] ?? "");
+        } catch {
+          matchId = null;
+        }
+        if (matchId !== null && matchId !== "") {
+          page = (
+            <NomenclatureReviewPage
+              config={config}
+              projectId={projectId}
+              matchId={matchId}
+            />
+          );
+        }
+      } else if (
         projectId !== null &&
         projectId !== "" &&
         parts.length === 5 &&

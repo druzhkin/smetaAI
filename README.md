@@ -52,7 +52,10 @@ and the [signed export package specification](docs/signed-export-package.md). Th
 [signed integration contract](docs/integration-delivery.md) defines the
 transport trust boundary. The [operator UI contract](docs/operator-ui.md)
 defines browser authentication, information barriers, deployment, and the
-current limits of the human workflow.
+current limits of the human workflow. The
+[controlled BoQ and nomenclature workflow](docs/boq-nomenclature-workflows.md)
+defines operation-time document-set, evidence, controlled-version, review, and
+analogue invariants.
 
 ## Implemented application core
 
@@ -131,6 +134,15 @@ The repository currently connects and integration-tests:
   immutable `UNVERIFIED` source plus a dedicated four-eyes task. Approval
   creates a separate lineage-linked `VERIFIED` observation; the generic
   approval API cannot bypass this workflow;
+- controlled operator workflows for qualified independent reconciliation,
+  current-document-bound BoQ authoring, stale-safe four-eyes line review,
+  scope completeness execution, deterministic catalog matching, and governed
+  analogue proposal/finalization. The browser submits source identities and
+  attestations, never a merged evidence value or nomenclature conclusion;
+  backend operations reproduce the confirmed manifest and its latest signed
+  confirmation event, plus complete controlled-version approval and project
+  binding audit chains, and reject otherwise verified evidence from an older
+  set;
 - governed BoQ quantity correction that binds immutable before/after states to
   the exact current quantity, confirmed document set, approved rules and
   policy, and project-scoped observations; critical changes require an
@@ -227,10 +239,12 @@ backup/disaster-recovery evidence, trained users, and named process owners.
 Production route/rate/treasury feeds and qualification for the implemented
 logistics/mobilisation/contract-finance models, organization-specific
 ERP/DMS/BI/export endpoint bindings and handlers, deployed integration
-schedulers/monitoring, remaining BoQ-structure,
-nomenclature/reconciliation
-surfaces, and business qualification of the operator interface remain to be
-completed.
+schedulers/monitoring, specialist maintenance surfaces, role-based UAT,
+accessibility evidence, and business qualification of the operator interface
+remain to be completed. Controlled reconciliation, current-set BoQ
+authoring/review, scope execution, deterministic nomenclature assessment, and
+analogue review are implemented; that implementation is not a substitute for
+real provider, methodology, catalog-owner, or user-acceptance evidence.
 Application actor/organisation quotas are implemented, but independently
 deployed ingress connection/body/time limits, unauthenticated-abuse controls,
 upload concurrency limits, and representative abuse/soak evidence remain

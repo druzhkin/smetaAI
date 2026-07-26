@@ -9,10 +9,18 @@ from pydantic import Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.controlled_version_integrity import (
+    require_bound_controlled_version,
+    require_controlled_version_integrity,
+)
+from tenderguard.application.document_set_integrity import (
+    require_confirmed_document_set_integrity,
+    require_observation_in_document_set,
+)
 from tenderguard.application.evidence_independence import (
     require_distinct_qualified_independence,
 )
-from tenderguard.application.projects import ProjectService
+from tenderguard.application.projects import OptimisticLockError, ProjectService
 from tenderguard.application.stage_gates import scope_input_signature
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash, ensure_utc, utc_now
@@ -24,10 +32,10 @@ from tenderguard.domain.enums import (
     FindingCode,
     Severity,
     VerificationStatus,
-    VersionStatus,
 )
 from tenderguard.domain.models import (
     DomainModel,
+    Observation,
     QuantityRecord,
     ValidationFinding,
 )
@@ -49,6 +57,7 @@ from tenderguard.infrastructure.orm import (
     ObservationRow,
     ProjectControlledVersionRow,
     ProjectPassportFactRow,
+    ProjectRow,
     QuantityManualChangeApplicationRow,
     QuantityRow,
     ScopeEvaluationRow,
@@ -58,7 +67,7 @@ from tenderguard.infrastructure.orm import (
 
 
 class CostComponentDraft(DomainModel):
-    semantic_key: str = Field(min_length=1, max_length=200)
+    semantic_key: str = Field(min_length=1, max_length=128)
     category: CostCategory
     basis_kind: CostBasisKind
     sign: Literal[-1, 1] = 1
@@ -66,6 +75,8 @@ class CostComponentDraft(DomainModel):
 
     @model_validator(mode="after")
     def controlled_factor_ids_are_valid(self) -> CostComponentDraft:
+        if self.semantic_key != self.semantic_key.strip():
+            raise ValueError("Cost component semantic key must be normalized")
         if len(self.factor_ids) != len(set(self.factor_ids)):
             raise ValueError("Cost component factor IDs must be unique")
         if any(
@@ -78,10 +89,10 @@ class CostComponentDraft(DomainModel):
 
 class BoqLineDraft(DomainModel):
     line_key: str = Field(min_length=1, max_length=128)
-    wbs_node_id: str
-    work_code: str
-    description: str
-    unit: str
+    wbs_node_id: str = Field(min_length=1, max_length=128)
+    work_code: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=2000)
+    unit: str = Field(min_length=1, max_length=100)
     evidence_observation_ids: tuple[str, ...] = Field(min_length=1)
     cost_components: tuple[CostComponentDraft, ...] = Field(min_length=1)
     critical_quantity: bool = False
@@ -91,6 +102,17 @@ class BoqLineDraft(DomainModel):
         keys = [item.semantic_key for item in self.cost_components]
         if len(keys) != len(set(keys)):
             raise ValueError("BoQ line cost component semantic keys must be unique")
+        if len(self.evidence_observation_ids) != len(set(self.evidence_observation_ids)):
+            raise ValueError("BoQ line evidence observation IDs must be unique")
+        bounded_values = (
+            self.line_key,
+            self.wbs_node_id,
+            self.work_code,
+            self.description,
+            self.unit,
+        )
+        if any(value != value.strip() for value in bounded_values):
+            raise ValueError("BoQ line text fields must be normalized")
         return self
 
 
@@ -106,6 +128,31 @@ class BoqLineView(DomainModel):
     cost_components: tuple[CostComponentDraft, ...]
     supersedes_line_id: str | None
     is_current: bool
+    updated_at: datetime
+
+
+class BoqEvidenceCandidateView(DomainModel):
+    observation: Observation
+    work_code: str
+    unit: str
+
+
+class BoqAuthoringContextView(DomainModel):
+    project_id: str
+    project_state: ApprovalState
+    document_set_revision_id: str
+    evidence_field_name: str
+    evidence_candidates: tuple[BoqEvidenceCandidateView, ...]
+    candidates_truncated: bool
+
+
+class BoqLineReviewView(DomainModel):
+    line: BoqLineView
+    created_by: str
+    document_set_revision_id: str
+    evidence_observations: tuple[Observation, ...]
+    verification_allowed: bool
+    verification_blockers: tuple[str, ...]
 
 
 class QuantityDraft(DomainModel):
@@ -215,6 +262,147 @@ class BoqService:
         self.settings = settings
         self.object_store = object_store
 
+    def authoring_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        evidence_field_name: str,
+        limit: int,
+    ) -> BoqAuthoringContextView:
+        if limit < 1 or limit > 100:
+            raise ValueError("BoQ authoring context limit must be between 1 and 100")
+        evidence_field_name = evidence_field_name.strip()
+        if not evidence_field_name or len(evidence_field_name) > 300:
+            raise ValueError("BoQ evidence field name must contain 1 to 300 characters")
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
+        )
+        if ApprovalState(project.state) is not ApprovalState.BOQ_IN_PROGRESS:
+            raise ValueError("BoQ authoring requires BOQ_IN_PROGRESS")
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        rows = list(
+            self.session.scalars(
+                select(ObservationRow)
+                .where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                    ObservationRow.field_name == evidence_field_name,
+                    ObservationRow.status == VerificationStatus.VERIFIED.value,
+                )
+                .order_by(ObservationRow.created_at.desc(), ObservationRow.id)
+                .limit(limit + 1)
+            )
+        )
+        candidates: list[BoqEvidenceCandidateView] = []
+        for row in rows[:limit]:
+            observation = self._validated_observation(row)
+            value = observation.value
+            if (
+                isinstance(value, dict)
+                and isinstance(value.get("work_code"), str)
+                and value["work_code"]
+                and isinstance(value.get("unit"), str)
+                and value["unit"]
+            ):
+                candidates.append(
+                    BoqEvidenceCandidateView(
+                        observation=observation,
+                        work_code=value["work_code"],
+                        unit=value["unit"],
+                    )
+                )
+        return BoqAuthoringContextView(
+            project_id=project_id,
+            project_state=ApprovalState(project.state),
+            document_set_revision_id=document_set.id,
+            evidence_field_name=evidence_field_name,
+            evidence_candidates=tuple(candidates),
+            candidates_truncated=len(rows) > limit,
+        )
+
+    def line_review(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        line_id: str,
+    ) -> BoqLineReviewView:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
+        row = self.session.scalar(
+            select(BoqLineRow).where(
+                BoqLineRow.id == line_id,
+                BoqLineRow.project_id == project_id,
+            )
+        )
+        if row is None:
+            raise LookupError(line_id)
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        evidence_ids = tuple(row.payload.get("evidence_observation_ids", []))
+        observations = self._verified_observations(
+            project_id,
+            evidence_ids,
+            document_revision_ids=frozenset(document_set.revision_ids),
+        )
+        blockers: list[str] = []
+        if ApprovalState(project.state) not in {
+            ApprovalState.BOQ_IN_PROGRESS,
+            ApprovalState.BOQ_REVIEW,
+        }:
+            blockers.append("PROJECT_STATE_NOT_ALLOWED")
+        if not row.is_current:
+            blockers.append("LINE_SUPERSEDED")
+        if row.status != VerificationStatus.IN_REVIEW.value:
+            blockers.append("LINE_NOT_IN_REVIEW")
+        created_by = row.payload.get("created_by")
+        if not isinstance(created_by, str) or not created_by:
+            blockers.append("LINE_CREATOR_MISSING")
+            created_by = ""
+        elif created_by == actor.actor_id:
+            blockers.append("FOUR_EYES_LINE_AUTHOR")
+        document_set_revision_id = row.payload.get("document_set_revision_id")
+        if (
+            not isinstance(document_set_revision_id, str)
+            or not document_set_revision_id
+            or document_set_revision_id != project.current_document_set_revision_id
+        ):
+            blockers.append("DOCUMENT_SET_MISMATCH")
+            document_set_revision_id = (
+                document_set_revision_id if isinstance(document_set_revision_id, str) else ""
+            )
+        if not any(self._observation_supports_line(item, row) for item in observations.values()):
+            blockers.append("SUPPORTING_EVIDENCE_MISMATCH")
+        return BoqLineReviewView(
+            line=self._line_view(row),
+            created_by=created_by,
+            document_set_revision_id=document_set_revision_id,
+            evidence_observations=tuple(
+                self._validated_observation(observations[item_id]) for item_id in evidence_ids
+            ),
+            verification_allowed=not blockers,
+            verification_blockers=tuple(dict.fromkeys(blockers)),
+        )
+
     def create_line(
         self,
         *,
@@ -224,6 +412,9 @@ class BoqService:
         request_id: str,
         reason: str,
     ) -> BoqLineView:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("BoQ line reason must contain 1 to 2000 characters")
         project_service = self._project_service()
         project = project_service.get_project(
             actor=actor,
@@ -233,10 +424,27 @@ class BoqService:
         )
         if ApprovalState(project.state) is not ApprovalState.BOQ_IN_PROGRESS:
             raise ValueError("BoQ lines may be created only in BOQ_IN_PROGRESS")
-        self._verified_observations(project_id, draft.evidence_observation_ids)
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        observations = self._verified_observations(
+            project_id,
+            draft.evidence_observation_ids,
+            document_revision_ids=frozenset(document_set.revision_ids),
+        )
+        if not any(
+            isinstance((observation := self._validated_observation(row)).value, dict)
+            and observation.value.get("work_code") == draft.work_code
+            and observation.value.get("unit") == draft.unit
+            for row in observations.values()
+        ):
+            raise ValueError("No verified evidence reproduces the BoQ work code and unit")
         identity = {
             "project_id": project_id,
-            "document_set_revision_id": project.current_document_set_revision_id,
+            "document_set_revision_id": document_set.id,
             "draft": draft,
         }
         line_id = f"boq-line-{content_hash(identity)[:24]}"
@@ -274,7 +482,7 @@ class BoqService:
                 "critical_quantity": draft.critical_quantity,
                 "cost_components": [item.model_dump(mode="json") for item in draft.cost_components],
                 "created_by": actor.actor_id,
-                "document_set_revision_id": project.current_document_set_revision_id,
+                "document_set_revision_id": document_set.id,
             },
             created_at=now,
             updated_at=now,
@@ -301,9 +509,16 @@ class BoqService:
         actor: Actor,
         project_id: str,
         line_id: str,
+        expected_line_updated_at: datetime,
         request_id: str,
         reason: str,
     ) -> BoqLineView:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("BoQ verification reason must contain 1 to 2000 characters")
+        expected_updated_at = ensure_utc(expected_line_updated_at)
+        if expected_updated_at is None or expected_line_updated_at.tzinfo is None:
+            raise ValueError("Expected BoQ line timestamp must include a timezone")
         project_service = self._project_service()
         project = project_service.get_project(
             actor=actor,
@@ -327,15 +542,26 @@ class BoqService:
         )
         if row is None:
             raise LookupError(line_id)
+        if ensure_utc(row.updated_at) != expected_updated_at:
+            raise OptimisticLockError(
+                "BoQ line changed after it was loaded; reload before verification"
+            )
         if row.status == VerificationStatus.VERIFIED.value:
             return self._line_view(row)
         if row.payload.get("document_set_revision_id") != project.current_document_set_revision_id:
             raise ValueError("BoQ line belongs to a superseded document-set revision")
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
         if row.payload.get("created_by") == actor.actor_id:
             raise ValueError("BoQ line requires independent four-eyes verification")
         observations = self._verified_observations(
             project_id,
             tuple(row.payload.get("evidence_observation_ids", [])),
+            document_revision_ids=frozenset(document_set.revision_ids),
         )
         if not any(self._observation_supports_line(item, row) for item in observations.values()):
             raise ValueError("No verified evidence reproduces the BoQ work code and unit")
@@ -539,18 +765,20 @@ class BoqService:
             kind="quantity_policy",
         )
         manual_change_policy, rule = self._manual_change_rule(project_id)
-        formula_rules = self.session.scalar(
-            select(ControlledVersionRow)
-            .join(
-                ProjectControlledVersionRow,
-                ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
-            )
-            .where(
+        formula_rules_binding = self.session.scalar(
+            select(ProjectControlledVersionRow).where(
                 ProjectControlledVersionRow.project_id == project_id,
                 ProjectControlledVersionRow.purpose == "quantity_formula_rules",
-                ControlledVersionRow.kind == "quantity_formula_rules",
-                ControlledVersionRow.status == VersionStatus.APPROVED.value,
             )
+        )
+        formula_rules = (
+            self._bound_version(
+                project_id,
+                purpose="quantity_formula_rules",
+                kind="quantity_formula_rules",
+            )
+            if formula_rules_binding is not None
+            else None
         )
         submission = QuantitySubmission.model_validate(self._quantity_state_from_row(current))
         if submission.formula is not None and (
@@ -809,6 +1037,18 @@ class BoqService:
         request_id: str,
         reason: str,
     ) -> ScopeRunResult:
+        normalized_wbs_node_id = wbs_node_id.strip()
+        reason = reason.strip()
+        if (
+            not normalized_wbs_node_id
+            or normalized_wbs_node_id != wbs_node_id
+            or len(wbs_node_id) > 128
+        ):
+            raise ValueError(
+                "Scope completeness WBS node must be normalized and contain 1 to 128 characters"
+            )
+        if not reason or len(reason) > 2000:
+            raise ValueError("Scope completeness reason must contain 1 to 2000 characters")
         project_service = self._project_service()
         project = project_service.get_project(
             actor=actor,
@@ -840,6 +1080,11 @@ class BoqService:
                 )
             )
         )
+        if not lines:
+            raise ValueError(
+                "Scope completeness requires at least one current verified BoQ line "
+                "for the exact WBS node"
+            )
         project_tags, tag_findings = self._verified_project_tags(project_id, rules)
         now = utc_now()
         input_signature = scope_input_signature(
@@ -1323,7 +1568,19 @@ class BoqService:
             raise ValueError("Quantity manual change payload is incomplete")
         policy = self.session.get(ControlledVersionRow, policy_version_id)
         policy_rule: ManualChangePolicyRule | None = None
-        if policy is not None and policy.kind == "manual_change_policy":
+        project = self.session.get(ProjectRow, change.project_id)
+        if policy is not None and project is not None:
+            try:
+                require_controlled_version_integrity(
+                    session=self.session,
+                    settings=self.settings,
+                    row=policy,
+                    expected_organization_id=project.organization_id,
+                    expected_kind="manual_change_policy",
+                )
+            except (ArithmeticError, KeyError, LookupError, TypeError, ValueError):
+                policy = None
+        if policy is not None:
             raw_policy = policy.payload.get("policy")
             if isinstance(raw_policy, dict):
                 try:
@@ -1470,28 +1727,27 @@ class BoqService:
         *,
         purpose: str,
         kind: str,
+        expected_version_id: str | None = None,
     ) -> ControlledVersionRow:
-        row = self.session.scalar(
-            select(ControlledVersionRow)
-            .join(
-                ProjectControlledVersionRow,
-                ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
-            )
-            .where(
-                ProjectControlledVersionRow.project_id == project_id,
-                ProjectControlledVersionRow.purpose == purpose,
-                ControlledVersionRow.kind == kind,
-                ControlledVersionRow.status == VersionStatus.APPROVED.value,
-            )
+        project = self.session.get(ProjectRow, project_id)
+        if project is None:
+            raise LookupError(project_id)
+        return require_bound_controlled_version(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            organization_id=project.organization_id,
+            purpose=purpose,
+            kind=kind,
+            expected_version_id=expected_version_id,
         )
-        if row is None:
-            raise ValueError(f"A bound approved {kind} version is required")
-        return row
 
     def _verified_observations(
         self,
         project_id: str,
         observation_ids: tuple[str, ...],
+        *,
+        document_revision_ids: frozenset[str] | None = None,
     ) -> dict[str, ObservationRow]:
         rows = list(
             self.session.scalars(
@@ -1504,11 +1760,36 @@ class BoqService:
         )
         if len(rows) != len(set(observation_ids)):
             raise ValueError("One or more evidence observations are absent or unverified")
+        for row in rows:
+            self._validated_observation(row)
+            if document_revision_ids is not None:
+                require_observation_in_document_set(
+                    document_revision_ids=document_revision_ids,
+                    document_revision_id=row.document_revision_id,
+                )
         return {row.id: row for row in rows}
 
     @staticmethod
-    def _observation_supports_line(observation: ObservationRow, line: BoqLineRow) -> bool:
-        raw = observation.payload.get("observation", {}).get("value")
+    def _validated_observation(row: ObservationRow) -> Observation:
+        observation = Observation.model_validate(row.payload.get("observation"))
+        if (
+            row.id != observation.observation_id
+            or row.document_revision_id != observation.location.document_revision_id
+            or row.field_name != observation.field_name
+            or row.method != observation.method.value
+            or row.method_version != observation.method_version
+            or row.status != observation.status.value
+            or observation.status is not VerificationStatus.VERIFIED
+        ):
+            raise RuntimeError("Verified BoQ evidence identity does not reproduce")
+        return observation
+
+    def _observation_supports_line(
+        self,
+        observation: ObservationRow,
+        line: BoqLineRow,
+    ) -> bool:
+        raw = self._validated_observation(observation).value
         return (
             isinstance(raw, dict)
             and raw.get("work_code") == line.work_code
@@ -1627,6 +1908,9 @@ class BoqService:
 
     @staticmethod
     def _line_view(row: BoqLineRow) -> BoqLineView:
+        updated_at = ensure_utc(row.updated_at)
+        if updated_at is None:
+            raise RuntimeError("BoQ line update timestamp is missing")
         return BoqLineView(
             line_id=row.id,
             line_key=row.line_key,
@@ -1642,4 +1926,5 @@ class BoqService:
             ),
             supersedes_line_id=row.supersedes_line_id,
             is_current=row.is_current,
+            updated_at=updated_at,
         )

@@ -22,7 +22,9 @@ from tenderguard.application.audit_integrity import (
     AuditCheckpointView,
 )
 from tenderguard.application.boq import (
+    BoqAuthoringContextView,
     BoqLineDraft,
+    BoqLineReviewView,
     BoqLineView,
     QuantityChangeContextView,
     QuantityExecutionResult,
@@ -59,6 +61,7 @@ from tenderguard.application.evidence import (
     ManualEvidenceDecisionResult,
     ManualEvidenceReviewView,
     ObservationDraft,
+    ReconciliationContextView,
     ReconciliationOutcome,
 )
 from tenderguard.application.exports import (
@@ -81,7 +84,9 @@ from tenderguard.application.passport import (
 from tenderguard.application.pricing import (
     AnalogueProposalCommand,
     NomenclatureAssessmentDraft,
+    NomenclatureContextView,
     NomenclatureMatchView,
+    NomenclatureReviewContextView,
     NormalizedPriceView,
     NormalizePriceCommand,
     PriceDecisionView,
@@ -304,6 +309,10 @@ class ReconciliationResponse(ReconciliationOutcome):
     pass
 
 
+class ReconciliationContextResponse(ReconciliationContextView):
+    pass
+
+
 class ResolveConflictRequest(ConflictResolutionCommand):
     pass
 
@@ -348,10 +357,19 @@ class CreateBoqLineRequest(ApiModel):
 
 
 class VerifyBoqLineRequest(ApiModel):
+    expected_line_updated_at: datetime
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class BoqLineResponse(BoqLineView):
+    pass
+
+
+class BoqAuthoringContextResponse(BoqAuthoringContextView):
+    pass
+
+
+class BoqLineReviewResponse(BoqLineReviewView):
     pass
 
 
@@ -405,6 +423,14 @@ class FinalizeAnalogueRequest(ApiModel):
 
 
 class NomenclatureMatchResponse(NomenclatureMatchView):
+    pass
+
+
+class NomenclatureContextResponse(NomenclatureContextView):
+    pass
+
+
+class NomenclatureReviewContextResponse(NomenclatureReviewContextView):
     pass
 
 

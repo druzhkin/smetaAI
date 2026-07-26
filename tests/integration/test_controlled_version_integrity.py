@@ -7,11 +7,13 @@ import pytest
 
 from tenderguard.application.controlled_version_integrity import (
     controlled_version_integrity_valid,
+    require_bound_controlled_version,
     require_controlled_version_integrity,
 )
 from tenderguard.application.governance import GovernanceService
 from tenderguard.config import Settings
-from tenderguard.domain.enums import ActorRole
+from tenderguard.domain.common import utc_now
+from tenderguard.domain.enums import ActorRole, ApprovalState
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
@@ -19,7 +21,11 @@ from tenderguard.infrastructure.database import (
     create_session_factory,
 )
 from tenderguard.infrastructure.object_store import LocalObjectStore
-from tenderguard.infrastructure.orm import ControlledVersionRow
+from tenderguard.infrastructure.orm import (
+    ControlledVersionRow,
+    ProjectRow,
+)
+from tests.integration.support import add_project_controlled_version_binding
 
 
 def test_controlled_version_integrity_blocks_preapproval_and_postapproval_tampering(
@@ -103,6 +109,62 @@ def test_controlled_version_integrity_blocks_preapproval_and_postapproval_tamper
             expected_organization_id=creator.organization_id,
             expected_content_hash=approved.content_hash,
         )
+        now = utc_now()
+        session.add(
+            ProjectRow(
+                id="project-controlled-version",
+                organization_id=creator.organization_id,
+                code="CONTROLLED-VERSION-1",
+                name="Controlled version integrity",
+                state=ApprovalState.DRAFT.value,
+                current_document_set_revision_id=None,
+                row_version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        binding = add_project_controlled_version_binding(
+            session=session,
+            settings=settings,
+            object_store=store,
+            project_id="project-controlled-version",
+            version=row,
+            purpose="calculation_model",
+            actor=approver,
+        )
+        assert (
+            require_bound_controlled_version(
+                session=session,
+                settings=settings,
+                project_id="project-controlled-version",
+                organization_id=creator.organization_id,
+                purpose="calculation_model",
+                kind="calculation_model",
+                expected_version_id=row.id,
+            )
+            is row
+        )
+        with pytest.raises(ValueError, match="requested version"):
+            require_bound_controlled_version(
+                session=session,
+                settings=settings,
+                project_id="project-controlled-version",
+                organization_id=creator.organization_id,
+                purpose="calculation_model",
+                kind="calculation_model",
+                expected_version_id="client-substituted-version",
+            )
+        binding.bound_by = creator.actor_id
+        with pytest.raises(ValueError, match="binding audit chain"):
+            require_bound_controlled_version(
+                session=session,
+                settings=settings,
+                project_id="project-controlled-version",
+                organization_id=creator.organization_id,
+                purpose="calculation_model",
+                kind="calculation_model",
+            )
+        binding.bound_by = approver.actor_id
 
         row.approved_by = creator.actor_id
         assert not controlled_version_integrity_valid(
@@ -111,5 +173,14 @@ def test_controlled_version_integrity_blocks_preapproval_and_postapproval_tamper
             row=row,
             expected_organization_id=creator.organization_id,
         )
+        with pytest.raises(ValueError, match="approval"):
+            require_bound_controlled_version(
+                session=session,
+                settings=settings,
+                project_id="project-controlled-version",
+                organization_id=creator.organization_id,
+                purpose="calculation_model",
+                kind="calculation_model",
+            )
 
     engine.dispose()

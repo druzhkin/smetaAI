@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from tenderguard.application.boq import (
 )
 from tenderguard.application.projects import ProjectService
 from tenderguard.config import Settings
+from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import (
     ActorRole,
     ApprovalDecision,
@@ -28,6 +29,7 @@ from tenderguard.domain.enums import (
     QuantityOperation,
     VerificationStatus,
 )
+from tenderguard.domain.models import EvidenceLocation, Observation
 from tenderguard.domain.quantities import QuantityFormulaDefinition
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
@@ -38,13 +40,18 @@ from tenderguard.infrastructure.database import (
 from tenderguard.infrastructure.object_store import LocalObjectStore
 from tenderguard.infrastructure.orm import (
     ControlledVersionRow,
+    DocumentSetRevisionRow,
     ObservationRow,
-    ProjectControlledVersionRow,
     ProjectRow,
     QuantityManualChangeApplicationRow,
     QuantityRow,
 )
-from tests.integration.support import project_memberships
+from tests.integration.support import (
+    add_document_set_confirmation_audit,
+    add_governed_controlled_version,
+    add_project_controlled_version_binding,
+    project_memberships,
+)
 
 
 def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path) -> None:
@@ -64,6 +71,16 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
         "org-1",
         frozenset({ActorRole.REVIEWER, ActorRole.TECHNICAL_EXPERT}),
     )
+    methodology_creator = Actor(
+        "methodology-creator",
+        "org-1",
+        frozenset({ActorRole.METHODOLOGY_OWNER}),
+    )
+    methodology_approver = Actor(
+        "methodology-approver",
+        "org-1",
+        frozenset({ActorRole.METHODOLOGY_OWNER}),
+    )
     now = datetime(2026, 7, 23, tzinfo=UTC)
 
     with factory.begin() as session:
@@ -80,6 +97,18 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                 updated_at=now,
             )
         )
+        document_set = DocumentSetRevisionRow(
+            id="document-set-boq",
+            project_id="project-boq",
+            manifest_hash=content_hash(["document-revision-1"]),
+            revision_ids=["document-revision-1"],
+            status="CONFIRMED",
+            created_by=estimator.actor_id,
+            created_at=now,
+            confirmed_by=reviewer.actor_id,
+            confirmed_at=now,
+        )
+        session.add(document_set)
         session.add_all(
             project_memberships(
                 "project-boq",
@@ -87,6 +116,13 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                 owner_id=estimator.actor_id,
                 now=now,
             )
+        )
+        add_document_set_confirmation_audit(
+            session=session,
+            settings=settings,
+            object_store=store,
+            row=document_set,
+            actor=reviewer,
         )
         versions = (
             ControlledVersionRow(
@@ -161,7 +197,16 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                 approved_at=now,
             ),
         )
-        session.add_all(versions)
+        for version in versions:
+            add_governed_controlled_version(
+                session=session,
+                settings=settings,
+                object_store=store,
+                row=version,
+                organization_id="org-1",
+                creator=methodology_creator,
+                approver=methodology_approver,
+            )
         for version, purpose in zip(
             versions,
             (
@@ -172,15 +217,61 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
             ),
             strict=True,
         ):
-            session.add(
-                ProjectControlledVersionRow(
-                    project_id="project-boq",
-                    controlled_version_id=version.id,
-                    purpose=purpose,
-                    bound_by="methodology-owner",
-                    bound_at=now,
-                )
+            add_project_controlled_version_binding(
+                session=session,
+                settings=settings,
+                object_store=store,
+                project_id="project-boq",
+                version=version,
+                purpose=purpose,
+                actor=methodology_approver,
             )
+        line_observation = Observation(
+            observation_id="observation-line",
+            field_name="boq_line",
+            value={"work_code": "PIPE_INSTALLATION", "unit": "m"},
+            unit=None,
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="reconciliation-v1",
+            source_priority=1,
+            location=EvidenceLocation(
+                document_id="document-1",
+                document_revision_id="document-revision-1",
+                original_object_hash="a" * 64,
+                locator_kind="table",
+                locator="boq[row=1]",
+            ),
+            observed_at=now,
+            actor_id=reviewer.actor_id,
+            status=VerificationStatus.VERIFIED,
+        )
+        length_observation = Observation(
+            observation_id="observation-length",
+            field_name="length",
+            value="100",
+            unit="m",
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="reconciliation-v1",
+            source_priority=1,
+            location=EvidenceLocation(
+                document_id="document-1",
+                document_revision_id="document-revision-1",
+                original_object_hash="a" * 64,
+                locator_kind="table",
+                locator="boq[row=1,column=quantity]",
+            ),
+            observed_at=now,
+            actor_id=reviewer.actor_id,
+            status=VerificationStatus.VERIFIED,
+        )
+        old_line_observation = line_observation.model_copy(
+            update={
+                "observation_id": "observation-line-old-set",
+                "location": line_observation.location.model_copy(
+                    update={"document_revision_id": "document-revision-old"}
+                ),
+            }
+        )
         session.add_all(
             (
                 ObservationRow(
@@ -191,14 +282,7 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                     method=EvidenceMethod.RULE_ENGINE.value,
                     method_version="reconciliation-v1",
                     status=VerificationStatus.VERIFIED.value,
-                    payload={
-                        "observation": {
-                            "value": {
-                                "work_code": "PIPE_INSTALLATION",
-                                "unit": "m",
-                            }
-                        }
-                    },
+                    payload={"observation": line_observation.model_dump(mode="json")},
                     created_at=now,
                 ),
                 ObservationRow(
@@ -209,14 +293,150 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
                     method=EvidenceMethod.RULE_ENGINE.value,
                     method_version="reconciliation-v1",
                     status=VerificationStatus.VERIFIED.value,
-                    payload={"observation": {"value": "100", "unit": "m"}},
+                    payload={"observation": length_observation.model_dump(mode="json")},
                     created_at=now,
+                ),
+                ObservationRow(
+                    id=old_line_observation.observation_id,
+                    project_id="project-boq",
+                    document_revision_id="document-revision-old",
+                    field_name=old_line_observation.field_name,
+                    method=old_line_observation.method.value,
+                    method_version=old_line_observation.method_version,
+                    status=old_line_observation.status.value,
+                    payload={"observation": old_line_observation.model_dump(mode="json")},
+                    created_at=now + timedelta(seconds=1),
                 ),
             )
         )
 
     with factory.begin() as session:
         service = BoqService(session=session, settings=settings, object_store=store)
+        with pytest.raises(ValueError, match="limit must be between 1 and 100"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=0,
+            )
+        with pytest.raises(ValueError, match="field name must contain"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="   ",
+                limit=100,
+            )
+        project = session.get(ProjectRow, "project-boq")
+        assert project is not None
+        project.state = ApprovalState.DRAFT.value
+        with pytest.raises(ValueError, match="requires BOQ_IN_PROGRESS"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=100,
+            )
+        project.state = ApprovalState.BOQ_IN_PROGRESS.value
+        project.current_document_set_revision_id = None
+        with pytest.raises(ValueError, match="confirmed current document set"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=100,
+            )
+        project.current_document_set_revision_id = "missing-document-set"
+        with pytest.raises(ValueError, match="confirmed current document set"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=100,
+            )
+        project.current_document_set_revision_id = "document-set-boq"
+        authoring = service.authoring_context(
+            actor=estimator,
+            project_id="project-boq",
+            evidence_field_name="boq_line",
+            limit=1,
+        )
+        assert {
+            candidate.observation.observation_id for candidate in authoring.evidence_candidates
+        } == {"observation-line"}
+        assert not authoring.candidates_truncated
+        document_set = session.get(DocumentSetRevisionRow, "document-set-boq")
+        assert document_set is not None
+        document_set.manifest_hash = "0" * 64
+        with pytest.raises(ValueError, match="manifest and four-eyes"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=100,
+            )
+        document_set.manifest_hash = content_hash(document_set.revision_ids)
+        document_set.confirmed_at = now - timedelta(seconds=1)
+        with pytest.raises(ValueError, match="manifest and four-eyes"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=100,
+            )
+        document_set.confirmed_at = now
+        document_set.confirmed_by = "substituted-reviewer"
+        with pytest.raises(ValueError, match="audit chain"):
+            service.authoring_context(
+                actor=estimator,
+                project_id="project-boq",
+                evidence_field_name="boq_line",
+                limit=100,
+            )
+        document_set.confirmed_by = reviewer.actor_id
+        with pytest.raises(ValueError, match="confirmed current document set"):
+            service.create_line(
+                actor=estimator,
+                project_id="project-boq",
+                draft=BoqLineDraft(
+                    line_key="old-evidence-line",
+                    wbs_node_id="wbs-pipeline",
+                    work_code="PIPE_INSTALLATION",
+                    description="Must not use evidence from an old set",
+                    unit="m",
+                    evidence_observation_ids=("observation-line-old-set",),
+                    cost_components=(
+                        CostComponentDraft(
+                            semantic_key="old-pipe-material",
+                            category=CostCategory.MATERIAL,
+                            basis_kind=CostBasisKind.MARKET,
+                        ),
+                    ),
+                ),
+                request_id="request-line-old-evidence",
+                reason="Prove that old-set evidence is rejected",
+            )
+        with pytest.raises(ValueError, match="reason must contain"):
+            service.create_line(
+                actor=estimator,
+                project_id="project-boq",
+                draft=BoqLineDraft(
+                    line_key="blank-reason-line",
+                    wbs_node_id="wbs-pipeline",
+                    work_code="PIPE_INSTALLATION",
+                    description="Must reject a blank authoring reason",
+                    unit="m",
+                    evidence_observation_ids=("observation-line",),
+                    cost_components=(
+                        CostComponentDraft(
+                            semantic_key="blank-reason-material",
+                            category=CostCategory.MATERIAL,
+                            basis_kind=CostBasisKind.MARKET,
+                        ),
+                    ),
+                ),
+                request_id="request-line-blank-reason",
+                reason=" ",
+            )
         line = service.create_line(
             actor=estimator,
             project_id="project-boq",
@@ -243,6 +463,7 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
             actor=reviewer,
             project_id="project-boq",
             line_id=line.line_id,
+            expected_line_updated_at=line.updated_at,
             request_id="request-verify",
             reason="Technical review",
         )
@@ -430,6 +651,30 @@ def test_boq_quantity_revision_and_scope_findings_are_operational(tmp_path: Path
         project = session.get(ProjectRow, "project-boq")
         assert project is not None
         project.state = ApprovalState.BOQ_REVIEW.value
+        with pytest.raises(ValueError, match="WBS node must be normalized"):
+            service.run_scope_completeness(
+                actor=reviewer,
+                project_id="project-boq",
+                wbs_node_id=" wbs-pipeline ",
+                request_id="request-scope-non-normalized-wbs",
+                reason="Reject an ambiguous WBS identity",
+            )
+        with pytest.raises(ValueError, match="reason must contain"):
+            service.run_scope_completeness(
+                actor=reviewer,
+                project_id="project-boq",
+                wbs_node_id="wbs-pipeline",
+                request_id="request-scope-blank-reason",
+                reason=" ",
+            )
+        with pytest.raises(ValueError, match="at least one current verified BoQ line"):
+            service.run_scope_completeness(
+                actor=reviewer,
+                project_id="project-boq",
+                wbs_node_id="wbs-does-not-exist",
+                request_id="request-scope-unknown-wbs",
+                reason="Reject an unknown WBS instead of reporting a false pass",
+            )
         scope_result = service.run_scope_completeness(
             actor=reviewer,
             project_id="project-boq",

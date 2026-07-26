@@ -9,6 +9,7 @@ from sqlalchemy import Engine
 from tenderguard.api.main import create_app
 from tenderguard.application.document_processing import DocumentProcessingService
 from tenderguard.application.pricing import (
+    NomenclatureAssessmentDraft,
     NormalizePriceCommand,
     PriceQuoteDraft,
     PricingService,
@@ -18,7 +19,6 @@ from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import (
     ActorRole,
     EvidenceMethod,
-    MatchClass,
     PriceEvidenceClass,
     VatBasis,
     VerificationStatus,
@@ -26,7 +26,6 @@ from tenderguard.domain.enums import (
 from tenderguard.domain.models import (
     CommercialBasis,
     EvidenceLocation,
-    NomenclatureMatch,
     Observation,
 )
 from tenderguard.infrastructure.auth import Actor
@@ -41,7 +40,6 @@ from tenderguard.infrastructure.orm import (
     ApprovalTaskRow,
     BoqLineRow,
     CalculationSnapshotRow,
-    NomenclatureMatchRow,
     ObservationRow,
     PriceDecisionRow,
     QuantityRow,
@@ -852,6 +850,68 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             )
             assert recorded.status_code == 201, recorded.text
             observation_ids.append(recorded.json()["observation_id"])
+        reconciliation_context = client.get(
+            f"/v1/projects/{project['id']}/evidence/reconciliation-context",
+            headers=owner_b,
+            params={"field_name": "normalized_unit_rate", "limit": 100},
+        )
+        assert reconciliation_context.status_code == 200, reconciliation_context.text
+        reconciliation_payload = reconciliation_context.json()
+        assert (
+            reconciliation_payload["reconciliation_version_id"]
+            == (reconciliation_rules["version_id"])
+        )
+        assert (
+            reconciliation_payload["document_set_revision_id"]
+            == (confirmed.json()["current_document_set_revision_id"])
+        )
+        assert {
+            candidate["observation"]["observation_id"]
+            for candidate in reconciliation_payload["candidates"]
+        } == set(observation_ids)
+        assert all(
+            candidate["eligible"] and candidate["adapter_status"] == "APPROVED"
+            for candidate in reconciliation_payload["candidates"]
+        )
+        with create_session_factory(engine).begin() as session:
+            tampered_row = session.get(ObservationRow, observation_ids[0])
+            assert tampered_row is not None
+            original_payload = tampered_row.payload
+            tampered_observation = {
+                **original_payload["observation"],
+                "observation_id": "payload-identity-substitution",
+            }
+            tampered_row.payload = {
+                **original_payload,
+                "observation": tampered_observation,
+            }
+        tampered_context = client.get(
+            f"/v1/projects/{project['id']}/evidence/reconciliation-context",
+            headers=owner_b,
+            params={"field_name": "normalized_unit_rate", "limit": 100},
+        )
+        assert tampered_context.status_code == 200, tampered_context.text
+        tampered_candidate = next(
+            candidate
+            for candidate in tampered_context.json()["candidates"]
+            if candidate["observation"]["observation_id"] == "payload-identity-substitution"
+        )
+        assert not tampered_candidate["eligible"]
+        assert "EVIDENCE_INTEGRITY_FAILED" in tampered_candidate["blockers"]
+        tampered_reconciliation = client.post(
+            f"/v1/projects/{project['id']}/evidence/reconcile",
+            headers=owner_b,
+            json={
+                "observation_ids": observation_ids,
+                "reconciliation_version_id": reconciliation_rules["version_id"],
+                "reason": "Reject a stored observation whose payload identity was substituted",
+            },
+        )
+        assert tampered_reconciliation.status_code == 422
+        with create_session_factory(engine).begin() as session:
+            tampered_row = session.get(ObservationRow, observation_ids[0])
+            assert tampered_row is not None
+            tampered_row.payload = original_payload
         reconciled = client.post(
             f"/v1/projects/{project['id']}/evidence/reconcile",
             headers=owner_b,
@@ -864,6 +924,35 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         assert reconciled.status_code == 200, reconciled.text
         verified_observation_id = reconciled.json()["verified_observation_id"]
         assert verified_observation_id
+        clean_replay = client.post(
+            f"/v1/projects/{project['id']}/evidence/reconcile",
+            headers=owner_b,
+            json={
+                "observation_ids": observation_ids,
+                "reconciliation_version_id": reconciliation_rules["version_id"],
+                "reason": "Replay the same independently reproduced agreement",
+            },
+        )
+        assert clean_replay.status_code == 200, clean_replay.text
+        assert clean_replay.json()["verified_observation_id"] == verified_observation_id
+        with create_session_factory(engine).begin() as session:
+            derived_row = session.get(ObservationRow, verified_observation_id)
+            assert derived_row is not None
+            derived_row.field_name = "tampered-derived-field"
+        corrupted_replay = client.post(
+            f"/v1/projects/{project['id']}/evidence/reconcile",
+            headers=owner_b,
+            json={
+                "observation_ids": observation_ids,
+                "reconciliation_version_id": reconciliation_rules["version_id"],
+                "reason": "Reject a corrupted stored deterministic reconciliation result",
+            },
+        )
+        assert corrupted_replay.status_code == 422
+        with create_session_factory(engine).begin() as session:
+            derived_row = session.get(ObservationRow, verified_observation_id)
+            assert derived_row is not None
+            derived_row.field_name = "normalized_unit_rate"
 
         conflicting_visual = client.post(
             f"/v1/projects/{project['id']}/evidence/observations",
@@ -909,6 +998,33 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         )
         assert conflicted.status_code == 200, conflicted.text
         conflict_id = conflicted.json()["conflict"]["conflict_id"]
+        with create_session_factory(engine).begin() as session:
+            conflict_task = (
+                session.query(ApprovalTaskRow)
+                .filter(ApprovalTaskRow.entity_id == conflict_id)
+                .one()
+            )
+            conflict_task.assigned_role = ActorRole.APPROVER.value
+        corrupted_conflict_replay = client.post(
+            f"/v1/projects/{project['id']}/evidence/reconcile",
+            headers=owner_b,
+            json={
+                "observation_ids": [
+                    observation_ids[0],
+                    conflicting_visual.json()["observation_id"],
+                ],
+                "reconciliation_version_id": reconciliation_rules["version_id"],
+                "reason": "Reject a conflict whose mandatory review task was corrupted",
+            },
+        )
+        assert corrupted_conflict_replay.status_code == 422
+        with create_session_factory(engine).begin() as session:
+            conflict_task = (
+                session.query(ApprovalTaskRow)
+                .filter(ApprovalTaskRow.entity_id == conflict_id)
+                .one()
+            )
+            conflict_task.assigned_role = ActorRole.REVIEWER.value
         creator_review = client.get(
             f"/v1/projects/{project['id']}/evidence/conflicts/{conflict_id}",
             headers=owner_b,
@@ -1220,7 +1336,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             },
             purpose="scope_rules",
         )
-        catalog_version = approve_version(
+        approve_version(
             "catalog",
             "catalog-1",
             {
@@ -1418,6 +1534,21 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             assert response.status_code == 200, response.text
             current = response.json()
 
+        authoring_context = client.get(
+            f"/v1/projects/{project['id']}/boq/authoring-context",
+            headers=operator,
+            params={"evidence_field_name": "boq_line", "limit": 100},
+        )
+        assert authoring_context.status_code == 200, authoring_context.text
+        assert authoring_context.json()["project_state"] == "BOQ_IN_PROGRESS"
+        assert (
+            authoring_context.json()["document_set_revision_id"]
+            == (current["current_document_set_revision_id"])
+        )
+        assert boq_observation_id in {
+            candidate["observation"]["observation_id"]
+            for candidate in authoring_context.json()["evidence_candidates"]
+        }
         created_line = client.post(
             f"/v1/projects/{project['id']}/boq/lines",
             headers=operator,
@@ -1443,10 +1574,29 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         )
         assert created_line.status_code == 201, created_line.text
         line_id = created_line.json()["line_id"]
+        line_review = client.get(
+            f"/v1/projects/{project['id']}/boq/lines/{line_id}/review",
+            headers=owner_b,
+        )
+        assert line_review.status_code == 200, line_review.text
+        assert line_review.json()["verification_allowed"] is True
+        assert line_review.json()["line"]["updated_at"] == created_line.json()["updated_at"]
+        stale_line_verification = client.post(
+            f"/v1/projects/{project['id']}/boq/lines/{line_id}/verify",
+            headers=owner_b,
+            json={
+                "expected_line_updated_at": "2020-01-01T00:00:00Z",
+                "reason": "A stale operator decision must fail closed",
+            },
+        )
+        assert stale_line_verification.status_code == 409
         verified_line = client.post(
             f"/v1/projects/{project['id']}/boq/lines/{line_id}/verify",
             headers=owner_b,
-            json={"reason": "Independent technical review"},
+            json={
+                "expected_line_updated_at": created_line.json()["updated_at"],
+                "reason": "Independent technical review",
+            },
         )
         assert verified_line.status_code == 200, verified_line.text
         quantity = client.post(
@@ -1682,34 +1832,35 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     created_at=now,
                 )
             )
-            match = NomenclatureMatch(
-                match_id="nomenclature-match-calculation-test",
-                source_item_id="pipe",
-                canonical_item_id="pipe",
-                match_class=MatchClass.EXACT,
-                required_critical_attributes=frozenset({"type"}),
-                source_attributes={"type": "pipe"},
-                canonical_attributes={"type": "pipe"},
+            attributes_observation = Observation(
+                observation_id="observation-technical-attributes-pipe",
+                field_name="technical_attributes",
+                value={"type": "pipe"},
+                method=EvidenceMethod.RULE_ENGINE,
+                method_version=reconciliation_rules["version_id"],
+                source_priority=1,
+                location=EvidenceLocation(
+                    document_id=uploaded_payload["document_id"],
+                    document_revision_id=uploaded_payload["document_revision_id"],
+                    original_object_hash=uploaded_payload["manifest"]["root_sha256"],
+                    locator_kind="structured_region",
+                    locator="specification-pipe",
+                ),
+                observed_at=now,
+                actor_id="owner-b",
+                status=VerificationStatus.VERIFIED,
             )
             session.add(
-                NomenclatureMatchRow(
-                    id=match.match_id,
+                ObservationRow(
+                    id=attributes_observation.observation_id,
                     project_id=project["id"],
-                    source_item_id=match.source_item_id,
-                    canonical_item_id=match.canonical_item_id,
-                    match_class=match.match_class.value,
+                    document_revision_id=uploaded_payload["document_revision_id"],
+                    field_name=attributes_observation.field_name,
+                    method=attributes_observation.method.value,
+                    method_version=attributes_observation.method_version,
                     status=VerificationStatus.VERIFIED.value,
-                    catalog_version_id=catalog_version["version_id"],
-                    supersedes_match_id=None,
-                    is_current=True,
-                    payload={
-                        "match": match.model_dump(mode="json"),
-                        "critical_price": False,
-                        "assessed_by": "operator-1",
-                        "assessment_method": ("DETERMINISTIC_CRITICAL_ATTRIBUTE_COMPARISON"),
-                    },
+                    payload={"observation": attributes_observation.model_dump(mode="json")},
                     created_at=now,
-                    updated_at=now,
                 )
             )
             price_basis = CommercialBasis(
@@ -1855,6 +2006,17 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     }
                 ),
             )
+            nomenclature_assessment = pricing.assess_nomenclature(
+                actor=pricing_actor,
+                project_id=project["id"],
+                draft=NomenclatureAssessmentDraft(
+                    source_item_id="pipe",
+                    canonical_item_id="pipe",
+                    source_attributes_observation_id=attributes_observation.observation_id,
+                ),
+                request_id="calculation-nomenclature-assessment",
+                reason="Assess calculation item against controlled catalog",
+            )
             for index, draft in enumerate(price_drafts, start=1):
                 quote = pricing.record_quote_from_observation(
                     actor=pricing_actor,
@@ -1884,6 +2046,34 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             assert price_decision.status.value == "VERIFIED"
             assert price_decision.derived_observation_id is not None
             verified_price_observation_id = price_decision.derived_observation_id
+        nomenclature_context = client.get(
+            f"/v1/projects/{project['id']}/nomenclature/context",
+            headers=operator,
+            params={
+                "catalog_query": "pipe",
+                "evidence_field_name": "technical_attributes",
+                "limit": 100,
+            },
+        )
+        assert nomenclature_context.status_code == 200, nomenclature_context.text
+        assert nomenclature_context.json()["catalog_version_id"]
+        assert {
+            item["canonical_item_id"] for item in nomenclature_context.json()["catalog_items"]
+        } == {"pipe"}
+        assert attributes_observation.observation_id in {
+            candidate["observation"]["observation_id"]
+            for candidate in nomenclature_context.json()["evidence_candidates"]
+        }
+        nomenclature_review = client.get(
+            (
+                f"/v1/projects/{project['id']}/nomenclature/"
+                f"{nomenclature_assessment.match.match_id}/review"
+            ),
+            headers=operator,
+        )
+        assert nomenclature_review.status_code == 200, nomenclature_review.text
+        assert nomenclature_review.json()["match"]["status"] == "VERIFIED"
+        assert nomenclature_review.json()["match"]["match"]["match_class"] == "EXACT"
         response = client.post(
             f"/v1/projects/{project['id']}/transitions",
             headers=operator,
