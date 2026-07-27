@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,7 +16,7 @@ from tenderguard.application.evidence_independence import (
     resolve_observation_leaves,
 )
 from tenderguard.config import Settings
-from tenderguard.domain.common import content_hash
+from tenderguard.domain.common import content_hash, ensure_utc
 from tenderguard.domain.contract import ContractRequirementsPolicy
 from tenderguard.domain.enums import (
     CostBasisKind,
@@ -25,6 +27,7 @@ from tenderguard.domain.enums import (
 )
 from tenderguard.domain.models import Observation
 from tenderguard.domain.passport import PassportRequirementsPolicy
+from tenderguard.domain.risk import RiskItem, RiskModelDefinition, calculate_risk_reserve
 from tenderguard.infrastructure.orm import (
     ApprovalRecordRow,
     ApprovalTaskRow,
@@ -1108,27 +1111,45 @@ def _require_contract_cost_impact_integrity(
         raise ValueError("Contract cost impact audit event integrity failed")
 
 
-def risk_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:
-    model = session.scalar(
-        select(ControlledVersionRow)
-        .join(
-            ProjectControlledVersionRow,
-            ProjectControlledVersionRow.controlled_version_id == ControlledVersionRow.id,
+def risk_stage_blockers(
+    session: Session,
+    settings: Settings,
+    project_id: str,
+) -> tuple[str, ...]:
+    project = session.get(ProjectRow, project_id)
+    if project is None:
+        return ("project:missing",)
+    try:
+        model = require_bound_controlled_version(
+            session=session,
+            settings=settings,
+            project_id=project_id,
+            organization_id=project.organization_id,
+            purpose="risk_model",
+            kind="risk_model",
         )
-        .where(
-            ProjectControlledVersionRow.project_id == project_id,
-            ProjectControlledVersionRow.purpose == "risk_model",
-            ControlledVersionRow.kind == "risk_model",
-            ControlledVersionRow.status == VersionStatus.APPROVED.value,
+        definition = RiskModelDefinition.model_validate(
+            {
+                key: value
+                for key, value in model.payload.items()
+                if key != "_governance"
+            }
         )
-    )
-    if model is None:
-        return ("risk-model:missing",)
-    minimum = model.payload.get("minimum_risk_items")
-    reserve_reference = model.payload.get("reserve_cost_component")
-    if not isinstance(minimum, int) or minimum < 1 or not isinstance(reserve_reference, dict):
-        return (f"risk-model:{model.id}:invalid",)
-    risk_rows = list(
+        document_set = require_confirmed_document_set_integrity(
+            session=session,
+            settings=settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        reserve_reference = _require_risk_reserve_component(
+            session=session,
+            project_id=project_id,
+            definition=definition,
+        )
+    except (KeyError, LookupError, TypeError, ValueError):
+        return ("risk:governance-integrity-failed",)
+
+    risk_rows = tuple(
         session.scalars(
             select(RiskItemRow)
             .where(
@@ -1138,18 +1159,64 @@ def risk_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:
             .order_by(RiskItemRow.risk_key)
         )
     )
-    blockers = [
-        f"risk-item:{row.risk_key}"
-        for row in risk_rows
-        if row.status != VerificationStatus.VERIFIED.value
-    ]
-    if len(risk_rows) < minimum:
+    by_key = {row.risk_key: row for row in risk_rows}
+    blockers: list[str] = []
+    if len(by_key) != len(risk_rows):
+        blockers.append("risk-register:ambiguous-key")
+    for risk_key in definition.required_risk_keys:
+        if risk_key not in by_key:
+            blockers.append(f"risk-item:{risk_key}:missing")
+    if len(risk_rows) < definition.minimum_risk_items:
         blockers.append("risk-register:below-approved-minimum")
+    risk_item_signatures: list[dict[str, str]] = []
+    risks: list[RiskItem] = []
+    for row in risk_rows:
+        if row.risk_key not in definition.risk_keys:
+            blockers.append(f"risk-item:{row.risk_key}:undeclared")
+            continue
+        try:
+            signature, risk = _require_risk_item_integrity(
+                session=session,
+                row=row,
+                definition=definition,
+                model=model,
+                document_set_revision_id=document_set.id,
+                document_revision_ids=frozenset(document_set.revision_ids),
+            )
+            risk_item_signatures.append(signature)
+            risks.append(risk)
+        except (KeyError, LookupError, TypeError, ValueError):
+            blockers.append(f"risk-item:{row.risk_key}:integrity-failed")
+    if blockers:
+        return tuple(sorted(set(blockers)))
+
+    policy = definition.calculation_policy(model.id)
+    primary = calculate_risk_reserve(tuple(risks), policy)
+    independent = _independent_risk_recalculation(tuple(risks), definition, model.id)
+    if (
+        independent["expected_reserve"] != str(primary.expected_reserve)
+        or independent["per_risk_expected_impact"]
+        != {
+            key: str(value)
+            for key, value in primary.per_risk_expected_impact.items()
+        }
+        or not primary.passed
+    ):
+        blockers.append("risk-calculation:independent-validation-failed")
     expected_signature = content_hash(
         {
-            "risk_item_ids": [row.id for row in risk_rows],
+            "risk_items": risk_item_signatures,
             "risk_model_version_id": model.id,
+            "risk_model_content_hash": model.content_hash,
+            "document_set_revision_id": document_set.id,
+            "document_set_manifest_hash": document_set.manifest_hash,
             "reserve_cost_component": reserve_reference,
+        }
+    )
+    expected_output_hash = content_hash(
+        {
+            "calculation": primary,
+            "independent_validation": independent,
         }
     )
     calculation = session.scalar(
@@ -1160,10 +1227,375 @@ def risk_stage_blockers(session: Session, project_id: str) -> tuple[str, ...]:
     )
     if calculation is None:
         blockers.append("risk-calculation:missing")
-    elif calculation.status != "VALIDATED":
-        blockers.append(f"risk-calculation:{calculation.id}:blocked")
-    elif calculation.policy_version_id != model.id:
-        blockers.append(f"risk-calculation:{calculation.id}:wrong-model")
-    elif calculation.payload.get("input_signature") != expected_signature:
-        blockers.append(f"risk-calculation:{calculation.id}:stale")
+        return tuple(sorted(set(blockers)))
+    if (
+        calculation.status != "VALIDATED"
+        or calculation.policy_version_id != model.id
+        or calculation.expected_reserve != primary.expected_reserve
+        or calculation.currency != primary.currency
+        or calculation.unit != definition.reserve_unit
+        or calculation.payload.get("calculation")
+        != primary.model_dump(mode="json")
+        or calculation.payload.get("independent_validation") != independent
+        or calculation.payload.get("input_signature") != expected_signature
+        or calculation.payload.get("output_hash") != expected_output_hash
+        or calculation.payload.get("risk_item_ids")
+        != [row.id for row in risk_rows]
+        or calculation.payload.get("risk_item_signatures")
+        != risk_item_signatures
+        or calculation.payload.get("risk_model_version_id") != model.id
+        or calculation.payload.get("risk_model_content_hash") != model.content_hash
+        or calculation.payload.get("document_set_revision_id") != document_set.id
+        or calculation.payload.get("document_set_manifest_hash")
+        != document_set.manifest_hash
+        or calculation.payload.get("reserve_cost_component") != reserve_reference
+        or calculation.payload.get("basis_type") != "RISK_RESERVE"
+        or calculation.payload.get("unit_rate") != str(primary.expected_reserve)
+        or calculation.payload.get("currency") != primary.currency
+        or calculation.payload.get("unit") != definition.reserve_unit
+    ):
+        blockers.append(f"risk-calculation:{calculation.id}:integrity-failed")
+    event = next(
+        (
+            row
+            for row in session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "project",
+                    AuditEventRow.aggregate_id == project_id,
+                    AuditEventRow.event_type == "risk_reserve_calculated",
+                )
+                .order_by(AuditEventRow.sequence.desc())
+            )
+            if row.payload.get("risk_calculation_id") == calculation.id
+        ),
+        None,
+    )
+    if (
+        event is None
+        or event.payload.get("status") != "VALIDATED"
+        or event.payload.get("expected_reserve") != str(primary.expected_reserve)
+        or event.payload.get("currency") != primary.currency
+        or event.payload.get("input_signature") != expected_signature
+        or event.payload.get("output_hash") != expected_output_hash
+        or event.payload.get("risk_item_ids") != [row.id for row in risk_rows]
+        or event.payload.get("risk_model_version_id") != model.id
+        or event.payload.get("risk_model_content_hash") != model.content_hash
+        or event.payload.get("document_set_revision_id") != document_set.id
+        or event.payload.get("independent_validation_passed") is not True
+    ):
+        blockers.append(f"risk-calculation:{calculation.id}:audit-integrity-failed")
     return tuple(sorted(set(blockers)))
+
+
+def _require_risk_item_integrity(
+    *,
+    session: Session,
+    row: RiskItemRow,
+    definition: RiskModelDefinition,
+    model: ControlledVersionRow,
+    document_set_revision_id: str,
+    document_revision_ids: frozenset[str],
+) -> tuple[dict[str, str], RiskItem]:
+    risk = RiskItem.model_validate(row.payload.get("risk"))
+    evidence_value = row.payload.get("evidence_value")
+    observation_ids = row.payload.get("observation_ids")
+    independence_source_ids = row.payload.get("independence_source_ids")
+    created_by = row.payload.get("created_by")
+    verified_by = row.payload.get("verified_by")
+    task_id = row.payload.get("approval_task_id")
+    expected_evidence_value = {
+        "risk_key": row.risk_key,
+        **risk.model_dump(
+            mode="json",
+            exclude={"risk_id", "observation_ids", "status"},
+        ),
+    }
+    if (
+        row.status != VerificationStatus.VERIFIED.value
+        or not row.is_current
+        or risk.risk_id != row.id
+        or risk.status is not VerificationStatus.VERIFIED
+        or risk.currency != row.currency
+        or risk.correlated
+        or evidence_value != expected_evidence_value
+        or not isinstance(observation_ids, list)
+        or not observation_ids
+        or len(observation_ids) != len(set(observation_ids))
+        or tuple(observation_ids) != risk.observation_ids
+        or not isinstance(independence_source_ids, list)
+        or not independence_source_ids
+        or not isinstance(created_by, str)
+        or not created_by
+        or not isinstance(verified_by, str)
+        or not verified_by
+        or created_by == verified_by
+        or row.payload.get("reviewed_by") != verified_by
+        or row.payload.get("review_decision") != "APPROVED"
+        or row.payload.get("risk_model_version_id") != model.id
+        or row.payload.get("risk_model_content_hash") != model.content_hash
+        or row.payload.get("document_set_revision_id")
+        != document_set_revision_id
+        or row.payload.get("review_role") != definition.review_role.value
+        or not isinstance(task_id, str)
+        or not task_id
+    ):
+        raise ValueError("Verified risk item provenance is invalid")
+    field_name = definition.evidence_field_names[row.risk_key]
+    observations = list(
+        session.scalars(
+            select(ObservationRow).where(
+                ObservationRow.project_id == row.project_id,
+                ObservationRow.id.in_(observation_ids),
+            )
+        )
+    )
+    if len(observations) != len(observation_ids):
+        raise ValueError("Risk evidence is missing")
+    by_id = {item.id: item for item in observations}
+    ordered = tuple(by_id[item] for item in observation_ids)
+    expected_hash = content_hash(evidence_value)
+    for evidence_row in ordered:
+        observation = Observation.model_validate(
+            evidence_row.payload.get("observation")
+        )
+        if (
+            evidence_row.id != observation.observation_id
+            or evidence_row.project_id != row.project_id
+            or evidence_row.document_revision_id
+            != observation.location.document_revision_id
+            or evidence_row.document_revision_id not in document_revision_ids
+            or evidence_row.field_name != field_name
+            or evidence_row.field_name != observation.field_name
+            or evidence_row.method != observation.method.value
+            or evidence_row.method_version != observation.method_version
+            or evidence_row.status != observation.status.value
+            or observation.status
+            not in {VerificationStatus.UNVERIFIED, VerificationStatus.VERIFIED}
+            or (
+                observation.method is EvidenceMethod.MANUAL
+                and observation.status is not VerificationStatus.VERIFIED
+            )
+            or content_hash(observation.value) != expected_hash
+            or observation.unit is not None
+        ):
+            raise ValueError("Risk evidence no longer reproduces the item")
+    leaves = resolve_observation_leaves(
+        session,
+        project_id=row.project_id,
+        observations=ordered,
+    )
+    for evidence_row in leaves:
+        observation = Observation.model_validate(
+            evidence_row.payload.get("observation")
+        )
+        if (
+            evidence_row.id != observation.observation_id
+            or evidence_row.project_id != row.project_id
+            or evidence_row.document_revision_id
+            != observation.location.document_revision_id
+            or evidence_row.document_revision_id not in document_revision_ids
+            or evidence_row.field_name != field_name
+            or evidence_row.field_name != observation.field_name
+            or evidence_row.method != observation.method.value
+            or evidence_row.method_version != observation.method_version
+            or evidence_row.status != observation.status.value
+            or content_hash(observation.value) != expected_hash
+            or observation.unit is not None
+        ):
+            raise ValueError("Risk evidence leaves no longer reproduce the item")
+    leaf_ids = tuple(item.id for item in leaves)
+    if tuple(independence_source_ids) != leaf_ids:
+        raise ValueError("Risk evidence leaf identity changed")
+    if (
+        row.risk_key in definition.independently_verified_risk_keys
+        and require_distinct_qualified_independence(
+            session,
+            project_id=row.project_id,
+            observations=ordered,
+        )
+        != leaf_ids
+    ):
+        raise ValueError("Risk independent evidence changed")
+    submission = {
+        "risk_item_id": row.id,
+        "risk_key": row.risk_key,
+        "evidence_value": evidence_value,
+        "observation_ids": observation_ids,
+        "independence_source_ids": independence_source_ids,
+        "created_by": created_by,
+        "risk_model_version_id": model.id,
+        "risk_model_content_hash": model.content_hash,
+        "document_set_revision_id": document_set_revision_id,
+        "review_role": definition.review_role.value,
+    }
+    submission_hash = content_hash(submission)
+    expected_task_payload = {
+        "created_by": created_by,
+        "risk_item_id": row.id,
+        "risk_key": row.risk_key,
+        "risk_submission_hash": submission_hash,
+        "observation_ids": observation_ids,
+        "independence_source_ids": independence_source_ids,
+        "risk_model_version_id": model.id,
+        "risk_model_content_hash": model.content_hash,
+        "document_set_revision_id": document_set_revision_id,
+        "review_role": definition.review_role.value,
+    }
+    task = session.get(ApprovalTaskRow, task_id)
+    if (
+        task is None
+        or task.project_id != row.project_id
+        or task.task_type != "RISK_ITEM_REVIEW"
+        or task.entity_type != "risk_item"
+        or task.entity_id != row.id
+        or task.assigned_role != definition.review_role.value
+        or not task.required
+        or task.status != "APPROVED"
+        or task.payload != expected_task_payload
+    ):
+        raise ValueError("Risk review task integrity failed")
+    approval = session.scalar(
+        select(ApprovalRecordRow).where(ApprovalRecordRow.task_id == task.id)
+    )
+    if (
+        approval is None
+        or approval.decision != "APPROVED"
+        or approval.decided_by != verified_by
+        or approval.payload.get("risk_item_id") != row.id
+        or approval.payload.get("risk_key") != row.risk_key
+        or approval.payload.get("evidence_ids") != observation_ids
+        or approval.payload.get("independence_source_ids")
+        != independence_source_ids
+        or approval.payload.get("risk_model_version_id") != model.id
+        or approval.payload.get("risk_model_content_hash") != model.content_hash
+        or approval.payload.get("document_set_revision_id")
+        != document_set_revision_id
+        or approval.payload.get("risk_submission_hash") != submission_hash
+    ):
+        raise ValueError("Risk approval record integrity failed")
+    event = next(
+        (
+            candidate
+            for candidate in session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.aggregate_type == "project",
+                    AuditEventRow.aggregate_id == row.project_id,
+                    AuditEventRow.event_type == "risk_item_review_decided",
+                )
+                .order_by(AuditEventRow.sequence.desc())
+            )
+            if candidate.payload.get("risk_item_id") == row.id
+        ),
+        None,
+    )
+    if (
+        event is None
+        or event.actor_id != verified_by
+        or event.payload.get("approval_id") != approval.id
+        or event.payload.get("approval_task_id") != task.id
+        or event.payload.get("decision") != "APPROVED"
+        or event.payload.get("risk_key") != row.risk_key
+        or event.payload.get("evidence_ids") != observation_ids
+        or event.payload.get("risk_submission_hash") != submission_hash
+    ):
+        raise ValueError("Risk approval audit event integrity failed")
+    updated_at = ensure_utc(row.updated_at)
+    if updated_at is None:
+        raise ValueError("Risk updated timestamp is missing")
+    return (
+        {
+            "risk_item_id": row.id,
+            "risk_key": row.risk_key,
+            "risk_submission_hash": submission_hash,
+            "updated_at": updated_at.isoformat(),
+        },
+        risk,
+    )
+
+
+def _require_risk_reserve_component(
+    *,
+    session: Session,
+    project_id: str,
+    definition: RiskModelDefinition,
+) -> dict[str, str]:
+    reference = definition.reserve_cost_component
+    line = session.scalar(
+        select(BoqLineRow).where(
+            BoqLineRow.id == reference.line_id,
+            BoqLineRow.project_id == project_id,
+            BoqLineRow.is_current.is_(True),
+            BoqLineRow.status == VerificationStatus.VERIFIED.value,
+        )
+    )
+    if line is None or line.unit != definition.reserve_unit:
+        raise ValueError("Risk reserve BoQ component is missing")
+    components = line.payload.get("cost_components")
+    component = (
+        next(
+            (
+                item
+                for item in components
+                if isinstance(item, dict)
+                and item.get("semantic_key") == reference.semantic_key
+            ),
+            None,
+        )
+        if isinstance(components, list)
+        else None
+    )
+    if (
+        not isinstance(component, dict)
+        or component.get("category") != "RISK"
+        or component.get("basis_kind") != "RISK_MODEL"
+    ):
+        raise ValueError("Risk reserve BoQ component is not governed")
+    return {
+        "line_id": reference.line_id,
+        "semantic_key": reference.semantic_key,
+    }
+
+
+def _independent_risk_recalculation(
+    risks: tuple[RiskItem, ...],
+    definition: RiskModelDefinition,
+    policy_version: str,
+) -> dict[str, object]:
+    policy = definition.calculation_policy(policy_version)
+    rounding = {
+        "ROUND_HALF_UP": ROUND_HALF_UP,
+        "ROUND_HALF_EVEN": ROUND_HALF_EVEN,
+    }[policy.rounding_mode]
+    quantum = Decimal(1).scaleb(-policy.rounding_scale)
+    expected: dict[str, Decimal] = {}
+    for risk in risks:
+        if (
+            risk.status is not VerificationStatus.VERIFIED
+            or risk.currency != policy.currency
+            or risk.correlated
+        ):
+            continue
+        expected[risk.risk_id] = (
+            risk.probability
+            * (
+                risk.impact_min
+                + risk.impact_most_likely
+                + risk.impact_max
+            )
+            / Decimal(3)
+        ).quantize(quantum, rounding=rounding)
+    reserve = sum(expected.values(), start=Decimal(0)).quantize(
+        quantum,
+        rounding=rounding,
+    )
+    return {
+        "validator_version": f"independent:{policy_version}",
+        "expected_reserve": str(reserve),
+        "currency": policy.currency,
+        "per_risk_expected_impact": {
+            key: str(expected[key]) for key in sorted(expected)
+        },
+        "passed": len(expected) == len(risks),
+    }

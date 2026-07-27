@@ -20,6 +20,11 @@ from tenderguard.application.pricing import (
     PricingService,
 )
 from tenderguard.application.projects import ProjectService
+from tenderguard.application.risks import (
+    RiskItemDecisionCommand,
+    RiskItemDraft,
+    RiskService,
+)
 from tenderguard.config import Settings
 from tenderguard.domain.common import content_hash
 from tenderguard.domain.enums import (
@@ -52,8 +57,6 @@ from tenderguard.infrastructure.orm import (
     ProjectRow,
     QuantityRow,
     RfqRequestRow,
-    RiskCalculationRow,
-    RiskItemRow,
 )
 from tests.integration.support import (
     add_document_set_confirmation_audit,
@@ -346,8 +349,14 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                         "rounding_scale": 2,
                         "rounding_mode": "ROUND_HALF_UP",
                     },
+                    "risk_keys": ["pricing-test-risk"],
+                    "required_risk_keys": ["pricing-test-risk"],
                     "minimum_risk_items": 1,
                     "independently_verified_risk_keys": [],
+                    "evidence_field_names": {
+                        "pricing-test-risk": "risk_pricing_test",
+                    },
+                    "review_role": "REVIEWER",
                     "reserve_unit": "project",
                     "reserve_cost_component": {
                         "line_id": "boq-line-risk",
@@ -389,54 +398,6 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 purpose=purpose,
                 actor=(catalog_approver if version.kind == "catalog" else methodology_approver),
             )
-        risk_item_id = "risk-item-pricing-test"
-        session.add(
-            RiskItemRow(
-                id=risk_item_id,
-                project_id="project-pricing",
-                risk_key="pricing-test-risk",
-                status="VERIFIED",
-                currency="RUB",
-                expected_impact=Decimal("0"),
-                supersedes_risk_id=None,
-                is_current=True,
-                payload={"test_fixture": "Pricing stage risk register"},
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        risk_reference = {
-            "line_id": "boq-line-risk",
-            "semantic_key": "risk-reserve",
-        }
-        session.add(
-            RiskCalculationRow(
-                id="risk-calculation-pricing-test",
-                project_id="project-pricing",
-                policy_version_id="risk-model-v1",
-                status="VALIDATED",
-                expected_reserve=Decimal("0"),
-                currency="RUB",
-                unit="project",
-                supersedes_calculation_id=None,
-                is_current=True,
-                payload={
-                    "input_signature": content_hash(
-                        {
-                            "risk_item_ids": [risk_item_id],
-                            "risk_model_version_id": "risk-model-v1",
-                            "reserve_cost_component": risk_reference,
-                        }
-                    ),
-                    "reserve_cost_component": risk_reference,
-                    "basis_type": "RISK_RESERVE",
-                    "unit_rate": "0",
-                    "currency": "RUB",
-                    "unit": "project",
-                },
-                created_at=now,
-            )
-        )
         supported_classes = [item.value for item in PriceEvidenceClass]
         for suffix, method, domain in (
             ("parser", EvidenceMethod.TABLE_PARSER, "parser-domain"),
@@ -499,6 +460,34 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             actor_id="contract-extractor",
             status=VerificationStatus.VERIFIED,
         )
+        risk_draft = RiskItemDraft(
+            risk_key="pricing-test-risk",
+            description="Pricing workflow residual risk",
+            probability=Decimal("0"),
+            impact_min=Decimal("0"),
+            impact_most_likely=Decimal("0"),
+            impact_max=Decimal("0"),
+            currency="RUB",
+            observation_ids=("observation-risk-pricing-test",),
+        )
+        risk_observation = Observation(
+            observation_id=risk_draft.observation_ids[0],
+            field_name="risk_pricing_test",
+            value=risk_draft.evidence_value(),
+            unit=None,
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="risk-extraction-v1",
+            source_priority=1,
+            location=EvidenceLocation(
+                document_id="document-1",
+                document_revision_id="revision-1",
+                original_object_hash="f" * 64,
+                locator_kind="table",
+                locator="risk-register[row=1]",
+            ),
+            observed_at=now,
+            actor_id="risk-extraction-service",
+        )
         old_attribute_observation = attribute_observation.model_copy(
             update={
                 "observation_id": "observation-attributes-old-set",
@@ -540,6 +529,17 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                     method_version=contract_observation.method_version,
                     status=contract_observation.status.value,
                     payload={"observation": contract_observation.model_dump(mode="json")},
+                    created_at=now,
+                ),
+                ObservationRow(
+                    id=risk_observation.observation_id,
+                    project_id="project-pricing",
+                    document_revision_id="revision-1",
+                    field_name=risk_observation.field_name,
+                    method=risk_observation.method.value,
+                    method_version=risk_observation.method_version,
+                    status=risk_observation.status.value,
+                    payload={"observation": risk_observation.model_dump(mode="json")},
                     created_at=now,
                 ),
             )
@@ -752,6 +752,50 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             reason="Assess critical catalog attributes",
         )
         assert match.status is VerificationStatus.VERIFIED
+        risks = RiskService(
+            session=session,
+            settings=settings,
+            object_store=store,
+        )
+        risk_context = risks.context(
+            actor=procurement,
+            project_id=project.id,
+            selected_risk_key=risk_draft.risk_key,
+            limit=100,
+        )
+        submitted_risk = risks.submit_risk(
+            actor=procurement,
+            project_id=project.id,
+            draft=risk_draft,
+            expected_document_set_revision_id=risk_context.document_set_revision_id,
+            risk_model_version_id=risk_context.risk_model_version_id,
+            request_id="request-risk-submit",
+            reason="Register the exact governed pricing workflow risk",
+        )
+        risks.decide_risk(
+            actor=contract_reviewer,
+            project_id=project.id,
+            risk_item_id=submitted_risk.row_id,
+            command=RiskItemDecisionCommand(
+                decision=ApprovalDecision.APPROVED,
+                expected_risk_updated_at=submitted_risk.updated_at,
+                expected_task_updated_at=approval_task_updated_at(
+                    session,
+                    submitted_risk.approval_task_id,
+                ),
+            ),
+            request_id="request-risk-review",
+            reason="Independently verify the risk evidence and parameters",
+        )
+        risk_calculation = risks.calculate_reserve(
+            actor=procurement,
+            project_id=project.id,
+            expected_document_set_revision_id=risk_context.document_set_revision_id,
+            risk_model_version_id=risk_context.risk_model_version_id,
+            request_id="request-risk-calculate",
+            reason="Run the approved deterministic risk reserve model",
+        )
+        assert risk_calculation.calculation.expected_reserve == Decimal("0")
         empty_context = service.price_item_context(
             actor=procurement,
             project_id="project-pricing",

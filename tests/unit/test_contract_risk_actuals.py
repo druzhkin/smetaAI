@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 
+from tenderguard.application.risks import RiskItemDecisionCommand
 from tenderguard.domain.actuals import (
     ActualFact,
     ForecastFact,
@@ -17,11 +18,17 @@ from tenderguard.domain.contract import (
 )
 from tenderguard.domain.enums import (
     ActorRole,
+    ApprovalDecision,
     ContractTermKind,
     VarianceReason,
     VerificationStatus,
 )
-from tenderguard.domain.risk import RiskItem, RiskPolicy, calculate_risk_reserve
+from tenderguard.domain.risk import (
+    RiskItem,
+    RiskModelDefinition,
+    RiskPolicy,
+    calculate_risk_reserve,
+)
 
 
 def test_contract_cost_cannot_be_separated_from_unresolved_terms() -> None:
@@ -73,7 +80,7 @@ def test_contract_policy_is_closed_and_has_no_empty_bypass() -> None:
         )
 
 
-def test_correlated_risk_requires_versioned_correlation_model() -> None:
+def test_correlation_version_identifier_does_not_fake_an_executable_engine() -> None:
     calculation = calculate_risk_reserve(
         (
             RiskItem(
@@ -94,12 +101,76 @@ def test_correlated_risk_requires_versioned_correlation_model() -> None:
             policy_version="risk-v1",
             method="THREE_POINT_EXPECTED_VALUE",
             currency="RUB",
+            correlation_model_version_id="correlation-v1",
             rounding_scale=2,
             rounding_mode="ROUND_HALF_UP",
         ),
     )
     assert not calculation.passed
     assert calculation.findings[0].code.value == "RISK_MODEL_INCOMPLETE"
+
+
+def test_risk_model_requires_closed_keys_evidence_and_review_role() -> None:
+    base = {
+        "policy": {
+            "method": "THREE_POINT_EXPECTED_VALUE",
+            "currency": "RUB",
+            "rounding_scale": 2,
+            "rounding_mode": "ROUND_HALF_UP",
+        },
+        "risk_keys": ["supplier-delay"],
+        "required_risk_keys": ["supplier-delay"],
+        "minimum_risk_items": 1,
+        "independently_verified_risk_keys": [],
+        "evidence_field_names": {
+            "supplier-delay": "risk_supplier_delay",
+        },
+        "review_role": "REVIEWER",
+        "reserve_unit": "project",
+        "reserve_cost_component": {
+            "line_id": "boq-risk",
+            "semantic_key": "risk-reserve",
+        },
+    }
+    assert (
+        RiskModelDefinition.model_validate(base).review_role
+        is ActorRole.REVIEWER
+    )
+    with pytest.raises(ValueError, match="exactly one evidence field"):
+        RiskModelDefinition.model_validate(
+            {
+                **base,
+                "evidence_field_names": {},
+            }
+        )
+    with pytest.raises(ValueError, match="must be required"):
+        RiskModelDefinition.model_validate(
+            {
+                **base,
+                "risk_keys": ["supplier-delay", "currency"],
+                "independently_verified_risk_keys": ["currency"],
+                "evidence_field_names": {
+                    "supplier-delay": "risk_supplier_delay",
+                    "currency": "risk_currency",
+                },
+            }
+        )
+    with pytest.raises(ValueError, match="REVIEWER or TECHNICAL_EXPERT"):
+        RiskModelDefinition.model_validate(
+            {
+                **base,
+                "review_role": "ESTIMATOR",
+            }
+        )
+
+
+def test_risk_review_rejects_ambiguous_changes_requested_state() -> None:
+    with pytest.raises(ValueError, match="APPROVED or REJECTED"):
+        RiskItemDecisionCommand(
+            decision=ApprovalDecision.CHANGES_REQUESTED,
+            expected_risk_updated_at=datetime(2026, 7, 23, tzinfo=UTC),
+            expected_task_updated_at=datetime(2026, 7, 23, tzinfo=UTC),
+        )
 
 
 def test_calibration_uses_verified_actual_not_the_system_forecast() -> None:

@@ -1444,8 +1444,14 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     "rounding_scale": 2,
                     "rounding_mode": "ROUND_HALF_UP",
                 },
+                "risk_keys": ["test-risk"],
+                "required_risk_keys": ["test-risk"],
                 "minimum_risk_items": 1,
                 "independently_verified_risk_keys": [],
+                "evidence_field_names": {
+                    "test-risk": "risk_test",
+                },
+                "review_role": "REVIEWER",
                 "reserve_unit": "project",
                 "reserve_cost_component": {
                     "line_id": "boq-line-risk-test",
@@ -1880,55 +1886,6 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     updated_at=now,
                 )
             )
-            risk_item_id = "risk-item-calculation-test"
-            session.add(
-                RiskItemRow(
-                    id=risk_item_id,
-                    project_id=project["id"],
-                    risk_key="test-risk",
-                    status="VERIFIED",
-                    currency="RUB",
-                    expected_impact="10",
-                    supersedes_risk_id=None,
-                    is_current=True,
-                    payload={"test_fixture": "Calculation test risk register"},
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            risk_reference = {
-                "line_id": "boq-line-risk-test",
-                "semantic_key": "risk-reserve",
-            }
-            risk_signature = content_hash(
-                {
-                    "risk_item_ids": [risk_item_id],
-                    "risk_model_version_id": risk_model["version_id"],
-                    "reserve_cost_component": risk_reference,
-                }
-            )
-            session.add(
-                RiskCalculationRow(
-                    id="risk-calculation-test",
-                    project_id=project["id"],
-                    policy_version_id=risk_model["version_id"],
-                    status="VALIDATED",
-                    expected_reserve="10",
-                    currency="RUB",
-                    unit="project",
-                    supersedes_calculation_id=None,
-                    is_current=True,
-                    payload={
-                        "input_signature": risk_signature,
-                        "reserve_cost_component": risk_reference,
-                        "basis_type": "RISK_RESERVE",
-                        "unit_rate": "10",
-                        "currency": "RUB",
-                        "unit": "project",
-                    },
-                    created_at=now,
-                )
-            )
             attributes_observation = Observation(
                 observation_id="observation-technical-attributes-pipe",
                 field_name="technical_attributes",
@@ -1957,6 +1914,48 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                     method_version=attributes_observation.method_version,
                     status=VerificationStatus.VERIFIED.value,
                     payload={"observation": attributes_observation.model_dump(mode="json")},
+                    created_at=now,
+                )
+            )
+            risk_value = {
+                "risk_key": "test-risk",
+                "description": "Calculation workflow residual risk",
+                "probability": "1",
+                "impact_min": "10",
+                "impact_most_likely": "10",
+                "impact_max": "10",
+                "currency": "RUB",
+                "correlated": False,
+                "correlation_group": None,
+                "mitigation_cost_input_id": None,
+            }
+            risk_observation = Observation(
+                observation_id="observation-risk-calculation-test",
+                field_name="risk_test",
+                value=risk_value,
+                method=EvidenceMethod.RULE_ENGINE,
+                method_version="risk-extraction-v1",
+                source_priority=1,
+                location=EvidenceLocation(
+                    document_id=uploaded_payload["document_id"],
+                    document_revision_id=uploaded_payload["document_revision_id"],
+                    original_object_hash=uploaded_payload["manifest"]["root_sha256"],
+                    locator_kind="structured_region",
+                    locator="risk-register[row=1]",
+                ),
+                observed_at=now,
+                actor_id="risk-extraction-service",
+            )
+            session.add(
+                ObservationRow(
+                    id=risk_observation.observation_id,
+                    project_id=project["id"],
+                    document_revision_id=uploaded_payload["document_revision_id"],
+                    field_name=risk_observation.field_name,
+                    method=risk_observation.method.value,
+                    method_version=risk_observation.method_version,
+                    status=risk_observation.status.value,
+                    payload={"observation": risk_observation.model_dump(mode="json")},
                     created_at=now,
                 )
             )
@@ -2143,6 +2142,79 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             assert price_decision.status.value == "VERIFIED"
             assert price_decision.derived_observation_id is not None
             verified_price_observation_id = price_decision.derived_observation_id
+        risk_context = client.get(
+            f"/v1/projects/{project['id']}/risks/context",
+            headers=operator,
+            params={"risk_key": "test-risk", "limit": 100},
+        )
+        assert risk_context.status_code == 200, risk_context.text
+        risk_context_payload = risk_context.json()
+        assert risk_context_payload["risk_model_version_id"] == risk_model["version_id"]
+        risk_candidate = next(
+            candidate
+            for candidate in risk_context_payload["evidence_candidates"]
+            if candidate["observation"]["observation_id"] == risk_observation.observation_id
+        )
+        assert risk_candidate["eligible"] is True
+        submitted_risk = client.post(
+            f"/v1/projects/{project['id']}/risks",
+            headers=operator,
+            json={
+                "draft": {
+                    **risk_value,
+                    "observation_ids": [risk_observation.observation_id],
+                },
+                "expected_document_set_revision_id": risk_context_payload[
+                    "document_set_revision_id"
+                ],
+                "risk_model_version_id": risk_context_payload["risk_model_version_id"],
+                "reason": "Submit the exact evidence-bound project risk",
+            },
+        )
+        assert submitted_risk.status_code == 201, submitted_risk.text
+        submitted_risk_payload = submitted_risk.json()
+        risk_item_id = submitted_risk_payload["row_id"]
+        risk_review_context = client.get(
+            f"/v1/projects/{project['id']}/risks/context",
+            headers=owner_b,
+            params={"risk_key": "test-risk", "limit": 100},
+        )
+        assert risk_review_context.status_code == 200, risk_review_context.text
+        risk_review = next(
+            item
+            for item in risk_review_context.json()["items"]
+            if item["item"]["row_id"] == risk_item_id
+        )
+        risk_decision = client.post(
+            f"/v1/projects/{project['id']}/risks/{risk_item_id}/decision",
+            headers=owner_b,
+            json={
+                "command": {
+                    "decision": "APPROVED",
+                    "expected_risk_updated_at": submitted_risk_payload["updated_at"],
+                    "expected_task_updated_at": risk_review["task_updated_at"],
+                },
+                "reason": "Independently verify the risk evidence and parameters",
+            },
+        )
+        assert risk_decision.status_code == 200, risk_decision.text
+        assert risk_decision.json()["item"]["risk"]["status"] == "VERIFIED"
+        risk_calculation = client.post(
+            f"/v1/projects/{project['id']}/risks/calculate",
+            headers=operator,
+            json={
+                "expected_document_set_revision_id": risk_context_payload[
+                    "document_set_revision_id"
+                ],
+                "risk_model_version_id": risk_context_payload["risk_model_version_id"],
+                "reason": "Run and independently replay the approved risk reserve",
+            },
+        )
+        assert risk_calculation.status_code == 201, risk_calculation.text
+        risk_calculation_payload = risk_calculation.json()
+        risk_calculation_id = risk_calculation_payload["calculation_id"]
+        assert risk_calculation_payload["calculation"]["expected_reserve"] == "10.00"
+        assert risk_calculation_payload["independent_validation_passed"] is True
         nomenclature_context = client.get(
             f"/v1/projects/{project['id']}/nomenclature/context",
             headers=operator,
@@ -2585,14 +2657,10 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 )
                 .one_or_none()
             )
-            invalidated_risk = session.get(RiskItemRow, "risk-item-calculation-test")
-            invalidated_risk_calculation = (
-                session.query(RiskCalculationRow)
-                .filter(
-                    RiskCalculationRow.project_id == project["id"],
-                    RiskCalculationRow.is_current.is_(True),
-                )
-                .one_or_none()
+            invalidated_risk = session.get(RiskItemRow, risk_item_id)
+            invalidated_risk_calculation = session.get(
+                RiskCalculationRow,
+                risk_calculation_id,
             )
             assert invalidated_line is not None and invalidated_line.status == "IN_REVIEW"
             assert invalidated_quantity is not None and invalidated_quantity.status == "IN_REVIEW"
@@ -2600,7 +2668,8 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             assert invalidated_risk is not None and invalidated_risk.status == "IN_REVIEW"
             assert (
                 invalidated_risk_calculation is not None
-                and invalidated_risk_calculation.status == "STALE"
+                and invalidated_risk_calculation.status == "VALIDATED"
+                and invalidated_risk_calculation.is_current is False
             )
         stale_gates = client.get(
             f"/v1/projects/{project['id']}/release-gates",

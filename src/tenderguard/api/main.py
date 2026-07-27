@@ -144,6 +144,7 @@ from .schemas import (
     DecideContractTermRequest,
     DecideManualEvidenceRequest,
     DecidePassportFactRequest,
+    DecideRiskItemRequest,
     DocumentSetResponse,
     EvaluateItemPriceRequest,
     ExportArtifactResponse,
@@ -218,6 +219,8 @@ from .schemas import (
     RevokeProductionGateEvidenceRequest,
     RevokeProjectMembershipRequest,
     RiskCalculationResponse,
+    RiskContextResponse,
+    RiskItemDecisionResponse,
     RiskItemResponse,
     RunScopeRequest,
     RuntimeConfigResponse,
@@ -2798,13 +2801,32 @@ def create_app(
         )
         return CommercialCostModelResponse.model_validate(result.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/risks/context",
+        response_model=RiskContextResponse,
+    )
+    def get_risk_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        risk_key: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> RiskContextResponse:
+        result = risk_service(session).context(
+            actor=actor,
+            project_id=project_id,
+            selected_risk_key=risk_key,
+            limit=limit,
+        )
+        return RiskContextResponse.model_validate(result.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/risks",
         response_model=RiskItemResponse,
         status_code=status.HTTP_201_CREATED,
     )
     def submit_risk_item(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: SubmitRiskItemRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2815,6 +2837,10 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 draft=payload.draft,
+                expected_document_set_revision_id=(
+                    payload.expected_document_set_revision_id
+                ),
+                risk_model_version_id=payload.risk_model_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2825,8 +2851,8 @@ def create_app(
         response_model=RiskItemResponse,
     )
     def verify_risk_item(
-        project_id: str,
-        risk_item_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        risk_item_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: VerifyRiskItemRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2837,10 +2863,35 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 risk_item_id=risk_item_id,
+                expected_risk_updated_at=payload.expected_risk_updated_at,
+                expected_task_updated_at=payload.expected_task_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
         return RiskItemResponse.model_validate(result.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/risks/{risk_item_id}/decision",
+        response_model=RiskItemDecisionResponse,
+    )
+    def decide_risk_item(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        risk_item_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: DecideRiskItemRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> RiskItemDecisionResponse:
+        with mutation_transaction(session):
+            result = risk_service(session).decide_risk(
+                actor=actor,
+                project_id=project_id,
+                risk_item_id=risk_item_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return RiskItemDecisionResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/risks/calculate",
@@ -2848,7 +2899,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     def calculate_risk_reserve(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: CalculateRiskReserveRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2858,6 +2909,10 @@ def create_app(
             result = risk_service(session).calculate_reserve(
                 actor=actor,
                 project_id=project_id,
+                expected_document_set_revision_id=(
+                    payload.expected_document_set_revision_id
+                ),
+                risk_model_version_id=payload.risk_model_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )

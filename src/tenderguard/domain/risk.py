@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from tenderguard.domain.enums import FindingCode, Severity, VerificationStatus
+from tenderguard.domain.enums import ActorRole, FindingCode, Severity, VerificationStatus
 from tenderguard.domain.models import DomainModel, ValidationFinding
 
 
@@ -31,8 +31,7 @@ class RiskItem(DomainModel):
         return self
 
 
-class RiskPolicy(DomainModel):
-    policy_version: str
+class RiskPolicyBasis(DomainModel):
     method: str
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     correlation_model_version_id: str | None = None
@@ -40,10 +39,88 @@ class RiskPolicy(DomainModel):
     rounding_mode: str
 
     @model_validator(mode="after")
-    def rounding_is_supported(self) -> RiskPolicy:
+    def method_and_rounding_are_supported(self) -> RiskPolicyBasis:
+        if self.method != "THREE_POINT_EXPECTED_VALUE":
+            raise ValueError("Risk policy method is not implemented")
         if self.rounding_mode not in {"ROUND_HALF_UP", "ROUND_HALF_EVEN"}:
             raise ValueError("Risk policy rounding mode is unsupported")
         return self
+
+
+class RiskPolicy(RiskPolicyBasis):
+    policy_version: str
+
+
+class RiskReserveComponentReference(DomainModel):
+    line_id: str = Field(min_length=1, max_length=64)
+    semantic_key: str = Field(min_length=1, max_length=200)
+
+
+class RiskModelDefinition(DomainModel):
+    policy: RiskPolicyBasis
+    risk_keys: tuple[str, ...] = Field(min_length=1, max_length=200)
+    required_risk_keys: tuple[str, ...] = Field(min_length=1, max_length=200)
+    independently_verified_risk_keys: tuple[str, ...] = Field(default=(), max_length=200)
+    evidence_field_names: dict[str, str] = Field(max_length=200)
+    review_role: ActorRole
+    minimum_risk_items: int = Field(ge=1, le=200)
+    reserve_unit: str = Field(min_length=1, max_length=64)
+    reserve_cost_component: RiskReserveComponentReference
+
+    @field_validator(
+        "risk_keys",
+        "required_risk_keys",
+        "independently_verified_risk_keys",
+    )
+    @classmethod
+    def risk_keys_are_normalized_and_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("Risk keys must be unique")
+        if any(
+            not value
+            or value != value.strip()
+            or len(value) > 128
+            or any(character.isspace() for character in value)
+            for value in values
+        ):
+            raise ValueError("Risk key is invalid")
+        return values
+
+    @model_validator(mode="after")
+    def requirements_are_closed_and_reviewed(self) -> RiskModelDefinition:
+        declared = set(self.risk_keys)
+        required = set(self.required_risk_keys)
+        independent = set(self.independently_verified_risk_keys)
+        if not required.issubset(declared):
+            raise ValueError("Required risk keys must be declared")
+        if not independent.issubset(required):
+            raise ValueError("Independent risk keys must be required")
+        if self.minimum_risk_items < len(required):
+            raise ValueError("Risk minimum cannot be below the required risk-key count")
+        if self.minimum_risk_items > len(declared):
+            raise ValueError("Risk minimum cannot exceed the declared risk-key count")
+        if set(self.evidence_field_names) != declared:
+            raise ValueError("Every declared risk key needs exactly one evidence field")
+        fields = tuple(self.evidence_field_names.values())
+        if len(fields) != len(set(fields)) or any(
+            not value
+            or value != value.strip()
+            or len(value) > 200
+            for value in fields
+        ):
+            raise ValueError("Risk evidence field names must be normalized and unique")
+        if self.review_role not in {
+            ActorRole.REVIEWER,
+            ActorRole.TECHNICAL_EXPERT,
+        }:
+            raise ValueError("Risk review role must be REVIEWER or TECHNICAL_EXPERT")
+        return self
+
+    def calculation_policy(self, version_id: str) -> RiskPolicy:
+        return RiskPolicy(
+            **self.policy.model_dump(),
+            policy_version=version_id,
+        )
 
 
 class RiskCalculation(DomainModel):
@@ -68,12 +145,15 @@ def calculate_risk_reserve(
                 message="Risk method is not implemented by the qualified deterministic engine",
             )
         )
-    if any(item.correlated for item in items) and not policy.correlation_model_version_id:
+    if any(item.correlated for item in items):
         findings.append(
             ValidationFinding(
                 code=FindingCode.RISK_MODEL_INCOMPLETE,
                 severity=Severity.BLOCKER,
-                message="Correlated risks require a versioned correlation model",
+                message=(
+                    "Correlated risks require a separately qualified correlation engine; "
+                    "a version identifier alone is not executable evidence"
+                ),
                 entity_ids=tuple(item.risk_id for item in items if item.correlated),
             )
         )
@@ -84,7 +164,11 @@ def calculate_risk_reserve(
     }[policy.rounding_mode]
     quantum = Decimal(1).scaleb(-policy.rounding_scale)
     for item in items:
-        if item.currency != policy.currency or item.status is not VerificationStatus.VERIFIED:
+        if (
+            item.currency != policy.currency
+            or item.status is not VerificationStatus.VERIFIED
+            or item.correlated
+        ):
             findings.append(
                 ValidationFinding(
                     code=FindingCode.RISK_MODEL_INCOMPLETE,

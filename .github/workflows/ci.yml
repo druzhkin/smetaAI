@@ -53,6 +53,7 @@ jobs:
           uv run alembic upgrade head
           uv run pytest \
             tests/integration/test_pricing_integrity_postgresql.py \
+            tests/integration/test_risk_integrity_postgresql.py \
             tests/integration/test_calculation_integrity_postgresql.py \
             tests/integration/test_controlled_version_integrity_postgresql.py \
             tests/integration/test_approval_evidence_postgresql.py \

@@ -114,6 +114,9 @@ from tenderguard.application.projects import (
 )
 from tenderguard.application.risks import (
     RiskCalculationView,
+    RiskContextView,
+    RiskItemDecisionCommand,
+    RiskItemDecisionResult,
     RiskItemDraft,
     RiskItemView,
 )
@@ -643,14 +646,25 @@ class ProjectRecordPageResponse(ProjectRecordPage):
 
 class SubmitRiskItemRequest(ApiModel):
     draft: RiskItemDraft
+    expected_document_set_revision_id: str = Field(min_length=1, max_length=64)
+    risk_model_version_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class VerifyRiskItemRequest(ApiModel):
+    expected_risk_updated_at: datetime
+    expected_task_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class DecideRiskItemRequest(ApiModel):
+    command: RiskItemDecisionCommand
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class CalculateRiskReserveRequest(ApiModel):
+    expected_document_set_revision_id: str = Field(min_length=1, max_length=64)
+    risk_model_version_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -659,6 +673,14 @@ class RiskItemResponse(RiskItemView):
 
 
 class RiskCalculationResponse(RiskCalculationView):
+    pass
+
+
+class RiskContextResponse(RiskContextView):
+    pass
+
+
+class RiskItemDecisionResponse(RiskItemDecisionResult):
     pass
 
 

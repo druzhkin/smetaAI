@@ -363,6 +363,116 @@ export interface ContractDecisionResult {
   decision: ApprovalDecision;
 }
 
+export interface RiskDraft {
+  risk_key: string;
+  description: string;
+  probability: string;
+  impact_min: string;
+  impact_most_likely: string;
+  impact_max: string;
+  currency: string;
+  observation_ids: string[];
+  correlated: boolean;
+  correlation_group: string | null;
+  mitigation_cost_input_id: string | null;
+}
+
+export interface RiskItem {
+  row_id: string;
+  risk_key: string;
+  risk: {
+    risk_id: string;
+    description: string;
+    probability: string;
+    impact_min: string;
+    impact_most_likely: string;
+    impact_max: string;
+    currency: string;
+    observation_ids: string[];
+    status: string;
+    correlated: boolean;
+    correlation_group: string | null;
+    mitigation_cost_input_id: string | null;
+  };
+  independence_source_ids: string[];
+  supersedes_risk_id: string | null;
+  is_current: boolean;
+  created_by: string;
+  verified_by: string | null;
+  risk_model_version_id: string;
+  risk_model_content_hash: string;
+  document_set_revision_id: string;
+  approval_task_id: string;
+  updated_at: string;
+}
+
+export interface RiskEvidenceCandidate {
+  observation: EvidenceObservation;
+  draft: RiskDraft | null;
+  adapter_qualification_id: string | null;
+  adapter_status: string | null;
+  adapter_valid_until: string | null;
+  independence_domain: string | null;
+  eligible: boolean;
+  blockers: string[];
+}
+
+export interface RiskItemReview {
+  item: RiskItem;
+  task_status: string;
+  task_updated_at: string;
+  assigned_role: ActorRole;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface RiskCalculation {
+  calculation_id: string;
+  calculation: {
+    policy_version: string;
+    expected_reserve: string;
+    currency: string;
+    per_risk_expected_impact: Record<string, string>;
+    findings: ValidationFinding[];
+    passed: boolean;
+  };
+  status: string;
+  input_signature: string;
+  output_hash: string;
+  independent_validation_passed: boolean;
+  risk_item_ids: string[];
+  document_set_revision_id: string;
+  supersedes_calculation_id: string | null;
+  created_at: string;
+}
+
+export interface RiskContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  risk_model_version_id: string;
+  risk_model_content_hash: string;
+  risk_keys: string[];
+  required_risk_keys: string[];
+  independently_verified_risk_keys: string[];
+  evidence_field_names: Record<string, string>;
+  review_role: ActorRole;
+  minimum_risk_items: number;
+  selected_risk_key: string;
+  items: RiskItemReview[];
+  evidence_candidates: RiskEvidenceCandidate[];
+  candidates_truncated: boolean;
+  current_calculation: RiskCalculation | null;
+  calculation_blockers: string[];
+  unresolved_conflict_ids: string[];
+}
+
+export interface RiskDecisionResult {
+  item: RiskItem;
+  approval_id: string;
+  decision: "APPROVED" | "REJECTED";
+}
+
 export interface ConflictObservation extends EvidenceObservation {
   adapter_qualification_id: string | null;
   adapter_qualification_status: string | null;

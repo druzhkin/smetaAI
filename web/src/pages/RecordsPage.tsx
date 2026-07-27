@@ -141,13 +141,22 @@ export function RecordsPage({
             (auth.roles.includes("ESTIMATOR") ||
               auth.roles.includes("TECHNICAL_EXPERT") ||
               auth.roles.includes("REVIEWER")) && (
-              <Link
-                className="button button--primary"
-                to={`/projects/${encodeURIComponent(projectId)}/contract/manage`}
-              >
-                <Icon name="shield" size={16} />
-                Условия договора
-              </Link>
+              <>
+                <Link
+                  className="button button--secondary"
+                  to={`/projects/${encodeURIComponent(projectId)}/risk/manage`}
+                >
+                  <Icon name="warning" size={16} />
+                  Риск-резерв
+                </Link>
+                <Link
+                  className="button button--primary"
+                  to={`/projects/${encodeURIComponent(projectId)}/contract/manage`}
+                >
+                  <Icon name="shield" size={16} />
+                  Условия договора
+                </Link>
+              </>
             )}
           {section === "BOQ_SCOPE" &&
             projectQuery.data.state === "BOQ_IN_PROGRESS" &&
@@ -266,6 +275,21 @@ export function RecordsPage({
                     >
                       <Icon name="shield" size={15} />
                       Открыть паспорт
+                    </Link>
+                  );
+                }
+                if (
+                  section === "CONTRACT_RISK" &&
+                  ["RISK_ITEM", "RISK_CALCULATION"].includes(record.kind) &&
+                  record.current === true
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/risk/manage`}
+                    >
+                      <Icon name="warning" size={15} />
+                      Открыть риск-резерв
                     </Link>
                   );
                 }

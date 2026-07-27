@@ -36,7 +36,7 @@ all operational qualification evidence remain open.
 | Mutation and integration delivery | persisted request fingerprint/response; transactional outbox; stable external delivery identity; qualification-bound Ed25519 envelope and exact signed receipt; immutable inbound message plus separate processing generation | replay exact HTTP result or reject conflicting key; retry/dead-letter without rewriting evidence; imported business value remains unverified |
 | Request resource control | streamed body limits plus atomic PostgreSQL actor/organisation quotas for read, mutation and upload categories | `429` on exhausted quota; `503` on store/policy/integrity failure |
 | Contract | non-empty approved term policy; exact current-set direct/leaf evidence; dedicated optimistic four-eyes review; immutable supersession; independently replayed zero/derived cost impact and approval/audit chain | unresolved conflict, stale evidence/rules, task drift, self-review, unexplained zero or finance-model mismatch hard stop |
-| Risk | verified register and version-bound deterministic reserve | missing or stale reserve hard stop |
+| Risk | exact current-set structured evidence, model-owned key set, dedicated four-eyes review, immutable supersession, primary reserve plus separately coded replay, and one declared BoQ binding | missing/stale risk, evidence or approval drift, unsupported correlation, arithmetic mismatch, or component ambiguity hard stop |
 | Approval | configurable tasks and four-eyes rule | approval hard stop |
 | Actuals | revisioned verified facts, fixed-snapshot comparison and reason taxonomy | calibration data quarantine pending owner approval |
 

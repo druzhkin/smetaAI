@@ -89,8 +89,10 @@ The repository currently connects and integration-tests:
 - governed capacity-based logistics, component-based mobilisation, and dated
   contract-finance models with exact observation-value binding, independent
   recalculation, mandatory four-eyes approval, and derived BoQ inputs;
-- revisioned risks, a version-bound deterministic reserve calculation, and
-  binding of the reserve to an explicit BoQ cost component;
+- a governed risk register built only from current server evidence, dedicated
+  four-eyes review, immutable supersession, model-bound deterministic reserve,
+  separately coded independent recalculation, fail-closed correlation handling,
+  and binding to one explicit BoQ cost component;
 - deterministic primary calculation from atomic inputs, a separate
   recalculation path, immutable snapshots, hard stops, four-eyes approvals,
   recursive source-to-document lineage, and integrity checks against the
@@ -291,3 +293,6 @@ Manual correction and four-eyes verification are specified in
 Contract-term evidence, review, cost impact and independent stage gating are
 specified in
 [the governed contract-risk workflow](docs/contract-risk-workflow.md).
+Risk evidence, four-eyes review, reserve calculation and independent stage
+gating are specified in
+[the governed risk-reserve workflow](docs/risk-reserve-workflow.md).

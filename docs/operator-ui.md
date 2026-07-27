@@ -17,7 +17,7 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes sixteen controlled mutation families:
+The current interface includes seventeen controlled mutation families:
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -103,6 +103,16 @@ The current interface includes sixteen controlled mutation families:
   decimal rounding, persists reproducible inputs, and deterministically
   replays them before triangulation. Missing evidence creates
   `RFQ_REQUIRED`/expert review rather than an approximate verified price;
+- an estimator or technical expert may create a risk revision only by choosing
+  an unchanged structured candidate from the current confirmed document set
+  and the currently bound approved risk model. The browser accepts no
+  probability, impact, currency, correlation or mitigation amount. A dedicated
+  model-role reviewer sees the exact immutable item, evidence leaves, task
+  version and all four-eyes blockers; the generic approval command cannot close
+  the task. Once all required risks are independently approved, an eligible
+  user may request reserve calculation without submitting a financial value.
+  The server performs two separate calculations, persists input/output hashes
+  and binds the verified reserve to the model-declared BoQ component;
 - an assigned expert may record an approval, rejection, or
   changes-requested decision for an existing approval task. The operation
   requires the exact task timestamp, a reason, project-scoped evidence
@@ -128,11 +138,11 @@ audit chain. An unsupported file, invalid logical key, stale task or conflict,
 stale document-set candidate, self-confirmation, self-resolution, missing
 role, or unacknowledged command fails closed.
 
-General-purpose workflow transitions and several specialist maintenance
-surfaces are not represented as operator mutations. Production acceptance
-still requires role-based user testing, accessibility verification,
-organisation-owned methodology/catalog qualification, and business-process
-qualification.
+General-purpose workflow transitions, actuals/calibration authoring and several
+specialist maintenance surfaces are not represented as operator mutations.
+Production acceptance still requires role-based user testing, accessibility
+verification, organisation-owned methodology/catalog qualification, and
+business-process qualification.
 
 ## Browser authentication
 

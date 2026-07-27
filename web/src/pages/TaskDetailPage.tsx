@@ -154,7 +154,9 @@ export function TaskDetailPage({
         ? `/projects/${encodeURIComponent(detail.item.project_id)}/passport/manage`
         : detail.item.entity_type === "contract_term"
           ? `/projects/${encodeURIComponent(detail.item.project_id)}/contract/manage`
-          : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
+          : detail.item.entity_type === "risk_item"
+            ? `/projects/${encodeURIComponent(detail.item.project_id)}/risk/manage`
+            : `/projects/${encodeURIComponent(detail.item.project_id)}/${entitySection}`;
   const evidenceIds = parseIdentifierList(draft.evidenceText);
   const validationError = validateDecisionDraft(draft, detail.project.code);
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -357,6 +359,26 @@ export function TaskDetailPage({
             </div>
             <Link className="button button--primary" to={entityHref}>
               Открыть проверку договора
+              <Icon name="arrow" size={15} />
+            </Link>
+          </section>
+        )}
+
+      {detail.item.task_type === "RISK_ITEM_REVIEW" &&
+        detail.item.entity_type === "risk_item" && (
+          <section className="dedicated-workflow-callout">
+            <div>
+              <p className="eyebrow">Специализированный workflow</p>
+              <h2>Сверить параметры риска и доказательную цепочку</h2>
+              <p>
+                Универсальное утверждение запрещено. Экран риска повторно
+                проверяет точное структурированное значение, актуальный комплект
+                документов, утверждённую модель, независимость источников и обе
+                optimistic-версии.
+              </p>
+            </div>
+            <Link className="button button--primary" to={entityHref}>
+              Открыть проверку риска
               <Icon name="arrow" size={15} />
             </Link>
           </section>

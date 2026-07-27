@@ -60,6 +60,7 @@ from tenderguard.domain.release import (
     evaluate_bid_release,
     evaluate_internal_release,
 )
+from tenderguard.domain.risk import RiskItem
 from tenderguard.domain.workflow import validate_transition
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.object_store import ObjectStore, StoredObject
@@ -992,7 +993,7 @@ class ProjectService:
             blockers = (
                 pricing_stage_blockers(self.session, project.id)
                 + contract_stage_blockers(self.session, self.settings, project.id)
-                + risk_stage_blockers(self.session, project.id)
+                + risk_stage_blockers(self.session, self.settings, project.id)
             )
         if blockers:
             raise ValueError(
@@ -1423,7 +1424,14 @@ class ProjectService:
         )
         for risk_item in risk_items:
             risk_item.status = VerificationStatus.IN_REVIEW.value
-            risk_item.payload = {**risk_item.payload, **marker}
+            risk = RiskItem.model_validate(risk_item.payload.get("risk")).model_copy(
+                update={"status": VerificationStatus.IN_REVIEW}
+            )
+            risk_item.payload = {
+                **risk_item.payload,
+                "risk": risk.model_dump(mode="json"),
+                **marker,
+            }
             risk_item.updated_at = invalidated_at
         counts["risk_items"] = len(risk_items)
 
@@ -1436,8 +1444,7 @@ class ProjectService:
             )
         )
         for risk_calculation in risk_calculations:
-            risk_calculation.status = "STALE"
-            risk_calculation.payload = {**risk_calculation.payload, **marker}
+            risk_calculation.is_current = False
         counts["risk_calculations"] = len(risk_calculations)
 
         approval_tasks = list(
@@ -1598,7 +1605,7 @@ class ProjectService:
             + scope_blockers
             + passport_stage_blockers(self.session, self.settings, project.id)
             + scope_stage_blockers(self.session, project.id)
-            + risk_stage_blockers(self.session, project.id)
+            + risk_stage_blockers(self.session, self.settings, project.id)
         )
         bound_versions = list(
             self.session.execute(

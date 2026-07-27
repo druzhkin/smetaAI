@@ -47,6 +47,10 @@ import type {
   ReconciliationOutcome,
   ReleaseAttempt,
   ReleaseGateSet,
+  RiskCalculation,
+  RiskContext,
+  RiskDecisionResult,
+  RiskDraft,
   ScopeRun,
   ScenarioContext,
   ScenarioExecution,
@@ -598,6 +602,99 @@ export function validateContract(
     {
       idempotencyKey: input.idempotencyKey,
       body: { reason: input.reason },
+    },
+  );
+}
+
+export function getRiskContext(
+  context: RequestContext,
+  projectId: string,
+  riskKey?: string,
+  signal?: AbortSignal,
+): Promise<RiskContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/risks/context`,
+    { risk_key: riskKey, limit: 100 },
+    signal,
+  );
+}
+
+export function submitRiskItem(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    draft: RiskDraft;
+    expectedDocumentSetRevisionId: string;
+    riskModelVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<RiskContext["items"][number]["item"]> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/risks`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: input.draft,
+        expected_document_set_revision_id: input.expectedDocumentSetRevisionId,
+        risk_model_version_id: input.riskModelVersionId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function decideRiskItem(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    riskItemId: string;
+    decision: "APPROVED" | "REJECTED";
+    expectedRiskUpdatedAt: string;
+    expectedTaskUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<RiskDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/risks/${encodeURIComponent(input.riskItemId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          decision: input.decision,
+          expected_risk_updated_at: input.expectedRiskUpdatedAt,
+          expected_task_updated_at: input.expectedTaskUpdatedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function calculateRiskReserve(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    expectedDocumentSetRevisionId: string;
+    riskModelVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<RiskCalculation> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/risks/calculate`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        expected_document_set_revision_id: input.expectedDocumentSetRevisionId,
+        risk_model_version_id: input.riskModelVersionId,
+        reason: input.reason,
+      },
     },
   );
 }

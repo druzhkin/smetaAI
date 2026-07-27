@@ -7,6 +7,8 @@ import {
   confirmDocumentSet,
   createBoqLine,
   createProject,
+  calculateRiskReserve,
+  decideRiskItem,
   decideManualEvidence,
   decideWorkItem,
   evaluatePriceItem,
@@ -30,6 +32,7 @@ import {
   recordPriceQuoteFromObservation,
   resolveConflict,
   runScopeCompleteness,
+  submitRiskItem,
   uploadDocument,
   verifyBoqLine,
   type RequestContext,
@@ -246,6 +249,94 @@ describe("controlled mutations", () => {
       resolution_reason: "Native table checked against signed source",
       expected_conflict_updated_at: "2026-07-24T18:00:00Z",
       expected_task_updated_at: "2026-07-24T18:00:01Z",
+    });
+  });
+
+  it("binds risk submission, review, and reserve to exact server context", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const draft = {
+      risk_key: "supplier-delay",
+      description: "Supplier delay",
+      probability: "0.2",
+      impact_min: "10",
+      impact_most_likely: "20",
+      impact_max: "30",
+      currency: "RUB",
+      observation_ids: ["observation-1"],
+      correlated: false,
+      correlation_group: null,
+      mitigation_cost_input_id: null,
+    };
+
+    await submitRiskItem(context, {
+      projectId: "project/1",
+      draft,
+      expectedDocumentSetRevisionId: "document-set-1",
+      riskModelVersionId: "risk-model-1",
+      reason: "Bind exact risk evidence",
+      idempotencyKey: "risk-submit-operation",
+    });
+    await decideRiskItem(context, {
+      projectId: "project/1",
+      riskItemId: "risk/1",
+      decision: "APPROVED",
+      expectedRiskUpdatedAt: "2026-07-26T10:00:00Z",
+      expectedTaskUpdatedAt: "2026-07-26T10:00:01Z",
+      reason: "Independently verify the risk evidence",
+      idempotencyKey: "risk-review-operation",
+    });
+    await calculateRiskReserve(context, {
+      projectId: "project/1",
+      expectedDocumentSetRevisionId: "document-set-1",
+      riskModelVersionId: "risk-model-1",
+      reason: "Run deterministic independent reserve replay",
+      idempotencyKey: "risk-calculate-operation",
+    });
+
+    const [submitUrl, submitInit] = fetchMock.mock.calls[0] as [
+      URL,
+      RequestInit,
+    ];
+    expect(submitUrl.pathname).toBe("/v1/projects/project%2F1/risks");
+    expect(JSON.parse(String(submitInit.body))).toEqual({
+      draft,
+      expected_document_set_revision_id: "document-set-1",
+      risk_model_version_id: "risk-model-1",
+      reason: "Bind exact risk evidence",
+    });
+    const [reviewUrl, reviewInit] = fetchMock.mock.calls[1] as [
+      URL,
+      RequestInit,
+    ];
+    expect(reviewUrl.pathname).toBe(
+      "/v1/projects/project%2F1/risks/risk%2F1/decision",
+    );
+    expect(JSON.parse(String(reviewInit.body))).toEqual({
+      command: {
+        decision: "APPROVED",
+        expected_risk_updated_at: "2026-07-26T10:00:00Z",
+        expected_task_updated_at: "2026-07-26T10:00:01Z",
+      },
+      reason: "Independently verify the risk evidence",
+    });
+    const [calculationUrl, calculationInit] = fetchMock.mock.calls[2] as [
+      URL,
+      RequestInit,
+    ];
+    expect(calculationUrl.pathname).toBe(
+      "/v1/projects/project%2F1/risks/calculate",
+    );
+    expect(JSON.parse(String(calculationInit.body))).toEqual({
+      expected_document_set_revision_id: "document-set-1",
+      risk_model_version_id: "risk-model-1",
+      reason: "Run deterministic independent reserve replay",
     });
   });
 

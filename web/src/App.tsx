@@ -41,6 +41,9 @@ const PassportPage = lazy(async () => ({
 const ContractPage = lazy(async () => ({
   default: (await import("./pages/ContractPage")).ContractPage,
 }));
+const RiskPage = lazy(async () => ({
+  default: (await import("./pages/RiskPage")).RiskPage,
+}));
 const BoqAuthoringPage = lazy(async () => ({
   default: (await import("./pages/BoqAuthoringPage")).BoqAuthoringPage,
 }));
@@ -159,6 +162,14 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
         parts[3] === "manage"
       ) {
         page = <ContractPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "risk" &&
+        parts[3] === "manage"
+      ) {
+        page = <RiskPage config={config} projectId={projectId} />;
       } else if (
         projectId !== null &&
         projectId !== "" &&
