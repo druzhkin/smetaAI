@@ -45,6 +45,7 @@ from tenderguard.integrations.fgiscs_public import (
     FgisCsPublicApi,
     FgisCsPublicApiError,
 )
+from tenderguard.integrations.public_market import PublicMarketPageClient
 
 
 def doctor() -> int:
@@ -917,6 +918,114 @@ def _emit_boq_fgis_history_error(
     )
 
 
+def research_boq_market(
+    *,
+    research_dir: Path,
+    profile_path: Path,
+    output_dir: Path,
+) -> int:
+    from tenderguard.application.boq_market_research import (
+        BoqMarketResearchProfile,
+        run_boq_market_research,
+    )
+    from tenderguard.application.free_source_research import (
+        BoqFreeSourceResearchResult,
+        PreparedBoqFreeSourceResearch,
+    )
+
+    try:
+        manifest_path = research_dir / "manifest.json"
+        if (
+            not research_dir.is_dir()
+            or not manifest_path.is_file()
+            or manifest_path.stat().st_size > 50_000_000
+            or not profile_path.is_file()
+            or profile_path.stat().st_size > 5_000_000
+        ):
+            raise ValueError("BoQ market research input is missing or too large")
+        research_manifest_bytes = manifest_path.read_bytes()
+        research_result = BoqFreeSourceResearchResult.model_validate_json(research_manifest_bytes)
+        research_raw: list[tuple[str, bytes]] = []
+        for artifact in research_result.raw_artifacts:
+            source_path = research_dir / "raw" / f"{artifact.sha256}.json"
+            if not source_path.is_file() or source_path.stat().st_size > 2_000_000:
+                raise ValueError("BoQ market research evidence is missing or too large")
+            research_raw.append((artifact.sha256, source_path.read_bytes()))
+        research = PreparedBoqFreeSourceResearch(
+            result=research_result,
+            raw_responses=tuple(research_raw),
+        )
+        profile_payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        if not isinstance(profile_payload, dict):
+            raise ValueError("BoQ market research profile must be a JSON object")
+        profile = BoqMarketResearchProfile.model_validate(profile_payload)
+        client = PublicMarketPageClient()
+        prepared = run_boq_market_research(
+            research=research,
+            research_manifest_sha256=hashlib.sha256(research_manifest_bytes).hexdigest(),
+            profile=profile,
+            acquire_page=client.acquire_page,
+        )
+
+        resolved_output = output_dir.resolve()
+        if resolved_output == Path.cwd().resolve() or resolved_output.parent == resolved_output:
+            raise ValueError("BoQ market research output directory is too broad")
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        if resolved_output.exists():
+            raise FileExistsError(resolved_output)
+        staging = resolved_output.parent / f".{resolved_output.name}.staging-{uuid4().hex}"
+        staging.mkdir()
+        raw_dir = staging / "raw"
+        try:
+            raw_dir.mkdir()
+            for relative_name, content in prepared.raw_files:
+                _write_bytes_exclusive(staging / relative_name, content)
+            _write_bytes_exclusive(
+                staging / "manifest.json",
+                canonical_json(prepared.manifest) + b"\n",
+            )
+            staging.rename(resolved_output)
+        except Exception:
+            for relative_name, _ in prepared.raw_files:
+                (staging / relative_name).unlink(missing_ok=True)
+            if raw_dir.exists():
+                raw_dir.rmdir()
+            (staging / "manifest.json").unlink(missing_ok=True)
+            staging.rmdir()
+            raise
+    except FileExistsError:
+        _emit_boq_market_error("BOQ_MARKET_RESEARCH_OUTPUT_ALREADY_EXISTS")
+        return 2
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
+        _emit_boq_market_error("BOQ_MARKET_RESEARCH_BLOCKED")
+        return 2
+    print(prepared.manifest.model_dump_json(indent=2))
+    return 0
+
+
+def _emit_boq_market_error(code: str) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "package_published": False,
+                "ready_for_pricing": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def import_governed_boq_xlsx(
     *,
     project_id: str,
@@ -1327,6 +1436,16 @@ def main() -> None:
     fgis_history_parser.add_argument("--research-dir", required=True, type=Path)
     fgis_history_parser.add_argument("--profile", required=True, type=Path)
     fgis_history_parser.add_argument("--output-dir", required=True, type=Path)
+    market_research_parser = subcommands.add_parser(
+        "research-boq-market",
+        help=(
+            "Collect replayable BLOCKED Schema.org market offer candidates "
+            "bound to a BoQ research package"
+        ),
+    )
+    market_research_parser.add_argument("--research-dir", required=True, type=Path)
+    market_research_parser.add_argument("--profile", required=True, type=Path)
+    market_research_parser.add_argument("--output-dir", required=True, type=Path)
     fgiscs_import_parser = subcommands.add_parser(
         "import-governed-fgiscs-material",
         help="Retain and replay one policy-bound UNVERIFIED FGIS CS material response",
@@ -1416,6 +1535,14 @@ def main() -> None:
     if arguments.command == "research-boq-fgis-history":
         raise SystemExit(
             research_boq_fgis_history(
+                research_dir=arguments.research_dir,
+                profile_path=arguments.profile,
+                output_dir=arguments.output_dir,
+            )
+        )
+    if arguments.command == "research-boq-market":
+        raise SystemExit(
+            research_boq_market(
                 research_dir=arguments.research_dir,
                 profile_path=arguments.profile,
                 output_dir=arguments.output_dir,

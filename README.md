@@ -198,6 +198,15 @@ The repository currently connects and integration-tests:
   manifest. A portal-level `400`, `404` or `422` blocks that exact observation;
   authentication, throttling, transport and server failures abort publication.
   Published fields remain diagnostic evidence and never become a bid price;
+- hash-bound public-market research for every material BoQ row. An explicit
+  profile either selects exact HTTPS product/catalog pages or records that no
+  usable public page was found. The collector pins DNS-resolved public
+  addresses, refuses redirects and private networks, accepts bounded HTML only,
+  and extracts decimal offers solely from scoped Schema.org JSON-LD or
+  microdata. Original pages, HTTP metadata and SHA-256 identities are retained
+  and replayed without network access. Search snippets, visible price-like
+  prose, ambiguous multi-offer markup and missing commercial terms never become
+  price evidence; every result remains diagnostic and blocked for bid use;
 - a fail-closed post-row BoQ pricing matrix that places the exact BoQ/TZ,
   catalog, won-tender, FGIS CS and market source names side by side, preserves
   direct source/document locators and commercial bases, and withholds the
