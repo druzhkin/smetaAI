@@ -7,6 +7,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -46,6 +47,9 @@ from tenderguard.integrations.fgiscs_public import (
     FgisCsPublicApiError,
 )
 from tenderguard.integrations.public_market import PublicMarketPageClient
+
+if TYPE_CHECKING:
+    from tenderguard.application.boq_market_research import PreparedBoqMarketResearchPackage
 
 
 def doctor() -> int:
@@ -1026,6 +1030,220 @@ def _emit_boq_market_error(code: str) -> None:
     )
 
 
+def assess_boq_market(*, market_dir: Path, output_dir: Path) -> int:
+    from tenderguard.application.boq_market_assessment import (
+        build_boq_market_technical_assessment,
+        verify_boq_market_technical_assessment,
+    )
+
+    try:
+        market, market_manifest_bytes = _load_prepared_boq_market(market_dir)
+        source_manifest_sha256 = hashlib.sha256(market_manifest_bytes).hexdigest()
+        assessment = build_boq_market_technical_assessment(
+            market=market,
+            source_market_manifest_sha256=source_manifest_sha256,
+        )
+        verify_boq_market_technical_assessment(
+            market=market,
+            source_market_manifest_sha256=source_manifest_sha256,
+            assessment=assessment,
+        )
+        resolved_output = output_dir.resolve()
+        if resolved_output == Path.cwd().resolve() or resolved_output.parent == resolved_output:
+            raise ValueError("BoQ market assessment output directory is too broad")
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        if resolved_output.exists():
+            raise FileExistsError(resolved_output)
+        staging = resolved_output.parent / f".{resolved_output.name}.staging-{uuid4().hex}"
+        staging.mkdir()
+        try:
+            _write_bytes_exclusive(
+                staging / "manifest.json",
+                canonical_json(assessment) + b"\n",
+            )
+            staging.rename(resolved_output)
+        except Exception:
+            (staging / "manifest.json").unlink(missing_ok=True)
+            staging.rmdir()
+            raise
+    except FileExistsError:
+        _emit_boq_market_assessment_error("BOQ_MARKET_ASSESSMENT_OUTPUT_ALREADY_EXISTS")
+        return 2
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
+        _emit_boq_market_assessment_error("BOQ_MARKET_ASSESSMENT_BLOCKED")
+        return 2
+    print(assessment.model_dump_json(indent=2))
+    return 0
+
+
+def _load_prepared_boq_market(
+    market_dir: Path,
+) -> tuple[PreparedBoqMarketResearchPackage, bytes]:
+    from tenderguard.application.boq_market_research import (
+        BoqMarketResearchPackage,
+        PreparedBoqMarketResearchPackage,
+        verify_boq_market_research_package,
+    )
+
+    manifest_path = market_dir / "manifest.json"
+    if (
+        not market_dir.is_dir()
+        or not manifest_path.is_file()
+        or manifest_path.stat().st_size > 50_000_000
+    ):
+        raise ValueError("BoQ market package is missing or too large")
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = BoqMarketResearchPackage.model_validate_json(manifest_bytes)
+    raw_files: list[tuple[str, bytes]] = []
+    for reference in manifest.raw_responses:
+        source_path = market_dir / reference.file_name
+        if not source_path.is_file() or source_path.stat().st_size > 2_000_000:
+            raise ValueError("BoQ market raw evidence is missing or too large")
+        raw_files.append((reference.file_name, source_path.read_bytes()))
+    prepared = PreparedBoqMarketResearchPackage(
+        manifest=manifest,
+        raw_files=tuple(raw_files),
+    )
+    verify_boq_market_research_package(prepared)
+    return prepared, manifest_bytes
+
+
+def _emit_boq_market_assessment_error(code: str) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "package_published": False,
+                "ready_for_nomenclature": False,
+                "ready_for_normalization": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def export_boq_market_assessment(
+    *,
+    market_dir: Path,
+    assessment_dir: Path,
+    output_dir: Path,
+) -> int:
+    from tenderguard.application.boq_market_assessment import (
+        DOCX_MEDIA_TYPE,
+        BoqMarketAssessmentArtifact,
+        BoqMarketAssessmentReportManifest,
+        BoqMarketTechnicalAssessmentPackage,
+        verify_boq_market_technical_assessment,
+    )
+    from tenderguard.domain.common import content_hash
+    from tenderguard.infrastructure.boq_market_assessment_export import (
+        build_boq_market_assessment_docx,
+    )
+
+    try:
+        market, market_manifest_bytes = _load_prepared_boq_market(market_dir)
+        market_manifest_sha256 = hashlib.sha256(market_manifest_bytes).hexdigest()
+        assessment_path = assessment_dir / "manifest.json"
+        if (
+            not assessment_dir.is_dir()
+            or not assessment_path.is_file()
+            or assessment_path.stat().st_size > 50_000_000
+        ):
+            raise ValueError("BoQ market assessment package is missing or too large")
+        assessment_bytes = assessment_path.read_bytes()
+        assessment = BoqMarketTechnicalAssessmentPackage.model_validate_json(assessment_bytes)
+        verify_boq_market_technical_assessment(
+            market=market,
+            source_market_manifest_sha256=market_manifest_sha256,
+            assessment=assessment,
+        )
+        document_content = build_boq_market_assessment_docx(assessment)
+        safe_project_code = re.sub(
+            r"[^\w.-]+",
+            "_",
+            assessment.project_code,
+            flags=re.UNICODE,
+        ).strip("._")
+        if not safe_project_code:
+            safe_project_code = "project"
+        document_name = f"{safe_project_code[:80]}_рыночная_проверка_BLOCKED.docx"
+        manifest = BoqMarketAssessmentReportManifest(
+            project_code=assessment.project_code,
+            source_market_manifest_sha256=market_manifest_sha256,
+            source_assessment_manifest_sha256=hashlib.sha256(assessment_bytes).hexdigest(),
+            source_assessment_content_hash=content_hash(assessment),
+            generated_at=assessment.completed_at,
+            artifacts=(
+                BoqMarketAssessmentArtifact(
+                    filename=document_name,
+                    media_type=DOCX_MEDIA_TYPE,
+                    sha256=hashlib.sha256(document_content).hexdigest(),
+                    size_bytes=len(document_content),
+                ),
+            ),
+        )
+        resolved_output = output_dir.resolve()
+        if resolved_output == Path.cwd().resolve() or resolved_output.parent == resolved_output:
+            raise ValueError("BoQ market assessment report output directory is too broad")
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        if resolved_output.exists():
+            raise FileExistsError(resolved_output)
+        staging = resolved_output.parent / f".{resolved_output.name}.staging-{uuid4().hex}"
+        staging.mkdir()
+        try:
+            _write_bytes_exclusive(staging / document_name, document_content)
+            _write_text_exclusive(staging / "manifest.json", manifest.model_dump_json(indent=2))
+            staging.rename(resolved_output)
+        except Exception:
+            (staging / document_name).unlink(missing_ok=True)
+            (staging / "manifest.json").unlink(missing_ok=True)
+            staging.rmdir()
+            raise
+    except FileExistsError:
+        _emit_boq_market_assessment_report_error(
+            "BOQ_MARKET_ASSESSMENT_REPORT_OUTPUT_ALREADY_EXISTS"
+        )
+        return 2
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
+        _emit_boq_market_assessment_report_error("BOQ_MARKET_ASSESSMENT_REPORT_BLOCKED")
+        return 2
+    print(manifest.model_dump_json(indent=2))
+    return 0
+
+
+def _emit_boq_market_assessment_report_error(code: str) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "artifacts_created": False,
+                "final_estimate_available": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def import_governed_boq_xlsx(
     *,
     project_id: str,
@@ -1446,6 +1664,22 @@ def main() -> None:
     market_research_parser.add_argument("--research-dir", required=True, type=Path)
     market_research_parser.add_argument("--profile", required=True, type=Path)
     market_research_parser.add_argument("--output-dir", required=True, type=Path)
+    market_assessment_parser = subcommands.add_parser(
+        "assess-boq-market",
+        help=(
+            "Build a replayable BLOCKED literal technical/commercial assessment "
+            "for every retained market offer"
+        ),
+    )
+    market_assessment_parser.add_argument("--market-dir", required=True, type=Path)
+    market_assessment_parser.add_argument("--output-dir", required=True, type=Path)
+    market_assessment_report_parser = subcommands.add_parser(
+        "export-boq-market-assessment",
+        help="Export a verified BLOCKED Word report from a replayed market assessment",
+    )
+    market_assessment_report_parser.add_argument("--market-dir", required=True, type=Path)
+    market_assessment_report_parser.add_argument("--assessment-dir", required=True, type=Path)
+    market_assessment_report_parser.add_argument("--output-dir", required=True, type=Path)
     fgiscs_import_parser = subcommands.add_parser(
         "import-governed-fgiscs-material",
         help="Retain and replay one policy-bound UNVERIFIED FGIS CS material response",
@@ -1545,6 +1779,21 @@ def main() -> None:
             research_boq_market(
                 research_dir=arguments.research_dir,
                 profile_path=arguments.profile,
+                output_dir=arguments.output_dir,
+            )
+        )
+    if arguments.command == "assess-boq-market":
+        raise SystemExit(
+            assess_boq_market(
+                market_dir=arguments.market_dir,
+                output_dir=arguments.output_dir,
+            )
+        )
+    if arguments.command == "export-boq-market-assessment":
+        raise SystemExit(
+            export_boq_market_assessment(
+                market_dir=arguments.market_dir,
+                assessment_dir=arguments.assessment_dir,
                 output_dir=arguments.output_dir,
             )
         )

@@ -207,6 +207,14 @@ The repository currently connects and integration-tests:
   and replayed without network access. Search snippets, visible price-like
   prose, ambiguous multi-offer markup and missing commercial terms never become
   price evidence; every result remains diagnostic and blocked for bid use;
+- deterministic post-research literal assessment that preserves the exact BoQ
+  and seller names, extracts only explicit dimensions, measurements, classes
+  and designations with source offsets, reports missing and variant literals,
+  and never treats text overlap as technical equivalence. Every retained offer
+  also receives an explicit list of missing commercial terms. The assessment
+  replays the complete raw market package before publication, and a separate
+  deterministic Word report exposes all raw amounts, exact page URLs and hard
+  stops while stating that no normalized price or project estimate exists;
 - a fail-closed post-row BoQ pricing matrix that places the exact BoQ/TZ,
   catalog, won-tender, FGIS CS and market source names side by side, preserves
   direct source/document locators and commercial bases, and withholds the

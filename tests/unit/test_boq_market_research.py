@@ -10,6 +10,12 @@ from urllib.parse import urlencode
 import pytest
 
 from tenderguard import cli
+from tenderguard.application.boq_market_assessment import (
+    BoqMarketAssessmentReportManifest,
+    BoqMarketTechnicalAssessmentPackage,
+    build_boq_market_technical_assessment,
+    verify_boq_market_technical_assessment,
+)
 from tenderguard.application.boq_market_research import (
     BoqMarketLineSelection,
     BoqMarketResearchPackage,
@@ -31,6 +37,10 @@ from tenderguard.domain.boq_spreadsheet import (
 )
 from tenderguard.domain.common import canonical_json, content_hash
 from tenderguard.domain.enums import PriceSourceType
+from tenderguard.infrastructure.boq_market_assessment_export import (
+    build_boq_market_assessment_docx,
+    verify_boq_market_assessment_docx,
+)
 from tenderguard.integrations.fgiscs_public import (
     FGIS_CS_ORIGIN,
     FGIS_CS_PUBLIC_SCHEMA_VERSION,
@@ -360,3 +370,196 @@ def test_market_cli_publishes_atomically_and_cleans_failed_write(
     assert json.loads(capsys.readouterr().out)["package_published"] is False
     assert not failed_output.exists()
     assert not tuple(tmp_path.glob(".failed-market.staging-*"))
+
+
+def test_market_technical_assessment_is_reproducible_and_never_normalizes() -> None:
+    research = _research()
+    market = run_boq_market_research(
+        research=research,
+        research_manifest_sha256=_RESEARCH_MANIFEST_SHA256,
+        profile=_profile(research),
+        acquire_page=_acquire_market,
+        completed_at=datetime(2026, 8, 3, 12, 0, tzinfo=UTC),
+    )
+    assessment = build_boq_market_technical_assessment(
+        market=market,
+        source_market_manifest_sha256="a" * 64,
+        completed_at=datetime(2026, 8, 3, 13, 0, tzinfo=UTC),
+    )
+
+    assert assessment.status == "BLOCKED"
+    assert not assessment.ready_for_nomenclature
+    assert not assessment.ready_for_normalization
+    cable, pipe = assessment.lines
+    assert len(cable.source_observations) == 2
+    assert cable.source_observations[1].request.source_uri == _BROKEN_URI
+    assert cable.source_observations[1].acquisition_error_code is not None
+    assert len(cable.candidate_assessments) == 1
+    candidate = cable.candidate_assessments[0]
+    assert candidate.literal_comparison.name_relation == "EXACT_LITERAL_NAME"
+    assert not candidate.literal_comparison.establishes_technical_equivalence
+    assert "STRUCTURED_SOURCE_UNIT_MISSING" in candidate.commercial_gaps
+    assert "VAT_BASIS_NOT_STRUCTURED" in candidate.commercial_gaps
+    assert not candidate.ready_for_normalization
+    assert not pipe.candidate_assessments
+    assert "STRUCTURED_MARKET_OFFER_NOT_FOUND" in pipe.blockers
+    assert (
+        verify_boq_market_technical_assessment(
+            market=market,
+            source_market_manifest_sha256="a" * 64,
+            assessment=assessment,
+        )
+        == assessment
+    )
+
+    forged = assessment.model_dump(mode="python")
+    forged["lines"][0]["candidate_assessments"][0]["literal_comparison"][
+        "establishes_technical_equivalence"
+    ] = True
+    with pytest.raises(ValueError, match="cannot establish"):
+        BoqMarketTechnicalAssessmentPackage.model_validate(forged)
+
+    omitted_source = assessment.model_dump(mode="python")
+    omitted_source["lines"][0]["source_observations"] = omitted_source["lines"][0][
+        "source_observations"
+    ][:1]
+    with pytest.raises(ValueError, match="do not reproduce"):
+        BoqMarketTechnicalAssessmentPackage.model_validate(omitted_source)
+
+
+def test_market_assessment_word_report_is_deterministic_and_retains_evidence() -> None:
+    research = _research()
+    market = run_boq_market_research(
+        research=research,
+        research_manifest_sha256=_RESEARCH_MANIFEST_SHA256,
+        profile=_profile(research),
+        acquire_page=_acquire_market,
+        completed_at=datetime(2026, 8, 3, 12, 0, tzinfo=UTC),
+    )
+    assessment = build_boq_market_technical_assessment(
+        market=market,
+        source_market_manifest_sha256="a" * 64,
+        completed_at=datetime(2026, 8, 3, 13, 0, tzinfo=UTC),
+    )
+
+    content = build_boq_market_assessment_docx(assessment)
+
+    assert build_boq_market_assessment_docx(assessment) == content
+    verify_boq_market_assessment_docx(content, assessment)
+    assert b'TargetMode="External"' not in content
+
+
+def test_market_technical_assessment_rejects_source_manifest_substitution() -> None:
+    research = _research()
+    market = run_boq_market_research(
+        research=research,
+        research_manifest_sha256=_RESEARCH_MANIFEST_SHA256,
+        profile=_profile(research),
+        acquire_page=_acquire_market,
+    )
+    assessment = build_boq_market_technical_assessment(
+        market=market,
+        source_market_manifest_sha256="b" * 64,
+    )
+
+    with pytest.raises(ValueError, match="does not reproduce"):
+        verify_boq_market_technical_assessment(
+            market=market,
+            source_market_manifest_sha256="c" * 64,
+            assessment=assessment,
+        )
+
+
+def test_market_assessment_cli_verifies_raw_source_and_publishes_atomically(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    research = _research()
+    market = run_boq_market_research(
+        research=research,
+        research_manifest_sha256=_RESEARCH_MANIFEST_SHA256,
+        profile=_profile(research),
+        acquire_page=_acquire_market,
+        completed_at=datetime(2026, 8, 3, 12, 0, tzinfo=UTC),
+    )
+    market_dir = tmp_path / "market-source"
+    market_dir.mkdir()
+    market_manifest = canonical_json(market.manifest) + b"\n"
+    (market_dir / "manifest.json").write_bytes(market_manifest)
+    for relative_name, content in market.raw_files:
+        destination = market_dir / relative_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+
+    output_dir = tmp_path / "assessment"
+    assert cli.assess_boq_market(market_dir=market_dir, output_dir=output_dir) == 0
+    manifest = BoqMarketTechnicalAssessmentPackage.model_validate_json(
+        (output_dir / "manifest.json").read_bytes()
+    )
+    assert manifest.source_market_manifest_sha256 == hashlib.sha256(
+        market_manifest
+    ).hexdigest()
+    assert manifest.status == "BLOCKED"
+    assert json.loads(capsys.readouterr().out)["ready_for_normalization"] is False
+
+    assert cli.assess_boq_market(market_dir=market_dir, output_dir=output_dir) == 2
+    assert json.loads(capsys.readouterr().out)["code"] == (
+        "BOQ_MARKET_ASSESSMENT_OUTPUT_ALREADY_EXISTS"
+    )
+
+    report_dir = tmp_path / "assessment-report"
+    assert (
+        cli.export_boq_market_assessment(
+            market_dir=market_dir,
+            assessment_dir=output_dir,
+            output_dir=report_dir,
+        )
+        == 0
+    )
+    report_manifest = BoqMarketAssessmentReportManifest.model_validate_json(
+        (report_dir / "manifest.json").read_bytes()
+    )
+    assert report_manifest.status == "BLOCKED"
+    assert not report_manifest.final_estimate_available
+    report_artifact = report_manifest.artifacts[0]
+    assert hashlib.sha256((report_dir / report_artifact.filename).read_bytes()).hexdigest() == (
+        report_artifact.sha256
+    )
+    assert json.loads(capsys.readouterr().out)["final_estimate_available"] is False
+
+    assert (
+        cli.export_boq_market_assessment(
+            market_dir=market_dir,
+            assessment_dir=output_dir,
+            output_dir=report_dir,
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["code"] == (
+        "BOQ_MARKET_ASSESSMENT_REPORT_OUTPUT_ALREADY_EXISTS"
+    )
+
+    forged_dir = tmp_path / "forged-assessment"
+    forged_dir.mkdir()
+    forged = manifest.model_copy(update={"project_code": "SUBSTITUTED"})
+    (forged_dir / "manifest.json").write_bytes(canonical_json(forged) + b"\n")
+    failed_report = tmp_path / "forged-report"
+    assert (
+        cli.export_boq_market_assessment(
+            market_dir=market_dir,
+            assessment_dir=forged_dir,
+            output_dir=failed_report,
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["code"] == (
+        "BOQ_MARKET_ASSESSMENT_REPORT_BLOCKED"
+    )
+    assert not failed_report.exists()
+
+    raw_path = market_dir / market.raw_files[0][0]
+    raw_path.write_bytes(raw_path.read_bytes() + b" ")
+    failed_output = tmp_path / "assessment-corrupt"
+    assert cli.assess_boq_market(market_dir=market_dir, output_dir=failed_output) == 2
+    assert json.loads(capsys.readouterr().out)["code"] == "BOQ_MARKET_ASSESSMENT_BLOCKED"
+    assert not failed_output.exists()
