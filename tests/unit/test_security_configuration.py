@@ -535,7 +535,12 @@ def test_runtime_config_exposes_only_public_browser_authentication_settings(
             "max_upload_bytes": 524288000,
         }
         assert "private-test-value" not in response.text
-        assert "https://identity.example" in response.headers["content-security-policy"]
+        csp_directives = {
+            parts[0]: parts[1:]
+            for directive in response.headers["content-security-policy"].split(";")
+            if (parts := directive.strip().split())
+        }
+        assert csp_directives["connect-src"] == ["'self'", "https://identity.example"]
     engine.dispose()
 
 
