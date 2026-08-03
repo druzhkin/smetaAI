@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   evaluatePriceItem,
+  getFgisCsAcquisitions,
   getPriceItemContext,
   getPriceQuoteCandidate,
   getProject,
@@ -180,10 +181,32 @@ function PriceQuoteCard({
           </dd>
         </div>
         <div>
+          <dt>Источник / запись</dt>
+          <dd>
+            {quote.quote.source_reference.display_name} ·{" "}
+            {quote.quote.source_reference.source_record_id}
+          </dd>
+        </div>
+        <div>
+          <dt>Наименование у источника</dt>
+          <dd>{quote.quote.source_reference.source_item_name}</dd>
+        </div>
+        <div>
           <dt>Исходное наблюдение</dt>
           <dd>{quote.quote.source_observation_id}</dd>
         </div>
       </dl>
+      {quote.quote.source_reference.source_uri !== null && (
+        <a
+          className="source-price-card__link"
+          href={quote.quote.source_reference.source_uri}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Открыть первоисточник
+          <Icon name="arrow" size={14} />
+        </a>
+      )}
       {quote.normalized_prices.map((normalized) => (
         <div className="normalized-price" key={normalized.normalized_price_id}>
           <span>Сопоставимая цена</span>
@@ -253,6 +276,11 @@ export function PriceItemPage({
     queryKey: ["price-item-context", projectId, itemId],
     queryFn: ({ signal }) =>
       getPriceItemContext(context, projectId, itemId, signal),
+  });
+  const fgisQuery = useQuery({
+    queryKey: ["fgiscs-acquisitions", projectId, itemId],
+    queryFn: ({ signal }) =>
+      getFgisCsAcquisitions(context, projectId, itemId, signal),
   });
   const candidateMutation = useMutation({
     mutationFn: (sourceObservationId: string) =>
@@ -596,15 +624,127 @@ export function PriceItemPage({
         />
       </section>
 
+      <section className="price-workflow-section">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">ФГИС ЦС · первичное доказательство</p>
+            <h2>Сверка наименования ВОР с официальной записью</h2>
+            <p>
+              Здесь показан исходный текст строки и точное наименование из
+              сохранённого ответа ФГИС ЦС. Значения не участвуют в расчёте, пока
+              не подтверждены сопоставление и коммерческая база.
+            </p>
+          </div>
+          <span className="section-count">
+            {fgisQuery.data?.acquisitions.length ?? 0}
+          </span>
+        </div>
+        {fgisQuery.isPending && (
+          <LoadingBlock label="Проверка сохранённых ответов ФГИС ЦС" />
+        )}
+        {fgisQuery.isError && (
+          <ErrorBlock
+            error={fgisQuery.error}
+            onRetry={() => void fgisQuery.refetch()}
+          />
+        )}
+        {fgisQuery.data !== undefined && (
+          <>
+            <p className="permission-note">{fgisQuery.data.release_warning}</p>
+            {fgisQuery.data.acquisitions.map((acquisition) => {
+              const sourcePrice = acquisition.artifact.result.price;
+              return (
+                <article
+                  className="price-quote-card"
+                  key={acquisition.acquisition_id}
+                >
+                  <div className="price-quote-card__header">
+                    <div>
+                      <span>{acquisition.artifact.result.period.name}</span>
+                      <h3>
+                        {sourcePrice?.resource_code ??
+                          acquisition.artifact.result.requested_resource_code}
+                      </h3>
+                      <p>
+                        {acquisition.artifact.result.subject.name} ·{" "}
+                        {acquisition.artifact.result.price_zone.name}
+                      </p>
+                    </div>
+                    <StatusPill value="BLOCKED" compact />
+                  </div>
+                  <dl className="price-quote-facts">
+                    <div>
+                      <dt>Наименование в ВОР</dt>
+                      <dd>{acquisition.boq_item_name}</dd>
+                    </div>
+                    <div>
+                      <dt>Наименование в ФГИС ЦС</dt>
+                      <dd>
+                        {sourcePrice?.source_item_name ?? "Запись не найдена"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Единица ВОР / ФГИС ЦС</dt>
+                      <dd>
+                        {acquisition.boq_unit} / {sourcePrice?.unit ?? "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Сырые значения источника</dt>
+                      <dd>
+                        {sourcePrice === null
+                          ? "Нет точной записи"
+                          : Object.entries(sourcePrice.source_amount_literals)
+                              .map(([name, value]) => `${name}: ${value}`)
+                              .join(" · ")}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Получено / SHA-256</dt>
+                      <dd>
+                        {acquisition.artifact.result.retrieved_at} ·{" "}
+                        <code>{acquisition.artifact_object_hash}</code>
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="technical-attributes">
+                    <span>Почему цена заблокирована</span>
+                    {acquisition.pricing_blockers.map((blocker) => (
+                      <code key={blocker}>{blocker}</code>
+                    ))}
+                  </div>
+                  <a
+                    className="source-price-card__link"
+                    href={acquisition.artifact.result.public_page_uri}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    Открыть официальный источник
+                    <Icon name="arrow" size={14} />
+                  </a>
+                </article>
+              );
+            })}
+            {fgisQuery.data.acquisitions.length === 0 && (
+              <p className="permission-note">
+                Для этой строки ещё нет сохранённого и воспроизводимого ответа
+                ФГИС ЦС.
+              </p>
+            )}
+          </>
+        )}
+      </section>
+
       {priceContext.current_decision !== null && (
         <section className="price-decision-banner">
           <div>
             <p className="eyebrow">Текущее решение</p>
             <h2>{priceContext.current_decision.status}</h2>
             <p>
-              {priceContext.current_decision.amount_per_unit === null ||
+              {priceContext.current_decision.status !== "VERIFIED" ||
+              priceContext.current_decision.amount_per_unit === null ||
               priceContext.current_decision.currency === null
-                ? "Подтверждённая сопоставимая сумма пока отсутствует."
+                ? "Цена скрыта до завершения всех обязательных источников и согласований."
                 : `${formatMoney(
                     priceContext.current_decision.amount_per_unit,
                     priceContext.current_decision.currency,
@@ -717,6 +857,25 @@ export function PriceItemPage({
                 <dt>Поставщик</dt>
                 <dd>
                   {candidateMutation.data.draft.supplier_id ?? "не указан"}
+                </dd>
+              </div>
+              <div>
+                <dt>Источник / запись</dt>
+                <dd>
+                  {candidateMutation.data.draft.source_reference.display_name} ·{" "}
+                  {
+                    candidateMutation.data.draft.source_reference
+                      .source_record_id
+                  }
+                </dd>
+              </div>
+              <div>
+                <dt>Наименование у источника</dt>
+                <dd>
+                  {
+                    candidateMutation.data.draft.source_reference
+                      .source_item_name
+                  }
                 </dd>
               </div>
               <div>

@@ -31,6 +31,7 @@ from tenderguard import __version__
 from tenderguard.application.actuals import ActualsService
 from tenderguard.application.approvals import ApprovalService
 from tenderguard.application.audit_integrity import AuditIntegrityService
+from tenderguard.application.automation_rework import AutomationReworkStatusService
 from tenderguard.application.boq import BoqService
 from tenderguard.application.business_qualification import (
     BusinessQualificationService,
@@ -40,6 +41,8 @@ from tenderguard.application.commercial_costs import CommercialCostService
 from tenderguard.application.contracts import ContractService
 from tenderguard.application.evidence import EvidenceService
 from tenderguard.application.exports import ExportIntegrityError, ExportPackageService
+from tenderguard.application.fgiscs_acquisition import FgisCsAcquisitionService
+from tenderguard.application.final_review import FinalReviewService
 from tenderguard.application.governance import GovernanceService
 from tenderguard.application.idempotency import (
     IdempotentAPIRoute,
@@ -96,7 +99,9 @@ from .schemas import (
     AcknowledgeIntegrationInboxRequest,
     ActivateAdapterQualificationRequest,
     ActualComparisonResponse,
+    ActualDecisionResponse,
     ActualRecordResponse,
+    ActualsContextResponse,
     AdapterQualificationResponse,
     ApplyQuantityManualChangeRequest,
     ApprovalDecisionResponse,
@@ -104,13 +109,17 @@ from .schemas import (
     ApproveCalibrationRequest,
     ApproveControlledVersionRequest,
     AssessNomenclatureRequest,
+    AttachImportedQuantityRequest,
     AuditAnchorReceiptResponse,
     AuditAnchorStatusResponse,
     AuditCheckpointResponse,
+    AutomationReworkStatusResponse,
     BindControlledVersionRequest,
     BoqAuthoringContextResponse,
     BoqLineResponse,
     BoqLineReviewResponse,
+    BoqPriceMatrixResponse,
+    BoqSpreadsheetCandidateContextResponse,
     BuildApprovalPlanRequest,
     BusinessQualificationCampaignDetailResponse,
     BusinessQualificationCampaignResponse,
@@ -121,6 +130,7 @@ from .schemas import (
     CalculationExecutionRequest,
     CalculationExecutionResponse,
     CalibrationApprovalResponse,
+    CalibrationDecisionResponse,
     ClaimIntegrationInboxRequest,
     CommercialCostModelResponse,
     CommercialCostProposalResponse,
@@ -140,20 +150,27 @@ from .schemas import (
     CreateControlledVersionRequest,
     CreateProjectRequest,
     CurrentCalculationExecutionRequest,
+    DecideActualRequest,
     DecideApprovalRequest,
+    DecideCalibrationRequest,
     DecideContractTermRequest,
     DecideManualEvidenceRequest,
     DecidePassportFactRequest,
     DecideRiskItemRequest,
+    DecideVarianceRequest,
     DocumentSetResponse,
     EvaluateItemPriceRequest,
+    ExpertReworkResponse,
     ExportArtifactResponse,
     ExportVerificationResponse,
+    FgisCsAcquisitionListResponse,
     FinalizeAnalogueRequest,
     FinalizeCommercialCostModelRequest,
     FinalizeContractCostImpactRequest,
+    ForecastCandidatePageResponse,
     GenerateExportRequest,
     GrantProjectMembershipRequest,
+    InitialQuantityContextResponse,
     IntegrationInboxClaimResponse,
     IntegrationInboxMessageResponse,
     IntegrationInboxProcessingResponse,
@@ -185,6 +202,8 @@ from .schemas import (
     ProjectRecordPageResponse,
     ProjectWorkbenchResponse,
     ProposeAnalogueRequest,
+    ProposeBoqSpreadsheetMappingRequest,
+    ProposeBoqSpreadsheetQuantityRequest,
     ProposeCommercialCostModelRequest,
     ProposeContractCostImpactRequest,
     ProposeQuantityManualChangeRequest,
@@ -212,6 +231,7 @@ from .schemas import (
     ReleaseRequest,
     ReplayIntegrationMessageRequest,
     ReplayOutboxResponse,
+    RequestExpertReworkRequest,
     RequeueDocumentProcessingRequest,
     ResolveConflictRequest,
     ReviewProductionGateEvidenceRequest,
@@ -235,6 +255,7 @@ from .schemas import (
     TransitionRequest,
     ValidateContractRequest,
     ValidatePassportRequest,
+    VarianceDecisionResponse,
     VerifyActualRequest,
     VerifyBoqLineRequest,
     VerifyContractTermRequest,
@@ -506,6 +527,27 @@ def create_app(
 
     def pricing_service(session: Session) -> PricingService:
         return PricingService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def final_review_service(session: Session) -> FinalReviewService:
+        return FinalReviewService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def automation_rework_status_service(session: Session) -> AutomationReworkStatusService:
+        return AutomationReworkStatusService(
+            session=session,
+            settings=resolved_settings,
+            object_store=resolved_store,
+        )
+
+    def fgiscs_acquisition_service(session: Session) -> FgisCsAcquisitionService:
+        return FgisCsAcquisitionService(
             session=session,
             settings=resolved_settings,
             object_store=resolved_store,
@@ -1555,6 +1597,44 @@ def create_app(
         return ReleaseAttemptResponse(project=project, decision=decision)
 
     @application.post(
+        "/v1/projects/{project_id}/final-review/rework",
+        response_model=ExpertReworkResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def request_final_expert_rework(
+        project_id: str,
+        payload: RequestExpertReworkRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ExpertReworkResponse:
+        with mutation_transaction(session):
+            result = final_review_service(session).request_rework(
+                actor=actor,
+                project_id=project_id,
+                command=payload,
+                request_id=request.state.request_id,
+            )
+        return ExpertReworkResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/final-review/rework-status",
+        response_model=AutomationReworkStatusResponse,
+    )
+    def final_expert_rework_status(
+        project_id: str,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> AutomationReworkStatusResponse:
+        result = automation_rework_status_service(session).list_status(
+            actor=actor,
+            project_id=project_id,
+            limit=limit,
+        )
+        return AutomationReworkStatusResponse.model_validate(result.model_dump())
+
+    @application.post(
         "/v1/governance/versions",
         response_model=ControlledVersionResponse,
         status_code=status.HTTP_201_CREATED,
@@ -2158,6 +2238,71 @@ def create_app(
         )
         return BoqAuthoringContextResponse.model_validate(context.model_dump())
 
+    @application.get(
+        "/v1/projects/{project_id}/boq/spreadsheet-candidates",
+        response_model=BoqSpreadsheetCandidateContextResponse,
+    )
+    def get_boq_spreadsheet_candidates(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> BoqSpreadsheetCandidateContextResponse:
+        context = boq_service(session).spreadsheet_candidate_context(
+            actor=actor,
+            project_id=project_id,
+            limit=limit,
+        )
+        return BoqSpreadsheetCandidateContextResponse.model_validate(context.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/boq/spreadsheet-candidates/{observation_id}/mapping",
+        response_model=ObservationResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def propose_boq_spreadsheet_mapping(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        observation_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: ProposeBoqSpreadsheetMappingRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ObservationResponse:
+        with mutation_transaction(session):
+            observation = boq_service(session).propose_spreadsheet_mapping(
+                actor=actor,
+                project_id=project_id,
+                source_observation_id=observation_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ObservationResponse.model_validate(observation.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/boq/spreadsheet-candidates/{observation_id}/quantity-evidence",
+        response_model=ObservationResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def propose_boq_spreadsheet_quantity(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        observation_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: ProposeBoqSpreadsheetQuantityRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ObservationResponse:
+        with mutation_transaction(session):
+            observation = boq_service(session).propose_spreadsheet_quantity(
+                actor=actor,
+                project_id=project_id,
+                source_observation_id=observation_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ObservationResponse.model_validate(observation.model_dump())
+
     @application.post(
         "/v1/projects/{project_id}/boq/lines",
         response_model=BoqLineResponse,
@@ -2219,6 +2364,47 @@ def create_app(
                 reason=payload.reason,
             )
         return BoqLineResponse.model_validate(line.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/boq/lines/{line_id}/initial-quantity-context",
+        response_model=InitialQuantityContextResponse,
+    )
+    def get_initial_quantity_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        line_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> InitialQuantityContextResponse:
+        context = boq_service(session).initial_quantity_context(
+            actor=actor,
+            project_id=project_id,
+            line_id=line_id,
+        )
+        return InitialQuantityContextResponse.model_validate(context.model_dump())
+
+    @application.post(
+        "/v1/projects/{project_id}/boq/lines/{line_id}/initial-quantity",
+        response_model=QuantityExecutionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def attach_imported_quantity(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        line_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: AttachImportedQuantityRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> QuantityExecutionResponse:
+        with mutation_transaction(session):
+            result = boq_service(session).attach_imported_quantity(
+                actor=actor,
+                project_id=project_id,
+                line_id=line_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return QuantityExecutionResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/boq/lines/{line_id}/quantities",
@@ -2355,6 +2541,7 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
         catalog_query: Annotated[str | None, Query(max_length=200)] = None,
+        source_item_id: Annotated[str | None, Query(max_length=128)] = None,
         evidence_field_name: Annotated[str, Query(min_length=1, max_length=300)] = (
             "technical_attributes"
         ),
@@ -2365,6 +2552,7 @@ def create_app(
             project_id=project_id,
             catalog_query=catalog_query,
             evidence_field_name=evidence_field_name,
+            source_item_id=source_item_id,
             limit=limit,
         )
         return NomenclatureContextResponse.model_validate(context.model_dump())
@@ -2455,6 +2643,21 @@ def create_app(
         return NomenclatureMatchResponse.model_validate(result.model_dump())
 
     @application.get(
+        "/v1/projects/{project_id}/boq/pricing-matrix",
+        response_model=BoqPriceMatrixResponse,
+    )
+    def get_boq_price_matrix(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> BoqPriceMatrixResponse:
+        result = pricing_service(session).boq_price_matrix(
+            actor=actor,
+            project_id=project_id,
+        )
+        return BoqPriceMatrixResponse.model_validate(result.model_dump())
+
+    @application.get(
         "/v1/projects/{project_id}/pricing/items/{item_id}/context",
         response_model=PriceItemContextResponse,
     )
@@ -2470,6 +2673,25 @@ def create_app(
             item_id=item_id,
         )
         return PriceItemContextResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/pricing/items/{item_id}/fgiscs-acquisitions",
+        response_model=FgisCsAcquisitionListResponse,
+    )
+    def get_fgiscs_acquisitions(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        item_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> FgisCsAcquisitionListResponse:
+        result = fgiscs_acquisition_service(session).list_for_item(
+            actor=actor,
+            project_id=project_id,
+            item_id=item_id,
+            limit=limit,
+        )
+        return FgisCsAcquisitionListResponse.model_validate(result.model_dump())
 
     @application.get(
         "/v1/projects/{project_id}/pricing/items/{item_id}/"
@@ -2837,9 +3059,7 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 draft=payload.draft,
-                expected_document_set_revision_id=(
-                    payload.expected_document_set_revision_id
-                ),
+                expected_document_set_revision_id=(payload.expected_document_set_revision_id),
                 risk_model_version_id=payload.risk_model_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
@@ -2909,14 +3129,54 @@ def create_app(
             result = risk_service(session).calculate_reserve(
                 actor=actor,
                 project_id=project_id,
-                expected_document_set_revision_id=(
-                    payload.expected_document_set_revision_id
-                ),
+                expected_document_set_revision_id=(payload.expected_document_set_revision_id),
                 risk_model_version_id=payload.risk_model_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
         return RiskCalculationResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/actuals/context",
+        response_model=ActualsContextResponse,
+    )
+    def get_actuals_context(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        metric: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+        cursor: Annotated[str | None, Query(max_length=2000)] = None,
+    ) -> ActualsContextResponse:
+        result = actuals_service(session).context(
+            actor=actor,
+            project_id=project_id,
+            selected_metric=metric,
+            limit=limit,
+            cursor=cursor,
+        )
+        return ActualsContextResponse.model_validate(result.model_dump())
+
+    @application.get(
+        "/v1/projects/{project_id}/actuals/{actual_id}/forecast-candidates",
+        response_model=ForecastCandidatePageResponse,
+    )
+    def get_actual_forecast_candidates(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actual_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+        limit: Annotated[int, Query(ge=1, le=50)] = 10,
+        cursor: Annotated[str | None, Query(max_length=2000)] = None,
+    ) -> ForecastCandidatePageResponse:
+        result = actuals_service(session).forecast_candidates(
+            actor=actor,
+            project_id=project_id,
+            actual_id=actual_id,
+            limit=limit,
+            cursor=cursor,
+        )
+        return ForecastCandidatePageResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/actuals",
@@ -2924,7 +3184,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     def record_actual(
-        project_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: RecordActualRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2935,6 +3195,7 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 draft=payload.draft,
+                actuals_policy_version_id=payload.actuals_policy_version_id,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
@@ -2945,8 +3206,8 @@ def create_app(
         response_model=ActualRecordResponse,
     )
     def verify_actual(
-        project_id: str,
-        actual_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actual_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: VerifyActualRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2957,18 +3218,43 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 actual_id=actual_id,
+                expected_actual_created_at=payload.expected_actual_created_at,
+                expected_task_updated_at=payload.expected_task_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
         return ActualRecordResponse.model_validate(result.model_dump())
 
     @application.post(
+        "/v1/projects/{project_id}/actuals/{actual_id}/decision",
+        response_model=ActualDecisionResponse,
+    )
+    def decide_actual(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actual_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: DecideActualRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> ActualDecisionResponse:
+        with mutation_transaction(session):
+            result = actuals_service(session).decide_actual(
+                actor=actor,
+                project_id=project_id,
+                actual_id=actual_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return ActualDecisionResponse.model_validate(result.model_dump())
+
+    @application.post(
         "/v1/projects/{project_id}/actuals/{actual_id}/compare",
         response_model=ActualComparisonResponse,
     )
     def compare_actual(
-        project_id: str,
-        actual_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        actual_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
         payload: CompareActualRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -2986,12 +3272,35 @@ def create_app(
         return ActualComparisonResponse.model_validate(result.model_dump())
 
     @application.post(
+        "/v1/projects/{project_id}/actuals/variances/{variance_id}/decision",
+        response_model=VarianceDecisionResponse,
+    )
+    def decide_actual_variance(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        variance_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        payload: DecideVarianceRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> VarianceDecisionResponse:
+        with mutation_transaction(session):
+            result = actuals_service(session).decide_variance(
+                actor=actor,
+                project_id=project_id,
+                variance_id=variance_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return VarianceDecisionResponse.model_validate(result.model_dump())
+
+    @application.post(
         "/v1/projects/{project_id}/calibration/{example_id}/approve",
         response_model=CalibrationApprovalResponse,
     )
     def approve_calibration_example(
-        project_id: str,
-        example_id: str,
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        example_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
         payload: ApproveCalibrationRequest,
         request: Request,
         actor: Annotated[Actor, Depends(get_actor)],
@@ -3002,10 +3311,35 @@ def create_app(
                 actor=actor,
                 project_id=project_id,
                 example_id=example_id,
+                expected_example_created_at=payload.expected_example_created_at,
+                expected_task_updated_at=payload.expected_task_updated_at,
                 request_id=request.state.request_id,
                 reason=payload.reason,
             )
         return CalibrationApprovalResponse(example_id=example.example_id, approved=True)
+
+    @application.post(
+        "/v1/projects/{project_id}/calibration/{example_id}/decision",
+        response_model=CalibrationDecisionResponse,
+    )
+    def decide_calibration_example(
+        project_id: Annotated[str, ApiPath(min_length=1, max_length=64)],
+        example_id: Annotated[str, ApiPath(min_length=1, max_length=128)],
+        payload: DecideCalibrationRequest,
+        request: Request,
+        actor: Annotated[Actor, Depends(get_actor)],
+        session: Annotated[Session, Depends(get_session)],
+    ) -> CalibrationDecisionResponse:
+        with mutation_transaction(session):
+            result = actuals_service(session).decide_calibration_example(
+                actor=actor,
+                project_id=project_id,
+                example_id=example_id,
+                command=payload.command,
+                request_id=request.state.request_id,
+                reason=payload.reason,
+            )
+        return CalibrationDecisionResponse.model_validate(result.model_dump())
 
     @application.post(
         "/v1/projects/{project_id}/approvals/plan",

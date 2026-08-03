@@ -80,6 +80,15 @@ class Settings(BaseSettings):
     document_processor_adapter: str | None = None
     document_processor_qualification_id: str | None = None
     document_worker_actor_id: str | None = None
+    boq_xlsx_adapter: str | None = None
+    boq_xlsx_adapter_qualification_id: str | None = None
+    boq_xlsx_worker_actor_id: str | None = None
+    fgiscs_adapter: str | None = None
+    fgiscs_adapter_qualification_id: str | None = None
+    fgiscs_worker_actor_id: str | None = None
+    automation_rework_adapter: str | None = None
+    automation_rework_qualification_id: str | None = None
+    automation_rework_worker_actor_id: str | None = None
     document_job_lease_seconds: int = Field(default=900, ge=30, le=86_400)
     document_job_timeout_seconds: int = Field(default=840, ge=1, le=86_399)
     document_job_max_attempts: int = Field(default=3, ge=1, le=100)
@@ -103,6 +112,11 @@ class Settings(BaseSettings):
         ge=0,
         le=86_400,
     )
+    automation_job_lease_seconds: int = Field(default=300, ge=30, le=86_400)
+    automation_job_timeout_seconds: int = Field(default=240, ge=1, le=86_399)
+    automation_job_max_attempts: int = Field(default=5, ge=1, le=100)
+    automation_job_retry_base_seconds: int = Field(default=30, ge=1, le=86_400)
+    automation_job_retry_max_seconds: int = Field(default=3600, ge=1, le=604_800)
     rate_limit_enabled: bool = False
     rate_limit_identity_key_id: str | None = None
     rate_limit_identity_key: SecretStr | None = None
@@ -164,6 +178,31 @@ class Settings(BaseSettings):
             ("integration receiver ID", self.integration_receiver_id, 200),
             ("OIDC web client ID", self.oidc_web_client_id, 200),
             ("rate-limit identity key ID", self.rate_limit_identity_key_id, 200),
+            ("BoQ XLSX adapter", self.boq_xlsx_adapter, 200),
+            (
+                "BoQ XLSX adapter qualification ID",
+                self.boq_xlsx_adapter_qualification_id,
+                128,
+            ),
+            ("BoQ XLSX worker actor ID", self.boq_xlsx_worker_actor_id, 128),
+            ("FGIS CS adapter", self.fgiscs_adapter, 200),
+            (
+                "FGIS CS adapter qualification ID",
+                self.fgiscs_adapter_qualification_id,
+                128,
+            ),
+            ("FGIS CS worker actor ID", self.fgiscs_worker_actor_id, 128),
+            ("automation rework adapter", self.automation_rework_adapter, 200),
+            (
+                "automation rework qualification ID",
+                self.automation_rework_qualification_id,
+                128,
+            ),
+            (
+                "automation rework worker actor ID",
+                self.automation_rework_worker_actor_id,
+                128,
+            ),
         ):
             if value is not None and (
                 not value.strip() or value != value.strip() or len(value) > max_length
@@ -256,6 +295,8 @@ class Settings(BaseSettings):
                 problems.append("qualified isolated document processor binding is incomplete")
             if not self.document_worker_actor_id:
                 problems.append("isolated document worker actor is not configured")
+            if not self.automation_rework_configured:
+                problems.append("qualified automatic rework dispatcher binding is incomplete")
             if not self.distributed_rate_limit_configured:
                 problems.append("distributed actor/organization rate limiting is incomplete")
             if problems:
@@ -283,10 +324,41 @@ class Settings(BaseSettings):
             raise ValueError("Integration HTTP timeout must not exceed the job timeout")
         if self.integration_job_retry_max_seconds < self.integration_job_retry_base_seconds:
             raise ValueError("Integration job retry maximum must be at least the base delay")
+        if self.automation_job_timeout_seconds >= self.automation_job_lease_seconds:
+            raise ValueError("Automation job timeout must be shorter than its lease")
+        if self.automation_job_retry_max_seconds < self.automation_job_retry_base_seconds:
+            raise ValueError("Automation job retry maximum must be at least the base delay")
         if self.rate_limit_enabled and not self.distributed_rate_limit_configured:
             raise ValueError(
                 "Enabled distributed rate limiting requires a key ID, a 32-byte "
                 "identity key, a window, and every actor/organization category limit"
+            )
+        boq_xlsx_binding = (
+            self.boq_xlsx_adapter,
+            self.boq_xlsx_adapter_qualification_id,
+            self.boq_xlsx_worker_actor_id,
+        )
+        if any(boq_xlsx_binding) and not all(boq_xlsx_binding):
+            raise ValueError(
+                "BoQ XLSX worker configuration requires adapter, qualification, and service actor"
+            )
+        fgiscs_binding = (
+            self.fgiscs_adapter,
+            self.fgiscs_adapter_qualification_id,
+            self.fgiscs_worker_actor_id,
+        )
+        if any(fgiscs_binding) and not all(fgiscs_binding):
+            raise ValueError(
+                "FGIS CS worker configuration requires adapter, qualification, and service actor"
+            )
+        automation_rework_binding = (
+            self.automation_rework_adapter,
+            self.automation_rework_qualification_id,
+            self.automation_rework_worker_actor_id,
+        )
+        if any(automation_rework_binding) and not all(automation_rework_binding):
+            raise ValueError(
+                "Automatic rework configuration requires adapter, qualification, and service actor"
             )
         return self
 
@@ -333,6 +405,30 @@ class Settings(BaseSettings):
     @property
     def document_processor_configured(self) -> bool:
         return bool(self.document_processor_adapter and self.document_processor_qualification_id)
+
+    @property
+    def boq_xlsx_adapter_configured(self) -> bool:
+        return bool(
+            self.boq_xlsx_adapter
+            and self.boq_xlsx_adapter_qualification_id
+            and self.boq_xlsx_worker_actor_id
+        )
+
+    @property
+    def fgiscs_adapter_configured(self) -> bool:
+        return bool(
+            self.fgiscs_adapter
+            and self.fgiscs_adapter_qualification_id
+            and self.fgiscs_worker_actor_id
+        )
+
+    @property
+    def automation_rework_configured(self) -> bool:
+        return bool(
+            self.automation_rework_adapter
+            and self.automation_rework_qualification_id
+            and self.automation_rework_worker_actor_id
+        )
 
     @property
     def distributed_rate_limit_configured(self) -> bool:

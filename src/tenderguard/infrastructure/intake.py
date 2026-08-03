@@ -10,8 +10,11 @@ from collections.abc import Callable, Iterable
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any, BinaryIO, cast
+from urllib.parse import urlsplit
+from xml.parsers import expat
 
 from openpyxl import load_workbook
+from openpyxl.formula import Tokenizer
 from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader
 
@@ -70,6 +73,79 @@ _SUPPORTED_SUFFIXES = {
 _IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".tif", ".tiff"}
 _TEXT_SUFFIXES = {".csv", ".txt"}
 _QUALIFIED_ADAPTER_SUFFIXES = {".dwg", ".dxf", ".ifc", ".json", ".xml"}
+_MAX_REPORTED_EXCEL_ERROR_CELLS = 50
+_MAX_REPORTED_OFFICE_DETAILS = 50
+_OFFICE_MAIN_PARTS = {
+    ".docx": "word/document.xml",
+    ".xlsx": "xl/workbook.xml",
+    ".xlsm": "xl/workbook.xml",
+    ".pptx": "ppt/presentation.xml",
+}
+_OFFICE_MAIN_CONTENT_TYPES = {
+    ".docx": frozenset(
+        {"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"}
+    ),
+    ".xlsx": frozenset(
+        {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"}
+    ),
+    ".xlsm": frozenset({"application/vnd.ms-excel.sheet.macroEnabled.main+xml"}),
+    ".pptx": frozenset(
+        {"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"}
+    ),
+}
+_OFFICE_MAIN_ROOTS = {
+    ".docx": frozenset(
+        {
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main}document",
+            "http://purl.oclc.org/ooxml/wordprocessingml/main}document",
+        }
+    ),
+    ".xlsx": frozenset(
+        {
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main}workbook",
+            "http://purl.oclc.org/ooxml/spreadsheetml/main}workbook",
+        }
+    ),
+    ".xlsm": frozenset(
+        {
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main}workbook",
+            "http://purl.oclc.org/ooxml/spreadsheetml/main}workbook",
+        }
+    ),
+    ".pptx": frozenset(
+        {
+            "http://schemas.openxmlformats.org/presentationml/2006/main}presentation",
+            "http://purl.oclc.org/ooxml/presentationml/main}presentation",
+        }
+    ),
+}
+_CONTENT_TYPES_ROOT = "http://schemas.openxmlformats.org/package/2006/content-types}Types"
+_CONTENT_TYPE_OVERRIDE = "http://schemas.openxmlformats.org/package/2006/content-types}Override"
+_RELATIONSHIPS_ROOTS = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships}Relationships",
+        "http://purl.oclc.org/ooxml/package/relationships}Relationships",
+    }
+)
+_RELATIONSHIP_NAMES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships}Relationship",
+        "http://purl.oclc.org/ooxml/package/relationships}Relationship",
+    }
+)
+_OFFICE_DOCUMENT_RELATIONSHIP_TYPES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+    }
+)
+_HYPERLINK_RELATIONSHIP_TYPES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink",
+    }
+)
+_ORDINARY_EXTERNAL_HYPERLINK_SCHEMES = frozenset({"http", "https", "mailto"})
 
 
 def _safe_archive_path(name: str) -> bool:
@@ -205,18 +281,54 @@ def _inspect_excel(
             cached_sheet = cached[worksheet.title]
             formula_count = 0
             missing_cached = 0
+            formula_errors: list[dict[str, Any]] = []
+            non_formula_errors: list[dict[str, str]] = []
             for row in worksheet.iter_rows():
                 for cell in row:
+                    cached_cell = cached_sheet[cell.coordinate]
                     if cell.data_type == "f":
                         formula_count += 1
-                        if cached_sheet[cell.coordinate].value is None:
+                        if cached_cell.value is None:
                             missing_cached += 1
+                        error_signals: set[str] = set()
+                        try:
+                            formula_value = getattr(cell.value, "text", cell.value)
+                            error_signals.update(
+                                token.value
+                                for token in Tokenizer(str(formula_value)).items
+                                if token.type == "OPERAND" and token.subtype == "ERROR"
+                            )
+                        except Exception as error:
+                            error_signals.add(f"UNPARSEABLE:{type(error).__name__}")
+                        if cached_cell.data_type == "e":
+                            error_signals.add(str(cached_cell.value))
+                        if error_signals:
+                            formula_errors.append(
+                                {
+                                    "coordinate": cell.coordinate,
+                                    "errors": sorted(error_signals),
+                                }
+                            )
+                    elif cell.data_type == "e":
+                        non_formula_errors.append(
+                            {
+                                "coordinate": cell.coordinate,
+                                "error": str(cell.value),
+                            }
+                        )
             hidden_rows = sum(
                 1 for dimension in worksheet.row_dimensions.values() if dimension.hidden
             )
-            hidden_columns = sum(
-                1 for dimension in worksheet.column_dimensions.values() if dimension.hidden
-            )
+            hidden_column_indexes: set[int] = set()
+            for dimension in worksheet.column_dimensions.values():
+                if not dimension.hidden:
+                    continue
+                start = dimension.min
+                end = dimension.max
+                if start is None or end is None:
+                    raise ValueError("Hidden Excel column range lacks bounds")
+                hidden_column_indexes.update(range(start, end + 1))
+            hidden_columns = len(hidden_column_indexes)
             inspection = SheetInspection(
                 name=worksheet.title,
                 state=worksheet.sheet_state,
@@ -226,6 +338,8 @@ def _inspect_excel(
                 hidden_column_count=hidden_columns,
                 formula_cell_count=formula_count,
                 formula_without_cached_value_count=missing_cached,
+                formula_error_cell_count=len(formula_errors),
+                non_formula_error_cell_count=len(non_formula_errors),
             )
             sheets.append(inspection)
             if worksheet.sheet_state != "visible":
@@ -259,6 +373,32 @@ def _inspect_excel(
                         "Formula cells lack cached calculated values",
                         sheet=worksheet.title,
                         count=missing_cached,
+                    )
+                )
+            if formula_errors:
+                findings.append(
+                    _finding(
+                        "EXCEL_FORMULA_ERROR",
+                        Severity.BLOCKER,
+                        path,
+                        "Formula cells contain error tokens or cached error results",
+                        sheet=worksheet.title,
+                        count=len(formula_errors),
+                        cells=formula_errors[:_MAX_REPORTED_EXCEL_ERROR_CELLS],
+                        cells_truncated=(len(formula_errors) > _MAX_REPORTED_EXCEL_ERROR_CELLS),
+                    )
+                )
+            if non_formula_errors:
+                findings.append(
+                    _finding(
+                        "EXCEL_CELL_ERROR",
+                        Severity.BLOCKER,
+                        path,
+                        "Workbook contains non-formula error values",
+                        sheet=worksheet.title,
+                        count=len(non_formula_errors),
+                        cells=non_formula_errors[:_MAX_REPORTED_EXCEL_ERROR_CELLS],
+                        cells_truncated=(len(non_formula_errors) > _MAX_REPORTED_EXCEL_ERROR_CELLS),
                     )
                 )
         external_links = getattr(formulas, "_external_links", [])
@@ -297,21 +437,361 @@ def _inspect_image(path: str, stream: BinaryIO) -> list[IntakeFinding]:
         ]
 
 
+def _parse_office_xml_part(
+    package: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    *,
+    on_start: Callable[[str, dict[str, str]], None] | None = None,
+) -> str:
+    root_name: str | None = None
+    parser = expat.ParserCreate(namespace_separator="}")
+    parser.buffer_text = True
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+
+    def start_element(name: str, attributes: dict[str, str]) -> None:
+        nonlocal root_name
+        if root_name is None:
+            root_name = name
+        if on_start is not None:
+            on_start(name, attributes)
+
+    def reject_unsafe_declaration(*_arguments: object) -> None:
+        raise ValueError("Office XML contains a forbidden declaration")
+
+    def reject_external_entity(
+        _context: str,
+        _base: str | None,
+        _system_id: str | None,
+        _public_id: str | None,
+    ) -> int:
+        raise ValueError("Office XML contains a forbidden external entity")
+
+    parser.StartElementHandler = start_element
+    parser.StartDoctypeDeclHandler = reject_unsafe_declaration
+    parser.EntityDeclHandler = reject_unsafe_declaration
+    parser.UnparsedEntityDeclHandler = reject_unsafe_declaration
+    parser.NotationDeclHandler = reject_unsafe_declaration
+    parser.ExternalEntityRefHandler = reject_external_entity
+    copied = 0
+    with package.open(info, "r") as member:
+        while chunk := member.read(64 * 1024):
+            copied += len(chunk)
+            if copied > info.file_size:
+                raise RuntimeError("Office XML member exceeds its declared size")
+            parser.Parse(chunk, False)
+        parser.Parse(b"", True)
+    if copied != info.file_size:
+        raise RuntimeError("Office XML member size differs from central directory")
+    if root_name is None:
+        raise ValueError("Office XML part is empty")
+    return root_name
+
+
+def _normalize_root_relationship_target(target: str) -> str | None:
+    normalized = target.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.removeprefix("/")
+    if (
+        not normalized
+        or "?" in normalized
+        or "#" in normalized
+        or not _safe_archive_path(normalized)
+    ):
+        return None
+    return PurePosixPath(normalized).as_posix()
+
+
+def _inspect_office_structure(
+    *,
+    path: str,
+    package: zipfile.ZipFile,
+    members: tuple[zipfile.ZipInfo, ...],
+) -> tuple[int, int, list[IntakeFinding]]:
+    suffix = PurePosixPath(path.casefold()).suffix
+    main_part = _OFFICE_MAIN_PARTS[suffix]
+    required_parts = frozenset({"[Content_Types].xml", "_rels/.rels", main_part})
+    members_by_name: dict[str, list[zipfile.ZipInfo]] = {}
+    case_variants: dict[str, set[str]] = {}
+    for info in members:
+        members_by_name.setdefault(info.filename, []).append(info)
+        case_variants.setdefault(info.filename.casefold(), set()).add(info.filename)
+
+    structure_error_count = 0
+    structure_errors: list[dict[str, Any]] = []
+
+    def record_structure_error(code: str, **details: Any) -> None:
+        nonlocal structure_error_count
+        structure_error_count += 1
+        if len(structure_errors) < _MAX_REPORTED_OFFICE_DETAILS:
+            structure_errors.append({"code": code, **details})
+
+    duplicate_parts = sorted(name for name, entries in members_by_name.items() if len(entries) > 1)
+    if duplicate_parts:
+        record_structure_error(
+            "DUPLICATE_PARTS",
+            count=len(duplicate_parts),
+            parts=duplicate_parts[:_MAX_REPORTED_OFFICE_DETAILS],
+            parts_truncated=len(duplicate_parts) > _MAX_REPORTED_OFFICE_DETAILS,
+        )
+    colliding_parts = [sorted(variants) for variants in case_variants.values() if len(variants) > 1]
+    if colliding_parts:
+        record_structure_error(
+            "CASE_COLLIDING_PARTS",
+            count=len(colliding_parts),
+            parts=colliding_parts[:_MAX_REPORTED_OFFICE_DETAILS],
+            parts_truncated=len(colliding_parts) > _MAX_REPORTED_OFFICE_DETAILS,
+        )
+    missing_parts = sorted(required_parts.difference(members_by_name))
+    if missing_parts:
+        record_structure_error("MISSING_REQUIRED_PARTS", parts=missing_parts)
+
+    parsed_xml_parts: set[str] = set()
+    content_type_overrides: dict[str, list[str]] = {}
+    content_types_info = members_by_name.get("[Content_Types].xml", [])
+    if len(content_types_info) == 1:
+        parsed_xml_parts.add("[Content_Types].xml")
+
+        def content_type_start(name: str, attributes: dict[str, str]) -> None:
+            if name != _CONTENT_TYPE_OVERRIDE:
+                return
+            part_name = attributes.get("PartName", "")
+            content_type = attributes.get("ContentType", "")
+            content_type_overrides.setdefault(part_name, []).append(content_type)
+
+        try:
+            root_name = _parse_office_xml_part(
+                package,
+                content_types_info[0],
+                on_start=content_type_start,
+            )
+            if root_name != _CONTENT_TYPES_ROOT:
+                record_structure_error(
+                    "INVALID_CONTENT_TYPES_ROOT",
+                    part="[Content_Types].xml",
+                )
+            expected_values = content_type_overrides.get(f"/{main_part}", [])
+            if (
+                len(expected_values) != 1
+                or expected_values[0] not in _OFFICE_MAIN_CONTENT_TYPES[suffix]
+            ):
+                record_structure_error(
+                    "INVALID_MAIN_CONTENT_TYPE",
+                    part=main_part,
+                    declared=expected_values,
+                )
+        except (expat.ExpatError, RuntimeError, ValueError) as error:
+            record_structure_error(
+                "UNSAFE_OR_INVALID_XML",
+                part="[Content_Types].xml",
+                error_type=type(error).__name__,
+            )
+
+    external_hyperlink_count = 0
+    external_dependency_count = 0
+    hyperlink_samples: list[dict[str, str]] = []
+    dependency_samples: list[dict[str, str]] = []
+    root_office_targets: list[str] = []
+
+    def make_relationship_start(
+        relationship_info: zipfile.ZipInfo,
+        relationship_ids: set[str],
+    ) -> Callable[[str, dict[str, str]], None]:
+        def relationship_start(name: str, attributes: dict[str, str]) -> None:
+            nonlocal external_dependency_count, external_hyperlink_count
+            if name not in _RELATIONSHIP_NAMES:
+                return
+            relationship_id = attributes.get("Id", "")
+            relationship_type = attributes.get("Type", "")
+            target = attributes.get("Target", "")
+            target_mode = attributes.get("TargetMode", "Internal")
+            if not relationship_id or not relationship_type or not target:
+                record_structure_error(
+                    "INCOMPLETE_RELATIONSHIP",
+                    part=relationship_info.filename,
+                )
+                return
+            if relationship_id in relationship_ids:
+                record_structure_error(
+                    "DUPLICATE_RELATIONSHIP_ID",
+                    part=relationship_info.filename,
+                    relationship_id=relationship_id,
+                )
+            relationship_ids.add(relationship_id)
+            if target_mode.casefold() not in {"internal", "external"}:
+                record_structure_error(
+                    "INVALID_RELATIONSHIP_MODE",
+                    part=relationship_info.filename,
+                    relationship_id=relationship_id,
+                )
+                return
+            if (
+                relationship_info.filename == "_rels/.rels"
+                and relationship_type in _OFFICE_DOCUMENT_RELATIONSHIP_TYPES
+                and target_mode.casefold() == "internal"
+            ):
+                normalized = _normalize_root_relationship_target(target)
+                if normalized is None:
+                    record_structure_error(
+                        "INVALID_MAIN_RELATIONSHIP_TARGET",
+                        part=relationship_info.filename,
+                        relationship_id=relationship_id,
+                    )
+                else:
+                    root_office_targets.append(normalized)
+            if target_mode.casefold() != "external":
+                return
+            try:
+                target_scheme = urlsplit(target).scheme.casefold() or "relative"
+            except ValueError:
+                target_scheme = "invalid"
+                record_structure_error(
+                    "INVALID_EXTERNAL_TARGET",
+                    part=relationship_info.filename,
+                    relationship_id=relationship_id,
+                )
+            relationship_record = {
+                "relationship_part": relationship_info.filename,
+                "relationship_type": relationship_type.rsplit("/", 1)[-1],
+                "target_scheme": target_scheme,
+                "target_sha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
+            }
+            if (
+                relationship_type in _HYPERLINK_RELATIONSHIP_TYPES
+                and target_scheme in _ORDINARY_EXTERNAL_HYPERLINK_SCHEMES
+            ):
+                external_hyperlink_count += 1
+                if len(hyperlink_samples) < _MAX_REPORTED_OFFICE_DETAILS:
+                    hyperlink_samples.append(relationship_record)
+            else:
+                external_dependency_count += 1
+                if len(dependency_samples) < _MAX_REPORTED_OFFICE_DETAILS:
+                    dependency_samples.append(relationship_record)
+
+        return relationship_start
+
+    relationship_infos = tuple(
+        info for info in members if info.filename.casefold().endswith(".rels")
+    )
+    for info in relationship_infos:
+        relationship_ids: set[str] = set()
+
+        try:
+            root_name = _parse_office_xml_part(
+                package,
+                info,
+                on_start=make_relationship_start(info, relationship_ids),
+            )
+            if root_name not in _RELATIONSHIPS_ROOTS:
+                record_structure_error(
+                    "INVALID_RELATIONSHIPS_ROOT",
+                    part=info.filename,
+                )
+        except (expat.ExpatError, RuntimeError, ValueError) as error:
+            record_structure_error(
+                "UNSAFE_OR_INVALID_XML",
+                part=info.filename,
+                error_type=type(error).__name__,
+            )
+
+    if root_office_targets != [main_part]:
+        record_structure_error(
+            "INVALID_MAIN_RELATIONSHIP",
+            expected=main_part,
+            declared=root_office_targets,
+        )
+
+    main_part_info = members_by_name.get(main_part, [])
+    if len(main_part_info) == 1:
+        parsed_xml_parts.add(main_part)
+        try:
+            root_name = _parse_office_xml_part(package, main_part_info[0])
+            if root_name not in _OFFICE_MAIN_ROOTS[suffix]:
+                record_structure_error(
+                    "INVALID_MAIN_PART_ROOT",
+                    part=main_part,
+                )
+        except (expat.ExpatError, RuntimeError, ValueError) as error:
+            record_structure_error(
+                "UNSAFE_OR_INVALID_XML",
+                part=main_part,
+                error_type=type(error).__name__,
+            )
+
+    for info in members:
+        if not info.filename.casefold().endswith(".xml") or info.filename in parsed_xml_parts:
+            continue
+        parsed_xml_parts.add(info.filename)
+        try:
+            _parse_office_xml_part(package, info)
+        except (expat.ExpatError, RuntimeError, ValueError) as error:
+            record_structure_error(
+                "UNSAFE_OR_INVALID_XML",
+                part=info.filename,
+                error_type=type(error).__name__,
+            )
+
+    findings: list[IntakeFinding] = []
+    if structure_error_count:
+        findings.append(
+            _finding(
+                "CORRUPT_OFFICE_STRUCTURE",
+                Severity.BLOCKER,
+                path,
+                "Office package structure does not safely match its file type",
+                suffix=suffix,
+                error_count=structure_error_count,
+                errors=structure_errors,
+                errors_truncated=structure_error_count > len(structure_errors),
+            )
+        )
+    if external_dependency_count:
+        findings.append(
+            _finding(
+                "OFFICE_EXTERNAL_DEPENDENCY",
+                Severity.BLOCKER,
+                path,
+                "Office package contains non-hyperlink external relationships",
+                count=external_dependency_count,
+                relationships=dependency_samples,
+                relationships_truncated=(external_dependency_count > len(dependency_samples)),
+            )
+        )
+    if external_hyperlink_count:
+        findings.append(
+            _finding(
+                "OFFICE_EXTERNAL_HYPERLINK",
+                Severity.WARNING,
+                path,
+                "Office package contains external hyperlinks",
+                count=external_hyperlink_count,
+                relationships=hyperlink_samples,
+                relationships_truncated=(external_hyperlink_count > len(hyperlink_samples)),
+            )
+        )
+    return external_hyperlink_count, external_dependency_count, findings
+
+
 def _inspect_office_container(
     path: str,
     stream: BinaryIO,
     settings: Settings,
-) -> tuple[int, list[IntakeFinding]]:
+) -> tuple[int, int, int, list[IntakeFinding]]:
     findings: list[IntakeFinding] = []
     if not _starts_with(stream, (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        return 0, [
-            _finding(
-                "FILE_SIGNATURE_MISMATCH",
-                Severity.BLOCKER,
-                path,
-                "Office extension does not match the ZIP container signature",
-            )
-        ]
+        return (
+            0,
+            0,
+            0,
+            [
+                _finding(
+                    "FILE_SIGNATURE_MISMATCH",
+                    Severity.BLOCKER,
+                    path,
+                    "Office extension does not match the ZIP container signature",
+                )
+            ],
+        )
     try:
         _rewind(stream)
         with zipfile.ZipFile(stream) as package:
@@ -398,7 +878,26 @@ def _inspect_office_container(
                         count=len(macro_members),
                     )
                 )
-            if not any(finding.severity is Severity.BLOCKER for finding in findings):
+            unsafe_preparse_codes = {
+                "OFFICE_FILE_COUNT_EXCEEDED",
+                "OFFICE_UNPACKED_SIZE_EXCEEDED",
+                "OFFICE_PATH_TRAVERSAL",
+                "OFFICE_COMPRESSION_RATIO_EXCEEDED",
+                "PROTECTED_OFFICE_MEMBER",
+            }
+            external_hyperlink_count = 0
+            external_dependency_count = 0
+            if not any(finding.code in unsafe_preparse_codes for finding in findings):
+                (
+                    external_hyperlink_count,
+                    external_dependency_count,
+                    structure_findings,
+                ) = _inspect_office_structure(
+                    path=path,
+                    package=package,
+                    members=members,
+                )
+                findings.extend(structure_findings)
                 for info in members:
                     copied = 0
                     with package.open(info, "r") as member:
@@ -408,17 +907,27 @@ def _inspect_office_container(
                                 raise RuntimeError("Office member exceeds its declared size")
                     if copied != info.file_size:
                         raise RuntimeError("Office member size differs from central directory")
-            return len(embedded), findings
-    except zipfile.BadZipFile as error:
-        return 0, [
-            _finding(
-                "CORRUPT_OR_PROTECTED_OFFICE_FILE",
-                Severity.BLOCKER,
-                path,
-                "Office package is corrupt, legacy binary, or encrypted",
-                error_type=type(error).__name__,
+            return (
+                len(embedded),
+                external_hyperlink_count,
+                external_dependency_count,
+                findings,
             )
-        ]
+    except (RuntimeError, zipfile.BadZipFile) as error:
+        return (
+            0,
+            0,
+            0,
+            [
+                _finding(
+                    "CORRUPT_OR_PROTECTED_OFFICE_FILE",
+                    Severity.BLOCKER,
+                    path,
+                    "Office package is corrupt, legacy binary, or encrypted",
+                    error_type=type(error).__name__,
+                )
+            ],
+        )
 
 
 def _inspect_text(path: str, stream: BinaryIO) -> list[IntakeFinding]:
@@ -456,6 +965,8 @@ def _inspect_single_stream(
     findings: list[IntakeFinding] = []
     page_count: int | None = None
     embedded_count = 0
+    external_hyperlink_count = 0
+    external_dependency_count = 0
     protected = False
     corrupt = False
     unsupported = False
@@ -466,12 +977,18 @@ def _inspect_single_stream(
         findings.extend(pdf_findings)
         corrupt = any(item.code == "CORRUPT_PDF" for item in findings)
     elif suffix in {".xlsx", ".xlsm"}:
-        embedded_count, office_findings = _inspect_office_container(
+        (
+            embedded_count,
+            external_hyperlink_count,
+            external_dependency_count,
+            office_findings,
+        ) = _inspect_office_container(
             path,
             stream,
             settings,
         )
         findings.extend(office_findings)
+        corrupt = any(item.code.startswith("CORRUPT_") for item in office_findings)
         protected = any(item.code == "PROTECTED_OFFICE_MEMBER" for item in office_findings)
         if not any(item.severity is Severity.BLOCKER for item in office_findings):
             try:
@@ -489,7 +1006,12 @@ def _inspect_single_stream(
                     )
                 )
     elif suffix in {".docx", ".pptx"}:
-        embedded_count, office_findings = _inspect_office_container(
+        (
+            embedded_count,
+            external_hyperlink_count,
+            external_dependency_count,
+            office_findings,
+        ) = _inspect_office_container(
             path,
             stream,
             settings,
@@ -559,6 +1081,8 @@ def _inspect_single_stream(
         unsupported=unsupported,
         page_count=page_count,
         embedded_file_count=embedded_count,
+        external_hyperlink_count=external_hyperlink_count,
+        external_dependency_count=external_dependency_count,
         sheets=sheets,
         findings=tuple(findings),
     )

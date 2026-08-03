@@ -335,6 +335,14 @@ class GovernanceService:
                     "supported_price_evidence_classes",
                     [],
                 ),
+                "supported_price_source_types": payload.get(
+                    "supported_price_source_types",
+                    [],
+                ),
+                "supported_price_source_origins": payload.get(
+                    "supported_price_source_origins",
+                    [],
+                ),
                 "independence_domain": payload["independence_domain"],
                 "organization_id": actor.organization_id,
                 "service_actor_id": service_actor_id,

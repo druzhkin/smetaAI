@@ -169,12 +169,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     if op.get_bind().dialect.name != "postgresql":
         return
-    op.execute(
-        "DROP TRIGGER IF EXISTS trg_risk_calculations_protect "
-        "ON risk_calculations"
-    )
-    op.execute(
-        "DROP FUNCTION IF EXISTS tenderguard_protect_risk_calculation()"
-    )
+    op.execute("DROP TRIGGER IF EXISTS trg_risk_calculations_protect ON risk_calculations")
+    op.execute("DROP FUNCTION IF EXISTS tenderguard_protect_risk_calculation()")
     op.execute("DROP TRIGGER IF EXISTS trg_risk_items_protect ON risk_items")
     op.execute("DROP FUNCTION IF EXISTS tenderguard_protect_risk_item()")

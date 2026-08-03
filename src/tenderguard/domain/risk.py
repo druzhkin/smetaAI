@@ -103,10 +103,7 @@ class RiskModelDefinition(DomainModel):
             raise ValueError("Every declared risk key needs exactly one evidence field")
         fields = tuple(self.evidence_field_names.values())
         if len(fields) != len(set(fields)) or any(
-            not value
-            or value != value.strip()
-            or len(value) > 200
-            for value in fields
+            not value or value != value.strip() or len(value) > 200 for value in fields
         ):
             raise ValueError("Risk evidence field names must be normalized and unique")
         if self.review_role not in {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
@@ -33,6 +33,7 @@ from tenderguard.domain.enums import (
     EvidenceMethod,
     MatchClass,
     PriceEvidenceClass,
+    PriceSourceType,
     PriceStatus,
     VerificationStatus,
 )
@@ -43,8 +44,13 @@ from tenderguard.domain.models import (
     NormalizedPrice,
     Observation,
     PriceQuote,
+    PriceSourceReference,
 )
-from tenderguard.domain.nomenclature import approve_analogue, assess_exact_match
+from tenderguard.domain.nomenclature import (
+    approve_analogue,
+    assess_exact_match,
+    catalog_retrieval_evidence,
+)
 from tenderguard.domain.pricing import (
     NormalizationRequest,
     PriceAdjustment,
@@ -66,6 +72,7 @@ from tenderguard.infrastructure.orm import (
     PriceDecisionRow,
     PriceQuoteRow,
     ProjectRow,
+    QuantityRow,
     RfqRequestRow,
 )
 
@@ -89,6 +96,19 @@ class CatalogItemView(DomainModel):
     attributes: dict[str, str]
     critical_attributes: tuple[str, ...]
     critical_price: bool
+    retrieval_exact_identifier: bool = False
+    retrieval_matched_terms: tuple[str, ...] = ()
+    retrieval_matched_critical_attributes: tuple[str, ...] = ()
+
+
+class NomenclatureSourceItemView(DomainModel):
+    source_item_id: str
+    boq_line_id: str
+    line_key: str
+    wbs_node_id: str
+    work_code: str
+    description: str
+    unit: str
 
 
 class NomenclatureEvidenceCandidateView(DomainModel):
@@ -101,11 +121,17 @@ class NomenclatureContextView(DomainModel):
     project_state: ApprovalState
     document_set_revision_id: str
     catalog_version_id: str
+    source_items: tuple[NomenclatureSourceItemView, ...]
+    selected_source_item_id: str | None = None
+    selected_source_description: str | None = None
     catalog_items: tuple[CatalogItemView, ...]
     catalog_items_truncated: bool
     evidence_field_name: str
     evidence_candidates: tuple[NomenclatureEvidenceCandidateView, ...]
     evidence_candidates_truncated: bool
+    retrieval_notice: str = (
+        "Candidate order is lexical retrieval only and is not evidence of technical equivalence."
+    )
 
 
 class NomenclatureReviewContextView(DomainModel):
@@ -127,6 +153,7 @@ class PriceQuoteDraft(DomainModel):
     item_id: str = Field(min_length=1, max_length=128)
     supplier_id: str | None = None
     evidence_class: PriceEvidenceClass
+    source_reference: PriceSourceReference
     source_observation_id: str = Field(min_length=1)
     technical_attributes: dict[str, str]
     amount: Decimal = Field(gt=0, max_digits=38, decimal_places=12)
@@ -143,6 +170,16 @@ class PriceQuoteDraft(DomainModel):
             raise ValueError("Price quote validity cannot end before the quote date")
         if self.evidence_class is PriceEvidenceClass.COMMERCIAL_QUOTE and not self.supplier_id:
             raise ValueError("A commercial quote requires a supplier identity")
+        allowed_classes = {
+            PriceSourceType.FGIS_CS: {PriceEvidenceClass.OFFICIAL_OR_PRIMARY},
+            PriceSourceType.WON_TENDER: {PriceEvidenceClass.INTERNAL_HISTORY},
+            PriceSourceType.MARKETPLACE: {PriceEvidenceClass.INDEPENDENT_MARKET},
+            PriceSourceType.SUPPLIER_WEBSITE: {PriceEvidenceClass.INDEPENDENT_MARKET},
+            PriceSourceType.SUPPLIER_QUOTE: {PriceEvidenceClass.COMMERCIAL_QUOTE},
+            PriceSourceType.OTHER_OFFICIAL: {PriceEvidenceClass.OFFICIAL_OR_PRIMARY},
+        }
+        if self.evidence_class not in allowed_classes[self.source_reference.source_type]:
+            raise ValueError("Price evidence class conflicts with the declared source type")
         return self
 
     def evidence_value(self) -> dict[str, Any]:
@@ -252,6 +289,85 @@ class PriceQuoteCandidateView(DomainModel):
     required_adjustment_kinds: tuple[str, ...]
 
 
+class BoqPriceNameMatchView(DomainModel):
+    match_id: str
+    status: str
+    match_class: MatchClass
+    boq_item_name: str
+    source_item_id: str
+    canonical_item_id: str | None
+    source_attributes: dict[str, str]
+    canonical_attributes: dict[str, str]
+    mismatched_attributes: tuple[str, ...]
+    missing_attributes: tuple[str, ...]
+    catalog_version_id: str
+    assessment_method: str | None
+
+
+class BoqSourcePriceView(DomainModel):
+    quote_id: str
+    evidence_class: PriceEvidenceClass
+    source_reference: PriceSourceReference
+    source_observation_id: str
+    source_origin_id: str
+    source_locator: str
+    source_document_revision_id: str
+    observed_at: datetime
+    quote_date: date
+    valid_until: date | None
+    available: bool | None
+    lead_time_days: int | None
+    raw_amount: Decimal
+    raw_currency: str
+    raw_unit: str
+    normalized_prices: tuple[NormalizedPriceView, ...]
+    technical_attributes: dict[str, str]
+
+
+class BoqProposedPriceView(DomainModel):
+    status: str
+    workflow_status: str
+    amount_per_unit: Decimal | None = None
+    currency: str | None = None
+    unit: str | None = None
+    decision_id: str | None = None
+    as_of: date | None = None
+    selection_method: str | None = None
+    normalized_price_ids: tuple[str, ...] = ()
+    rationale: tuple[str, ...]
+
+
+class BoqPriceMatrixRowView(DomainModel):
+    row_id: str
+    boq_line_id: str
+    line_key: str
+    wbs_node_id: str
+    work_code: str
+    boq_item_name: str
+    boq_unit: str
+    quantity: Decimal | None
+    quantity_status: str
+    item_id: str
+    cost_category: str | None
+    basis_kind: str | None
+    row_status: str
+    blockers: tuple[str, ...]
+    name_match: BoqPriceNameMatchView | None
+    won_tender_prices: tuple[BoqSourcePriceView, ...]
+    fgis_cs_prices: tuple[BoqSourcePriceView, ...]
+    market_prices: tuple[BoqSourcePriceView, ...]
+    other_prices: tuple[BoqSourcePriceView, ...]
+    proposed_price: BoqProposedPriceView
+
+
+class BoqPriceMatrixView(DomainModel):
+    project_id: str
+    generated_at: datetime
+    rows: tuple[BoqPriceMatrixRowView, ...]
+    blocked_row_count: int = Field(ge=0)
+    release_warning: str
+
+
 class PricingService:
     def __init__(
         self,
@@ -264,6 +380,366 @@ class PricingService:
         self.settings = settings
         self.object_store = object_store
 
+    def boq_price_matrix(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+    ) -> BoqPriceMatrixView:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.PROCUREMENT,
+                ActorRole.REVIEWER,
+                ActorRole.APPROVER,
+                ActorRole.AUDITOR,
+            ),
+        )
+        line_rows = tuple(
+            self.session.scalars(
+                select(BoqLineRow)
+                .where(
+                    BoqLineRow.project_id == project.id,
+                    BoqLineRow.is_current.is_(True),
+                )
+                .order_by(BoqLineRow.line_key, BoqLineRow.id)
+            )
+        )
+        quantity_by_line = {
+            row.boq_line_id: row
+            for row in self.session.scalars(
+                select(QuantityRow).where(
+                    QuantityRow.boq_line_id.in_(tuple(line.id for line in line_rows)),
+                    QuantityRow.is_current.is_(True),
+                )
+            )
+        }
+        match_by_item = {
+            row.source_item_id: row
+            for row in self.session.scalars(
+                select(NomenclatureMatchRow).where(
+                    NomenclatureMatchRow.project_id == project.id,
+                    NomenclatureMatchRow.is_current.is_(True),
+                )
+            )
+        }
+        decision_by_item = {
+            row.item_id: row
+            for row in self.session.scalars(
+                select(PriceDecisionRow).where(
+                    PriceDecisionRow.project_id == project.id,
+                    PriceDecisionRow.is_current.is_(True),
+                )
+            )
+        }
+        try:
+            policy = self._bound_version(project.id, "price_policy", "price_policy")
+        except (LookupError, RuntimeError, TypeError, ValueError):
+            policy = None
+
+        rows: list[BoqPriceMatrixRowView] = []
+        for line in line_rows:
+            raw_components = line.payload.get("cost_components")
+            components = (
+                raw_components if isinstance(raw_components, list) and raw_components else [None]
+            )
+            quantity = quantity_by_line.get(line.id)
+            for component_index, raw_component in enumerate(components):
+                component = raw_component if isinstance(raw_component, dict) else {}
+                raw_item_id = component.get("semantic_key")
+                item_id = (
+                    raw_item_id
+                    if isinstance(raw_item_id, str) and raw_item_id
+                    else f"{line.id}:INVALID_COMPONENT:{component_index + 1}"
+                )
+                blockers: list[str] = []
+                if line.status != VerificationStatus.VERIFIED.value:
+                    blockers.append("BOQ_LINE_NOT_VERIFIED")
+                if raw_component is None or not isinstance(raw_component, dict):
+                    blockers.append("BOQ_COST_COMPONENT_INVALID")
+                if not isinstance(raw_item_id, str) or not raw_item_id:
+                    blockers.append("BOQ_ITEM_ID_MISSING")
+                if quantity is None:
+                    blockers.append("QUANTITY_MISSING")
+                    quantity_status = "MISSING"
+                else:
+                    quantity_status = quantity.status
+                    if quantity.status != VerificationStatus.VERIFIED.value:
+                        blockers.append("QUANTITY_NOT_VERIFIED")
+                    if quantity.unit != line.unit:
+                        blockers.append("QUANTITY_UNIT_MISMATCH")
+
+                match_row = match_by_item.get(item_id)
+                name_match: BoqPriceNameMatchView | None = None
+                match_ready = False
+                if match_row is None:
+                    blockers.append("NOMENCLATURE_MATCH_MISSING")
+                else:
+                    try:
+                        match = NomenclatureMatch.model_validate(match_row.payload.get("match"))
+                    except (TypeError, ValueError):
+                        blockers.append("NOMENCLATURE_MATCH_PAYLOAD_INVALID")
+                    else:
+                        name_match = BoqPriceNameMatchView(
+                            match_id=match_row.id,
+                            status=match_row.status,
+                            match_class=match.match_class,
+                            boq_item_name=line.description,
+                            source_item_id=match.source_item_id,
+                            canonical_item_id=match.canonical_item_id,
+                            source_attributes=dict(sorted(match.source_attributes.items())),
+                            canonical_attributes=dict(sorted(match.canonical_attributes.items())),
+                            mismatched_attributes=tuple(sorted(match.mismatched_attributes)),
+                            missing_attributes=tuple(sorted(match.missing_attributes)),
+                            catalog_version_id=match_row.catalog_version_id,
+                            assessment_method=(
+                                str(match_row.payload["assessment_method"])
+                                if isinstance(
+                                    match_row.payload.get("assessment_method"),
+                                    str,
+                                )
+                                else None
+                            ),
+                        )
+                        if match_row.status != VerificationStatus.VERIFIED.value:
+                            blockers.append("NOMENCLATURE_MATCH_NOT_VERIFIED")
+                        if match.match_class in {
+                            MatchClass.TECHNICALLY_UNACCEPTABLE,
+                            MatchClass.INSUFFICIENT_DATA,
+                        }:
+                            blockers.append("NOMENCLATURE_MATCH_NOT_ACCEPTABLE")
+                        integrity_blockers = self._nomenclature_match_integrity_blockers(
+                            project,
+                            match_row,
+                        )
+                        blockers.extend(f"NOMENCLATURE_{blocker}" for blocker in integrity_blockers)
+                        match_ready = (
+                            match_row.status == VerificationStatus.VERIFIED.value
+                            and match.match_class
+                            not in {
+                                MatchClass.TECHNICALLY_UNACCEPTABLE,
+                                MatchClass.INSUFFICIENT_DATA,
+                            }
+                            and not integrity_blockers
+                        )
+
+                won_tender_prices: list[BoqSourcePriceView] = []
+                fgis_cs_prices: list[BoqSourcePriceView] = []
+                market_prices: list[BoqSourcePriceView] = []
+                other_prices: list[BoqSourcePriceView] = []
+                if match_ready and match_row is not None:
+                    quote_rows = tuple(
+                        self.session.scalars(
+                            select(PriceQuoteRow)
+                            .where(
+                                PriceQuoteRow.project_id == project.id,
+                                PriceQuoteRow.item_id == item_id,
+                            )
+                            .order_by(PriceQuoteRow.quote_date.desc(), PriceQuoteRow.id)
+                        )
+                    )
+                    for quote_row in quote_rows:
+                        try:
+                            quote = self._validated_quote_row(
+                                project_id=project.id,
+                                row=quote_row,
+                                match=match_row,
+                            )
+                            observation_row = self._verified_observation(
+                                project.id,
+                                quote.source_observation_id,
+                            )
+                            observation = self._validated_observation(observation_row)
+                            source_origin_id = quote_row.payload.get("source_origin_id")
+                            if not isinstance(source_origin_id, str) or not source_origin_id:
+                                raise ValueError("Price source origin is absent")
+                            normalized_views: list[NormalizedPriceView] = []
+                            normalized_rows = tuple(
+                                self.session.scalars(
+                                    select(NormalizedPriceRow)
+                                    .where(NormalizedPriceRow.quote_id == quote.quote_id)
+                                    .order_by(
+                                        NormalizedPriceRow.created_at,
+                                        NormalizedPriceRow.id,
+                                    )
+                                )
+                            )
+                            for normalized_row in normalized_rows:
+                                if (
+                                    policy is None
+                                    or normalized_row.payload.get("policy_version_id") != policy.id
+                                ):
+                                    continue
+                                self._require_normalized_row_integrity(
+                                    project_id=project.id,
+                                    row=normalized_row,
+                                    quote=quote,
+                                    policy=policy,
+                                )
+                                normalized = NormalizedPrice.model_validate(
+                                    normalized_row.payload["normalized_price"]
+                                )
+                                normalized_views.append(
+                                    NormalizedPriceView(
+                                        normalized_price_id=normalized_row.id,
+                                        quote_id=normalized_row.quote_id,
+                                        amount_per_unit=normalized_row.amount_per_unit,
+                                        currency=normalized_row.currency,
+                                        unit=normalized.target_basis.unit,
+                                        formula_hash=normalized_row.formula_hash,
+                                        policy_version_id=policy.id,
+                                    )
+                                )
+                            source_view = BoqSourcePriceView(
+                                quote_id=quote.quote_id,
+                                evidence_class=quote.evidence_class,
+                                source_reference=quote.source_reference,
+                                source_observation_id=quote.source_observation_id,
+                                source_origin_id=source_origin_id,
+                                source_locator=observation.location.locator,
+                                source_document_revision_id=(
+                                    observation.location.document_revision_id
+                                ),
+                                observed_at=observation.observed_at,
+                                quote_date=quote.quote_date,
+                                valid_until=quote.valid_until,
+                                available=quote.available,
+                                lead_time_days=quote.lead_time_days,
+                                raw_amount=quote.amount,
+                                raw_currency=quote.basis.currency,
+                                raw_unit=quote.basis.unit,
+                                normalized_prices=tuple(normalized_views),
+                                technical_attributes=dict(
+                                    sorted(quote.technical_attributes.items())
+                                ),
+                            )
+                        except (LookupError, RuntimeError, TypeError, ValueError):
+                            blockers.append(f"PRICE_SOURCE_INTEGRITY_FAILED:{quote_row.id}")
+                            continue
+                        if quote.source_reference.source_type is PriceSourceType.WON_TENDER:
+                            won_tender_prices.append(source_view)
+                        elif quote.source_reference.source_type is PriceSourceType.FGIS_CS:
+                            fgis_cs_prices.append(source_view)
+                        elif quote.source_reference.source_type in {
+                            PriceSourceType.MARKETPLACE,
+                            PriceSourceType.SUPPLIER_WEBSITE,
+                        }:
+                            market_prices.append(source_view)
+                        else:
+                            other_prices.append(source_view)
+
+                if not won_tender_prices:
+                    blockers.append("WON_TENDER_PRICE_MISSING")
+                if not fgis_cs_prices:
+                    blockers.append("FGIS_CS_PRICE_MISSING")
+                if not market_prices:
+                    blockers.append("MARKET_PRICE_MISSING")
+                if policy is None:
+                    blockers.append("PRICE_POLICY_INTEGRITY_FAILED")
+
+                decision_row = decision_by_item.get(item_id)
+                decision: PriceDecisionSummaryView | None = None
+                if decision_row is None:
+                    blockers.append("PRICE_DECISION_MISSING")
+                else:
+                    try:
+                        decision = self.require_price_decision_integrity(decision_row)
+                    except (LookupError, RuntimeError, TypeError, ValueError):
+                        blockers.append("PRICE_DECISION_INTEGRITY_FAILED")
+                    else:
+                        if decision.status is not PriceStatus.VERIFIED:
+                            blockers.append(f"PRICE_DECISION_NOT_VERIFIED:{decision.status.value}")
+
+                blockers = list(dict.fromkeys(blockers))
+                if decision is not None and decision_row is not None and not blockers:
+                    rationale = (
+                        f"Approved selection method: "
+                        f"{decision_row.payload.get('selection_method')}.",
+                        f"The verified decision uses "
+                        f"{len(decision.normalized_price_ids)} normalized source prices.",
+                        "FGIS CS, won-tender and independent market source names "
+                        "are exposed for operator comparison.",
+                        "This row status does not replace the project bid-release gates.",
+                    )
+                    proposed = BoqProposedPriceView(
+                        status="VERIFIED",
+                        workflow_status=decision.status.value,
+                        amount_per_unit=decision.amount_per_unit,
+                        currency=decision.currency,
+                        unit=decision.unit,
+                        decision_id=decision.decision_id,
+                        as_of=decision.as_of,
+                        selection_method=(
+                            str(decision_row.payload["selection_method"])
+                            if isinstance(
+                                decision_row.payload.get("selection_method"),
+                                str,
+                            )
+                            else None
+                        ),
+                        normalized_price_ids=decision.normalized_price_ids,
+                        rationale=rationale,
+                    )
+                    row_status = "VERIFIED"
+                else:
+                    proposed = BoqProposedPriceView(
+                        status="BLOCKED",
+                        workflow_status=(
+                            decision.status.value if decision is not None else "MISSING"
+                        ),
+                        rationale=(
+                            "The proposed price is withheld because mandatory "
+                            "evidence or approval gates are incomplete.",
+                            *tuple(f"Blocker: {blocker}" for blocker in blockers),
+                        ),
+                    )
+                    row_status = "BLOCKED"
+
+                rows.append(
+                    BoqPriceMatrixRowView(
+                        row_id=f"{line.id}:{component_index + 1}",
+                        boq_line_id=line.id,
+                        line_key=line.line_key,
+                        wbs_node_id=line.wbs_node_id,
+                        work_code=line.work_code,
+                        boq_item_name=line.description,
+                        boq_unit=line.unit,
+                        quantity=quantity.value if quantity is not None else None,
+                        quantity_status=quantity_status,
+                        item_id=item_id,
+                        cost_category=(
+                            str(component["category"])
+                            if isinstance(component.get("category"), str)
+                            else None
+                        ),
+                        basis_kind=(
+                            str(component["basis_kind"])
+                            if isinstance(component.get("basis_kind"), str)
+                            else None
+                        ),
+                        row_status=row_status,
+                        blockers=tuple(blockers),
+                        name_match=name_match,
+                        won_tender_prices=tuple(won_tender_prices),
+                        fgis_cs_prices=tuple(fgis_cs_prices),
+                        market_prices=tuple(market_prices),
+                        other_prices=tuple(other_prices),
+                        proposed_price=proposed,
+                    )
+                )
+        return BoqPriceMatrixView(
+            project_id=project.id,
+            generated_at=utc_now(),
+            rows=tuple(rows),
+            blocked_row_count=sum(row.row_status == "BLOCKED" for row in rows),
+            release_warning=(
+                "A verified row price is not an APPROVED_FOR_BID decision. "
+                "The project release gate remains authoritative."
+            ),
+        )
+
     def nomenclature_context(
         self,
         *,
@@ -271,6 +747,7 @@ class PricingService:
         project_id: str,
         catalog_query: str | None,
         evidence_field_name: str,
+        source_item_id: str | None,
         limit: int,
     ) -> NomenclatureContextView:
         if limit < 1 or limit > 100:
@@ -278,9 +755,18 @@ class PricingService:
         evidence_field_name = evidence_field_name.strip()
         if not evidence_field_name or len(evidence_field_name) > 300:
             raise ValueError("Nomenclature evidence field name must contain 1 to 300 characters")
+        if evidence_field_name != "technical_attributes":
+            raise ValueError(
+                "Nomenclature evidence field must be the controlled technical_attributes field"
+            )
         normalized_query = catalog_query.strip().casefold() if catalog_query else ""
         if len(normalized_query) > 200:
             raise ValueError("Nomenclature catalog query exceeds 200 characters")
+        normalized_source_item_id = source_item_id.strip() if source_item_id else None
+        if normalized_source_item_id is not None and (
+            not normalized_source_item_id or len(normalized_source_item_id) > 128
+        ):
+            raise ValueError("Nomenclature source item ID is invalid")
         project = self._project_service().get_project(
             actor=actor,
             project_id=project_id,
@@ -298,6 +784,17 @@ class PricingService:
             document_set_revision_id=project.current_document_set_revision_id,
         )
         catalog = self._bound_version(project.id, "catalog", "catalog")
+        source_items = self._current_nomenclature_source_items(project.id)
+        selected_source = None
+        if normalized_source_item_id is not None:
+            selected_source = next(
+                (item for item in source_items if item.source_item_id == normalized_source_item_id),
+                None,
+            )
+            if selected_source is None:
+                raise ValueError(
+                    "Nomenclature source item is not a unique current verified BoQ component"
+                )
         all_items = self._validated_catalog_items(catalog)
         matching_items = [
             item
@@ -312,39 +809,77 @@ class PricingService:
                 )
             ).casefold()
         ]
-        rows = list(
-            self.session.scalars(
-                select(ObservationRow)
-                .where(
-                    ObservationRow.project_id == project_id,
-                    ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
-                    ObservationRow.field_name == evidence_field_name,
-                    ObservationRow.status == VerificationStatus.VERIFIED.value,
+        if selected_source is not None:
+            ranked_items: list[CatalogItemView] = []
+            for item in matching_items:
+                retrieval = catalog_retrieval_evidence(
+                    source_name=selected_source.description,
+                    canonical_item_id=item.canonical_item_id,
+                    attributes=item.attributes,
+                    critical_attributes=item.critical_attributes,
                 )
-                .order_by(ObservationRow.created_at.desc(), ObservationRow.id)
-                .limit(limit + 1)
+                ranked_items.append(
+                    item.model_copy(
+                        update={
+                            "retrieval_exact_identifier": (retrieval.exact_identifier_mentioned),
+                            "retrieval_matched_terms": retrieval.matched_terms,
+                            "retrieval_matched_critical_attributes": (
+                                retrieval.matched_critical_attributes
+                            ),
+                        }
+                    )
+                )
+            matching_items = sorted(
+                ranked_items,
+                key=lambda item: (
+                    -int(item.retrieval_exact_identifier),
+                    -len(item.retrieval_matched_critical_attributes),
+                    -len(item.retrieval_matched_terms),
+                    item.canonical_item_id,
+                ),
             )
-        )
+            bound_evidence_field_name = f"{evidence_field_name}:{selected_source.source_item_id}"
+            rows = list(
+                self.session.scalars(
+                    select(ObservationRow)
+                    .where(
+                        ObservationRow.project_id == project_id,
+                        ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                        ObservationRow.field_name == bound_evidence_field_name,
+                        ObservationRow.status == VerificationStatus.VERIFIED.value,
+                    )
+                    .order_by(ObservationRow.created_at.desc(), ObservationRow.id)
+                    .limit(limit + 1)
+                )
+            )
+        else:
+            rows = []
         evidence_candidates: list[NomenclatureEvidenceCandidateView] = []
         for row in rows[:limit]:
             observation = self._validated_observation(row)
-            if isinstance(observation.value, dict) and all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in observation.value.items()
-            ):
-                evidence_candidates.append(
-                    NomenclatureEvidenceCandidateView(
-                        observation=observation,
-                        attributes={
-                            str(key): str(value) for key, value in observation.value.items()
-                        },
-                    )
+            assert selected_source is not None
+            attributes = self._nomenclature_evidence_attributes(
+                observation,
+                expected_source_item_id=selected_source.source_item_id,
+            )
+            evidence_candidates.append(
+                NomenclatureEvidenceCandidateView(
+                    observation=observation,
+                    attributes=attributes,
                 )
+            )
         return NomenclatureContextView(
             project_id=project_id,
             project_state=ApprovalState(project.state),
             document_set_revision_id=document_set.id,
             catalog_version_id=catalog.id,
+            source_items=source_items,
+            selected_source_item_id=(
+                selected_source.source_item_id if selected_source is not None else None
+            ),
+            selected_source_description=(
+                selected_source.description if selected_source is not None else None
+            ),
             catalog_items=tuple(matching_items[:limit]),
             catalog_items_truncated=len(matching_items) > limit,
             evidence_field_name=evidence_field_name,
@@ -471,12 +1006,10 @@ class PricingService:
             document_revision_ids=document_set.revision_ids,
             document_revision_id=observation.document_revision_id,
         )
-        source_attributes = self._validated_observation(observation).value
-        if not isinstance(source_attributes, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in source_attributes.items()
-        ):
-            raise ValueError("Nomenclature evidence must contain string attributes")
+        source_attributes = self._nomenclature_evidence_attributes(
+            self._validated_observation(observation),
+            expected_source_item_id=draft.source_item_id,
+        )
         canonical_attributes = item.get("attributes")
         critical_attributes = item.get("critical_attributes")
         if not isinstance(canonical_attributes, dict) or not all(
@@ -959,6 +1492,7 @@ class PricingService:
             project.id,
             observation,
             draft.evidence_class,
+            draft.source_reference.source_type,
         )
         identity = {
             "project_id": project.id,
@@ -974,6 +1508,7 @@ class PricingService:
             item_id=draft.item_id,
             supplier_id=draft.supplier_id,
             evidence_class=draft.evidence_class,
+            source_reference=draft.source_reference,
             source_observation_id=draft.source_observation_id,
             technical_attributes=draft.technical_attributes,
             amount=draft.amount,
@@ -1322,6 +1857,7 @@ class PricingService:
                 item_id=item_id,
                 decision=row,
                 missing_classes=triangulation.missing_evidence_classes,
+                missing_source_groups=triangulation.missing_source_groups,
                 origins_are_independent=origins_are_independent,
                 actor=actor,
             )
@@ -1354,9 +1890,9 @@ class PricingService:
             decision_id=row.id,
             item_id=item_id,
             status=status,
-            amount_per_unit=selected_amount,
-            currency=row.currency,
-            unit=row.unit,
+            amount_per_unit=(selected_amount if status is PriceStatus.VERIFIED else None),
+            currency=row.currency if status is PriceStatus.VERIFIED else None,
+            unit=row.unit if status is PriceStatus.VERIFIED else None,
             derived_observation_id=derived_observation_id,
             triangulation=triangulation,
             relative_spread=relative_spread,
@@ -1536,6 +2072,7 @@ class PricingService:
             project_id,
             observation,
             draft.evidence_class,
+            draft.source_reference.source_type,
         )
         return draft, source_origin_id
 
@@ -1791,9 +2328,9 @@ class PricingService:
         return PriceDecisionSummaryView(
             decision_id=row.id,
             status=status,
-            amount_per_unit=row.amount_per_unit,
-            currency=row.currency,
-            unit=row.unit,
+            amount_per_unit=(row.amount_per_unit if status is PriceStatus.VERIFIED else None),
+            currency=row.currency if status is PriceStatus.VERIFIED else None,
+            unit=row.unit if status is PriceStatus.VERIFIED else None,
             policy_version_id=row.policy_version_id,
             derived_observation_id=row.derived_observation_id,
             evaluation_id=evaluation_id,
@@ -1840,6 +2377,7 @@ class PricingService:
             project_id,
             observation,
             quote.evidence_class,
+            quote.source_reference.source_type,
         )
         if row.payload.get("source_origin_id") != source_origin_id:
             raise ValueError("Price quote source origin differs from qualified evidence")
@@ -1954,6 +2492,7 @@ class PricingService:
         project_id: str,
         observation: ObservationRow,
         evidence_class: PriceEvidenceClass,
+        source_type: PriceSourceType,
     ) -> str:
         leaf_ids = require_distinct_qualified_independence(
             self.session,
@@ -1977,10 +2516,21 @@ class PricingService:
             for qualification in qualifications
         ):
             raise ValueError("Price evidence class is outside the source adapter qualification")
+        if any(
+            source_type.value not in qualification.payload.get("supported_price_source_types", [])
+            for qualification in qualifications
+        ):
+            raise ValueError("Price source type is outside the source adapter qualification")
         origins = {row.payload.get("source_origin_id") for row in leaves}
         if len(origins) != 1 or None in origins:
             raise ValueError("A quote extraction must resolve to one controlled source origin")
-        return str(next(iter(origins)))
+        source_origin_id = str(next(iter(origins)))
+        if any(
+            source_origin_id not in qualification.payload.get("supported_price_source_origins", [])
+            for qualification in qualifications
+        ):
+            raise ValueError("Price source origin is outside the source adapter qualification")
+        return source_origin_id
 
     @staticmethod
     def _validate_quote_technical_attributes(
@@ -2054,6 +2604,34 @@ class PricingService:
         self._require_nomenclature_match_integrity(project, row)
         return row
 
+    def require_verified_nomenclature_match(
+        self,
+        *,
+        project_id: str,
+        item_id: str,
+    ) -> NomenclatureMatchRow:
+        """Return a current match only after replaying its governed evidence."""
+
+        return self._verified_match_for_item(project_id, item_id)
+
+    def require_current_nomenclature_source_item(
+        self,
+        *,
+        project_id: str,
+        item_id: str,
+    ) -> NomenclatureSourceItemView:
+        matches = tuple(
+            item
+            for item in self._current_nomenclature_source_items(project_id)
+            if item.source_item_id == item_id
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                "Nomenclature source item must identify exactly one current verified "
+                "BoQ cost component"
+            )
+        return matches[0]
+
     def _current_match(
         self,
         project_id: str,
@@ -2108,7 +2686,10 @@ class PricingService:
             raise RuntimeError("Verified nomenclature evidence identity does not reproduce")
         return observation
 
-    def _require_current_boq_item(self, project_id: str, item_id: str) -> None:
+    def _current_nomenclature_source_items(
+        self,
+        project_id: str,
+    ) -> tuple[NomenclatureSourceItemView, ...]:
         lines = list(
             self.session.scalars(
                 select(BoqLineRow).where(
@@ -2118,21 +2699,84 @@ class PricingService:
                 )
             )
         )
-        occurrences = 0
+        result: list[NomenclatureSourceItemView] = []
+        seen: set[str] = set()
         for line in lines:
             components = line.payload.get("cost_components")
             if not isinstance(components, list):
                 raise RuntimeError("Verified BoQ line cost-component plan is invalid")
-            occurrences += sum(
-                1
-                for component in components
-                if isinstance(component, dict) and component.get("semantic_key") == item_id
-            )
-        if occurrences != 1:
+            for component in components:
+                source_item_id = (
+                    component.get("semantic_key") if isinstance(component, dict) else None
+                )
+                if (
+                    not isinstance(source_item_id, str)
+                    or not source_item_id
+                    or source_item_id != source_item_id.strip()
+                ):
+                    raise RuntimeError("Verified BoQ line cost-component identity is invalid")
+                if source_item_id in seen:
+                    raise ValueError(
+                        "Nomenclature source item must be globally unique across "
+                        "current verified BoQ components"
+                    )
+                seen.add(source_item_id)
+                result.append(
+                    NomenclatureSourceItemView(
+                        source_item_id=source_item_id,
+                        boq_line_id=line.id,
+                        line_key=line.line_key,
+                        wbs_node_id=line.wbs_node_id,
+                        work_code=line.work_code,
+                        description=line.description,
+                        unit=line.unit,
+                    )
+                )
+        return tuple(sorted(result, key=lambda item: (item.line_key, item.source_item_id)))
+
+    def _require_current_boq_item(self, project_id: str, item_id: str) -> None:
+        if not any(
+            item.source_item_id == item_id
+            for item in self._current_nomenclature_source_items(project_id)
+        ):
             raise ValueError(
                 "Nomenclature source item must identify exactly one current verified "
                 "BoQ cost component"
             )
+
+    @staticmethod
+    def _nomenclature_evidence_attributes(
+        observation: Observation,
+        *,
+        expected_source_item_id: str,
+    ) -> dict[str, str]:
+        expected_field_name = f"technical_attributes:{expected_source_item_id}"
+        if observation.field_name != expected_field_name:
+            raise ValueError("Nomenclature evidence field is not bound to the BoQ source item")
+        value = observation.value
+        if not isinstance(value, dict):
+            raise ValueError("Nomenclature evidence must contain a structured item binding")
+        source_item_id = value.get("source_item_id")
+        attributes = value.get("attributes")
+        if source_item_id != expected_source_item_id:
+            raise ValueError("Nomenclature evidence belongs to another BoQ source item")
+        if (
+            not isinstance(attributes, dict)
+            or not attributes
+            or not all(
+                isinstance(key, str)
+                and key
+                and key == key.strip()
+                and isinstance(attribute_value, str)
+                and attribute_value
+                and attribute_value == attribute_value.strip()
+                for key, attribute_value in attributes.items()
+            )
+        ):
+            raise ValueError("Nomenclature evidence attributes are invalid")
+        return {
+            str(key): str(attribute_value) for key, attribute_value in sorted(attributes.items())
+        }
 
     def _nomenclature_match_integrity_blockers(
         self,
@@ -2205,15 +2849,16 @@ class PricingService:
                     or observation.location.document_revision_id not in document_set.revision_ids
                 ):
                     blockers.append("SOURCE_DOCUMENT_SET_INVALID")
-                if (
-                    not isinstance(observation.value, dict)
-                    or not all(
-                        isinstance(key, str) and isinstance(value, str)
-                        for key, value in observation.value.items()
+                try:
+                    reproduced_attributes = self._nomenclature_evidence_attributes(
+                        observation,
+                        expected_source_item_id=row.source_item_id,
                     )
-                    or match.source_attributes != observation.value
-                ):
-                    blockers.append("SOURCE_ATTRIBUTES_MISMATCH")
+                except (TypeError, ValueError):
+                    blockers.append("SOURCE_OBSERVATION_BINDING_INVALID")
+                else:
+                    if match.source_attributes != reproduced_attributes:
+                        blockers.append("SOURCE_ATTRIBUTES_MISMATCH")
         equivalence_version_id = row.payload.get("equivalence_rule_version_id")
         if equivalence_version_id is not None:
             try:
@@ -2386,6 +3031,7 @@ class PricingService:
         item_id: str,
         decision: PriceDecisionRow,
         missing_classes: tuple[PriceEvidenceClass, ...],
+        missing_source_groups: tuple[str, ...],
         origins_are_independent: bool,
         actor: Actor,
     ) -> str:
@@ -2394,6 +3040,7 @@ class PricingService:
             "project_id": project_id,
             "item_id": item_id,
             "missing_classes": missing_classes,
+            "missing_source_groups": missing_source_groups,
             "origins_are_independent": origins_are_independent,
             "price_policy_version_id": decision.policy_version_id,
         }
@@ -2401,6 +3048,7 @@ class PricingService:
         existing = self.session.get(RfqRequestRow, rfq_id)
         payload = {
             "missing_evidence_classes": [item.value for item in missing_classes],
+            "missing_source_groups": list(missing_source_groups),
             "independent_source_origin_required": not origins_are_independent,
             "created_by": actor.actor_id,
         }

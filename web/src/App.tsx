@@ -44,11 +44,20 @@ const ContractPage = lazy(async () => ({
 const RiskPage = lazy(async () => ({
   default: (await import("./pages/RiskPage")).RiskPage,
 }));
+const ActualsPage = lazy(async () => ({
+  default: (await import("./pages/ActualsPage")).ActualsPage,
+}));
 const BoqAuthoringPage = lazy(async () => ({
   default: (await import("./pages/BoqAuthoringPage")).BoqAuthoringPage,
 }));
 const BoqLineReviewPage = lazy(async () => ({
   default: (await import("./pages/BoqLineReviewPage")).BoqLineReviewPage,
+}));
+const InitialQuantityPage = lazy(async () => ({
+  default: (await import("./pages/InitialQuantityPage")).InitialQuantityPage,
+}));
+const BoqPriceMatrixPage = lazy(async () => ({
+  default: (await import("./pages/BoqPriceMatrixPage")).BoqPriceMatrixPage,
 }));
 const ScopeCompletenessPage = lazy(async () => ({
   default: (await import("./pages/ScopeCompletenessPage"))
@@ -174,10 +183,26 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
         projectId !== null &&
         projectId !== "" &&
         parts.length === 4 &&
+        rawSection === "actuals" &&
+        parts[3] === "manage"
+      ) {
+        page = <ActualsPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
         rawSection === "evidence" &&
         parts[3] === "reconcile"
       ) {
         page = <ReconciliationPage config={config} projectId={projectId} />;
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 4 &&
+        rawSection === "boq" &&
+        parts[3] === "pricing-matrix"
+      ) {
+        page = <BoqPriceMatrixPage config={config} projectId={projectId} />;
       } else if (
         projectId !== null &&
         projectId !== "" &&
@@ -245,6 +270,28 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
               config={config}
               projectId={projectId}
               matchId={matchId}
+            />
+          );
+        }
+      } else if (
+        projectId !== null &&
+        projectId !== "" &&
+        parts.length === 5 &&
+        rawSection === "boq-lines" &&
+        parts[4] === "initial-quantity"
+      ) {
+        let lineId: string | null = null;
+        try {
+          lineId = decodeURIComponent(parts[3] ?? "");
+        } catch {
+          lineId = null;
+        }
+        if (lineId !== null && lineId !== "") {
+          page = (
+            <InitialQuantityPage
+              config={config}
+              projectId={projectId}
+              lineId={lineId}
             />
           );
         }

@@ -37,6 +37,15 @@ remain distinct from document revisions and observations.
 | `PROCESSING`, `PROCESSING_FAILED`, `CLEAN` | `PROCESSING_DEAD_LETTERED` | processing or delivery attempt budget exhausted; original input blocker remains unresolved |
 | `PROCESSING_DEAD_LETTERED` | `CLEAN` | audited `ADMIN` replay after incident resolution; creates a new outbox event and preserves the terminal event |
 
+`PROCESSED` means that the worker completed and committed its result; it does
+not mean that intake passed. The authoritative intake outcome is
+`manifest.all_files_processed`. The upload receipt UI renders a false value as
+`BLOCKED`, treats a missing manifest on `PROCESSED` as `BLOCKED`, lists the
+bounded findings and explicitly keeps structural intake separate from
+evidence, methodology, independent validation, and bid release. Domain
+validation rejects a serialized manifest when `all_files_processed` contradicts
+blocker findings or file-health flags.
+
 No user, reviewer, administrator, or API action can assert an initial malware
 `CLEAN` verdict or invoke a parser in the API process. Administrator replay
 only restores a previously scanned upload to the delivery queue; the worker
@@ -121,6 +130,24 @@ Archive members are decompressed through bounded streams into
 `SpooledTemporaryFile`; the memory threshold is
 `MAX_PARSER_SPOOL_MEMORY_BYTES`, after which data spills to worker-local disk.
 `ZipFile.read` and API-level whole-file reads are not used.
+
+OOXML inspection rejects packages that do not contain the exact required main
+part, content-type declaration, package relationship, and expected main XML
+root for their `.docx`, `.xlsx`, `.xlsm`, or `.pptx` suffix. Duplicate or
+case-colliding parts and unsafe or malformed XML are blockers. Every XML part
+is streamed through a parser that forbids DTD, entity, notation, and external
+entity declarations before any domain use. Non-hyperlink external
+relationships and hyperlink targets outside `http`, `https`, or `mailto` are
+blockers; ordinary hyperlinks using those schemes are bounded warnings
+recorded by relationship type, URI scheme, and target hash without persisting
+the target URL.
+
+Excel inspection fails closed on hidden content, missing formula caches,
+formula error tokens, cached formula error results, non-formula error values,
+and external workbook links. Findings include bounded sheet/cell locators.
+Passing this structural check does not validate a workbook's rates, tax basis,
+formula methodology, totals, or release price; those still require governed
+evidence and independent recalculation.
 
 The repository supplies the state machine, evidence contract, leased
 dispatcher, bounded retry/dead-letter/replay, bounded parser, worker entry

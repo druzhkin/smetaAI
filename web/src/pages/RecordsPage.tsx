@@ -158,6 +158,36 @@ export function RecordsPage({
                 </Link>
               </>
             )}
+          {section === "ACTUALS" &&
+            (auth.roles.includes("ESTIMATOR") ||
+              auth.roles.includes("PROCUREMENT") ||
+              auth.roles.includes("TECHNICAL_EXPERT") ||
+              auth.roles.includes("REVIEWER") ||
+              auth.roles.includes("APPROVER") ||
+              auth.roles.includes("METHODOLOGY_OWNER") ||
+              auth.roles.includes("AUDITOR")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/actuals/manage`}
+              >
+                <Icon name="trace" size={16} />
+                Контур факта
+              </Link>
+            )}
+          {section === "PRICING" &&
+            (auth.roles.includes("ESTIMATOR") ||
+              auth.roles.includes("PROCUREMENT") ||
+              auth.roles.includes("REVIEWER") ||
+              auth.roles.includes("APPROVER") ||
+              auth.roles.includes("AUDITOR")) && (
+              <Link
+                className="button button--primary"
+                to={`/projects/${encodeURIComponent(projectId)}/boq/pricing-matrix`}
+              >
+                <Icon name="trace" size={16} />
+                Ценовая матрица ВОР
+              </Link>
+            )}
           {section === "BOQ_SCOPE" &&
             projectQuery.data.state === "BOQ_IN_PROGRESS" &&
             (auth.roles.includes("ESTIMATOR") ||
@@ -309,6 +339,22 @@ export function RecordsPage({
                   );
                 }
                 if (
+                  section === "ACTUALS" &&
+                  ["ACTUAL", "VARIANCE", "CALIBRATION_EXAMPLE"].includes(
+                    record.kind,
+                  )
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/actuals/manage`}
+                    >
+                      <Icon name="trace" size={15} />
+                      Открыть контур факта
+                    </Link>
+                  );
+                }
+                if (
                   section === "BOQ_SCOPE" &&
                   record.kind === "BOQ_LINE" &&
                   record.current === true &&
@@ -323,6 +369,25 @@ export function RecordsPage({
                     >
                       <Icon name="shield" size={15} />
                       Проверить строку
+                    </Link>
+                  );
+                }
+                if (
+                  section === "BOQ_SCOPE" &&
+                  record.kind === "BOQ_LINE" &&
+                  record.current === true &&
+                  record.status === "VERIFIED" &&
+                  record.attributes.quantity_status === "MISSING" &&
+                  (auth.roles.includes("ESTIMATOR") ||
+                    auth.roles.includes("TECHNICAL_EXPERT"))
+                ) {
+                  return (
+                    <Link
+                      className="button button--secondary"
+                      to={`/projects/${encodeURIComponent(projectId)}/boq-lines/${encodeURIComponent(record.id)}/initial-quantity`}
+                    >
+                      <Icon name="trace" size={15} />
+                      Прикрепить объём из ВОР
                     </Link>
                   );
                 }

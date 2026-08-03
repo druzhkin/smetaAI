@@ -34,11 +34,17 @@ from tenderguard.domain.enums import (
     ContractTermKind,
     EvidenceMethod,
     PriceEvidenceClass,
+    PriceSourceType,
     PriceStatus,
     VatBasis,
     VerificationStatus,
 )
-from tenderguard.domain.models import CommercialBasis, EvidenceLocation, Observation
+from tenderguard.domain.models import (
+    CommercialBasis,
+    EvidenceLocation,
+    Observation,
+    PriceSourceReference,
+)
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
@@ -414,6 +420,12 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                     payload={
                         "supported_methods": [method.value],
                         "supported_price_evidence_classes": supported_classes,
+                        "supported_price_source_types": [item.value for item in PriceSourceType],
+                        "supported_price_source_origins": [
+                            "manufacturer",
+                            "market-index",
+                            "won-tender-register",
+                        ],
                         "independence_domain": domain,
                         "organization_id": "org-1",
                         "service_actor_id": "extractor",
@@ -424,8 +436,11 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             )
         attribute_observation = Observation(
             observation_id="observation-attributes",
-            field_name="technical_attributes",
-            value={"diameter": "DN100", "pressure": "PN16"},
+            field_name="technical_attributes:pipe-source",
+            value={
+                "source_item_id": "pipe-source",
+                "attributes": {"diameter": "DN100", "pressure": "PN16"},
+            },
             unit=None,
             method=EvidenceMethod.RULE_ENGINE,
             method_version="reconciliation-v1",
@@ -496,6 +511,16 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 ),
             }
         )
+        foreign_attribute_observation = attribute_observation.model_copy(
+            update={
+                "observation_id": "observation-attributes-foreign-item",
+                "field_name": "technical_attributes:other-source",
+                "value": {
+                    "source_item_id": "other-source",
+                    "attributes": {"diameter": "DN100", "pressure": "PN16"},
+                },
+            }
+        )
         session.add_all(
             (
                 ObservationRow(
@@ -519,6 +544,17 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                     status=old_attribute_observation.status.value,
                     payload={"observation": old_attribute_observation.model_dump(mode="json")},
                     created_at=now + timedelta(seconds=1),
+                ),
+                ObservationRow(
+                    id=foreign_attribute_observation.observation_id,
+                    project_id="project-pricing",
+                    document_revision_id="revision-1",
+                    field_name=foreign_attribute_observation.field_name,
+                    method=foreign_attribute_observation.method.value,
+                    method_version=foreign_attribute_observation.method_version,
+                    status=foreign_attribute_observation.status.value,
+                    payload={"observation": foreign_attribute_observation.model_dump(mode="json")},
+                    created_at=now + timedelta(seconds=2),
                 ),
                 ObservationRow(
                     id=contract_observation.observation_id,
@@ -557,18 +593,34 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             Decimal("1020"),
         ),
         (
-            PriceEvidenceClass.COMMERCIAL_QUOTE,
-            "supplier-rfq",
+            PriceEvidenceClass.INTERNAL_HISTORY,
+            "won-tender-register",
             Decimal("1010"),
         ),
     )
     drafts: list[PriceQuoteDraft] = []
     with factory.begin() as session:
         for index, (evidence_class, origin, amount) in enumerate(quote_specs, start=1):
+            source_type = {
+                PriceEvidenceClass.OFFICIAL_OR_PRIMARY: PriceSourceType.FGIS_CS,
+                PriceEvidenceClass.INDEPENDENT_MARKET: PriceSourceType.MARKETPLACE,
+                PriceEvidenceClass.INTERNAL_HISTORY: PriceSourceType.WON_TENDER,
+            }[evidence_class]
             draft = PriceQuoteDraft(
                 item_id="pipe-source",
                 supplier_id=f"supplier-{index}",
                 evidence_class=evidence_class,
+                source_reference=PriceSourceReference(
+                    source_type=source_type,
+                    display_name={
+                        PriceSourceType.FGIS_CS: "ФГИС ЦС",
+                        PriceSourceType.MARKETPLACE: "Портал поставщика",
+                        PriceSourceType.WON_TENDER: "ЕИС: выигранный тендер",
+                    }[source_type],
+                    source_item_name="Steel pipe DN100 PN16",
+                    source_record_id=f"source-record-{index}",
+                    source_uri=f"https://prices.example.test/source/{index}",
+                ),
                 source_observation_id=f"observation-quote-{index}",
                 technical_attributes={"diameter": "DN100", "pressure": "PN16"},
                 amount=amount,
@@ -666,6 +718,7 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 project_id="project-pricing",
                 catalog_query="pipe",
                 evidence_field_name="technical_attributes",
+                source_item_id=None,
                 limit=0,
             )
         with pytest.raises(ValueError, match="field name must contain"):
@@ -674,6 +727,7 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 project_id="project-pricing",
                 catalog_query="pipe",
                 evidence_field_name="   ",
+                source_item_id=None,
                 limit=100,
             )
         with pytest.raises(ValueError, match="query exceeds 200"):
@@ -682,6 +736,16 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 project_id="project-pricing",
                 catalog_query="x" * 201,
                 evidence_field_name="technical_attributes",
+                source_item_id=None,
+                limit=100,
+            )
+        with pytest.raises(ValueError, match="controlled technical_attributes field"):
+            service.nomenclature_context(
+                actor=procurement,
+                project_id="project-pricing",
+                catalog_query=None,
+                evidence_field_name="arbitrary_attributes",
+                source_item_id=None,
                 limit=100,
             )
         project = session.get(ProjectRow, "project-pricing")
@@ -696,20 +760,51 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 project_id="project-pricing",
                 catalog_query="pipe",
                 evidence_field_name="technical_attributes",
+                source_item_id=None,
                 limit=100,
             )
         project.state = ApprovalState.PRICING_IN_PROGRESS.value
+        with pytest.raises(ValueError, match="unique current verified BoQ component"):
+            service.nomenclature_context(
+                actor=procurement,
+                project_id="project-pricing",
+                catalog_query=None,
+                evidence_field_name="technical_attributes",
+                source_item_id="unknown-source",
+                limit=100,
+            )
         context = service.nomenclature_context(
             actor=procurement,
             project_id="project-pricing",
             catalog_query="pipe",
             evidence_field_name="technical_attributes",
+            source_item_id="pipe-source",
             limit=1,
         )
+        assert context.selected_source_item_id == "pipe-source"
+        assert context.selected_source_description == "Pipe material cost line"
+        assert {item.source_item_id for item in context.source_items} == {
+            "pipe-source",
+            "risk-reserve",
+        }
+        assert context.catalog_items[0].retrieval_matched_terms == ("pipe",)
         assert {
             candidate.observation.observation_id for candidate in context.evidence_candidates
         } == {"observation-attributes"}
         assert not context.evidence_candidates_truncated
+        malformed_binding = attribute_observation.model_copy(
+            update={
+                "value": {
+                    "source_item_id": "other-source",
+                    "attributes": {"diameter": "DN100", "pressure": "PN16"},
+                }
+            }
+        )
+        with pytest.raises(ValueError, match="belongs to another BoQ source item"):
+            service._nomenclature_evidence_attributes(
+                malformed_binding,
+                expected_source_item_id="pipe-source",
+            )
         with pytest.raises(LookupError, match="missing-match"):
             service.nomenclature_review_context(
                 actor=procurement,
@@ -739,6 +834,18 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
                 ),
                 request_id="request-nomenclature-old-evidence",
                 reason="Prove that old-set technical evidence is rejected",
+            )
+        with pytest.raises(ValueError, match="field is not bound to the BoQ source item"):
+            service.assess_nomenclature(
+                actor=procurement,
+                project_id="project-pricing",
+                draft=NomenclatureAssessmentDraft(
+                    source_item_id="pipe-source",
+                    canonical_item_id="pipe-canonical",
+                    source_attributes_observation_id=("observation-attributes-foreign-item"),
+                ),
+                request_id="request-nomenclature-cross-item-evidence",
+                reason="Prove that attributes cannot be reused across BoQ items",
             )
         match = service.assess_nomenclature(
             actor=procurement,
@@ -865,6 +972,8 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             reason="Evaluate critical price evidence",
         )
         assert first_decision.status is PriceStatus.RFQ_REQUIRED
+        assert first_decision.amount_per_unit is None
+        assert first_decision.currency is None
         assert first_decision.rfq_request_id
         assert first_decision.project_state is ApprovalState.RFQ_REQUIRED
 
@@ -872,15 +981,15 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
             actor=procurement,
             project_id="project-pricing",
             draft=drafts[2],
-            request_id="request-commercial-quote",
-            reason="Record RFQ response",
+            request_id="request-won-tender-price",
+            reason="Record an independently verified won-tender price",
         )
         service.normalize_price(
             actor=procurement,
             project_id="project-pricing",
             command=NormalizePriceCommand(quote_id=third_quote.quote.quote_id),
-            request_id="request-normalize-commercial",
-            reason="Normalize RFQ response",
+            request_id="request-normalize-won-tender",
+            reason="Normalize won-tender history",
         )
         final_decision = service.evaluate_item_price(
             actor=procurement,
@@ -902,6 +1011,72 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         assert final_context.current_decision is not None
         assert final_context.current_decision.status is PriceStatus.VERIFIED
         assert final_context.current_decision.amount_per_unit == Decimal("101")
+        matrix = service.boq_price_matrix(
+            actor=procurement,
+            project_id="project-pricing",
+        )
+        pipe_row = next(row for row in matrix.rows if row.item_id == "pipe-source")
+        assert pipe_row.row_status == "VERIFIED"
+        assert pipe_row.name_match is not None
+        assert pipe_row.name_match.boq_item_name == "Pipe material cost line"
+        assert pipe_row.fgis_cs_prices[0].source_reference.source_item_name == (
+            "Steel pipe DN100 PN16"
+        )
+        assert len(pipe_row.won_tender_prices) == 1
+        assert len(pipe_row.market_prices) == 1
+        assert pipe_row.proposed_price.amount_per_unit == Decimal("101")
+        parser_qualification = session.get(
+            AdapterQualificationRow,
+            "qualification-parser",
+        )
+        assert parser_qualification is not None
+        original_qualification_payload = dict(parser_qualification.payload)
+        parser_qualification.payload = {
+            **original_qualification_payload,
+            "supported_price_source_types": [
+                source_type
+                for source_type in original_qualification_payload["supported_price_source_types"]
+                if source_type != PriceSourceType.WON_TENDER.value
+            ],
+        }
+        disqualified_matrix = service.boq_price_matrix(
+            actor=procurement,
+            project_id="project-pricing",
+        )
+        disqualified_pipe_row = next(
+            row for row in disqualified_matrix.rows if row.item_id == "pipe-source"
+        )
+        assert disqualified_pipe_row.row_status == "BLOCKED"
+        assert disqualified_pipe_row.won_tender_prices == ()
+        assert (
+            f"PRICE_SOURCE_INTEGRITY_FAILED:{third_quote.quote.quote_id}"
+            in disqualified_pipe_row.blockers
+        )
+        parser_qualification.payload = original_qualification_payload
+        parser_qualification.payload = {
+            **original_qualification_payload,
+            "supported_price_source_origins": [
+                source_origin
+                for source_origin in original_qualification_payload[
+                    "supported_price_source_origins"
+                ]
+                if source_origin != "won-tender-register"
+            ],
+        }
+        disqualified_origin_matrix = service.boq_price_matrix(
+            actor=procurement,
+            project_id="project-pricing",
+        )
+        disqualified_origin_row = next(
+            row for row in disqualified_origin_matrix.rows if row.item_id == "pipe-source"
+        )
+        assert disqualified_origin_row.row_status == "BLOCKED"
+        assert disqualified_origin_row.won_tender_prices == ()
+        assert (
+            f"PRICE_SOURCE_INTEGRITY_FAILED:{third_quote.quote.quote_id}"
+            in disqualified_origin_row.blockers
+        )
+        parser_qualification.payload = original_qualification_payload
         stored_decision = session.get(PriceDecisionRow, final_decision.decision_id)
         assert stored_decision is not None
         stored_amount = stored_decision.amount_per_unit
@@ -915,6 +1090,7 @@ def test_critical_price_opens_rfq_then_verifies_three_way_triangulation(
         stored_decision.amount_per_unit = stored_amount
         rfq = session.get(RfqRequestRow, first_decision.rfq_request_id)
         assert rfq is not None and rfq.status == "CLOSED"
+        assert rfq.payload["missing_source_groups"] == ["WON_TENDER"]
 
         project = session.get(ProjectRow, "project-pricing")
         assert project is not None

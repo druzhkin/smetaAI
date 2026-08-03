@@ -36,3 +36,22 @@ def test_transition_validation_records_formal_path() -> None:
                 }
             )
         )
+
+
+def test_final_expert_can_return_to_automatic_processing() -> None:
+    for target in (
+        ApprovalState.EXTRACTION_IN_PROGRESS,
+        ApprovalState.BOQ_IN_PROGRESS,
+        ApprovalState.PRICING_IN_PROGRESS,
+        ApprovalState.CALCULATION_IN_PROGRESS,
+    ):
+        validate_transition(
+            WorkflowTransition(
+                project_id="project-1",
+                from_state=ApprovalState.EXPERT_REVIEW,
+                to_state=target,
+                actor_id="expert-1",
+                reason="Return selected findings to automatic rework",
+                occurred_at=datetime(2026, 7, 31, tzinfo=UTC),
+            )
+        )

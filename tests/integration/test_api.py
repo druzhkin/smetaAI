@@ -20,6 +20,7 @@ from tenderguard.domain.enums import (
     ActorRole,
     EvidenceMethod,
     PriceEvidenceClass,
+    PriceSourceType,
     VatBasis,
     VerificationStatus,
 )
@@ -27,6 +28,7 @@ from tenderguard.domain.models import (
     CommercialBasis,
     EvidenceLocation,
     Observation,
+    PriceSourceReference,
 )
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
@@ -203,6 +205,25 @@ def test_api_scopes_projects_and_exposes_fail_closed_release_gates(tmp_path: Pat
         project_id = project["id"]
         assert project["state"] == "DRAFT"
         assert response.headers["X-Request-Id"].startswith("request-")
+
+        pre_bid_actuals = client.get(
+            f"/v1/projects/{project_id}/actuals/context?limit=20",
+            headers=estimator_headers,
+        )
+        assert pre_bid_actuals.status_code == 422
+        assert "released or archived" in pre_bid_actuals.json()["detail"]
+        pre_bid_forecasts = client.get(
+            (f"/v1/projects/{project_id}/actuals/missing-actual/forecast-candidates?limit=10"),
+            headers=estimator_headers,
+        )
+        assert pre_bid_forecasts.status_code == 422
+        assert "released or archived" in pre_bid_forecasts.json()["detail"]
+        oversized_actuals_cursor = client.get(
+            f"/v1/projects/{project_id}/actuals/context",
+            headers=estimator_headers,
+            params={"cursor": "x" * 2001},
+        )
+        assert oversized_actuals_cursor.status_code == 422
 
         gates = client.get(
             f"/v1/projects/{project_id}/release-gates",
@@ -718,6 +739,12 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 "valid_until": "2027-07-23",
                 "supported_methods": ["TABLE_PARSER"],
                 "supported_price_evidence_classes": [item.value for item in PriceEvidenceClass],
+                "supported_price_source_types": [item.value for item in PriceSourceType],
+                "supported_price_source_origins": [
+                    "manufacturer-primary",
+                    "independent-market-index",
+                    "won-tender-register",
+                ],
                 "independence_domain": "deterministic-table-parser",
                 "service_actor_id": "extractor-service",
             },
@@ -732,6 +759,12 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                 "valid_until": "2027-07-23",
                 "supported_methods": ["VISUAL_MODEL"],
                 "supported_price_evidence_classes": [item.value for item in PriceEvidenceClass],
+                "supported_price_source_types": [item.value for item in PriceSourceType],
+                "supported_price_source_origins": [
+                    "manufacturer-primary",
+                    "independent-market-index",
+                    "won-tender-register",
+                ],
                 "independence_domain": "isolated-visual-provider",
                 "service_actor_id": "extractor-service",
             },
@@ -1888,8 +1921,11 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             )
             attributes_observation = Observation(
                 observation_id="observation-technical-attributes-pipe",
-                field_name="technical_attributes",
-                value={"type": "pipe"},
+                field_name="technical_attributes:pipe",
+                value={
+                    "source_item_id": "pipe",
+                    "attributes": {"type": "pipe"},
+                },
                 method=EvidenceMethod.RULE_ENGINE,
                 method_version=reconciliation_rules["version_id"],
                 source_priority=1,
@@ -1982,14 +2018,34 @@ def test_governed_calculation_creates_independently_validated_snapshot(
                         PriceEvidenceClass.INDEPENDENT_MARKET,
                         "independent-market-index",
                     ),
+                    (
+                        PriceEvidenceClass.INTERNAL_HISTORY,
+                        "won-tender-register",
+                    ),
                 ),
                 start=1,
             ):
                 source_observation_id = f"observation-price-{index}"
+                source_type = {
+                    PriceEvidenceClass.OFFICIAL_OR_PRIMARY: PriceSourceType.FGIS_CS,
+                    PriceEvidenceClass.INDEPENDENT_MARKET: PriceSourceType.MARKETPLACE,
+                    PriceEvidenceClass.INTERNAL_HISTORY: PriceSourceType.WON_TENDER,
+                }[evidence_class]
                 draft = PriceQuoteDraft(
                     item_id="pipe",
                     supplier_id=f"price-source-{index}",
                     evidence_class=evidence_class,
+                    source_reference=PriceSourceReference(
+                        source_type=source_type,
+                        display_name={
+                            PriceSourceType.FGIS_CS: "ФГИС ЦС",
+                            PriceSourceType.MARKETPLACE: "Рыночный портал",
+                            PriceSourceType.WON_TENDER: "ЕИС: выигранный тендер",
+                        }[source_type],
+                        source_item_name="PE100 SDR17 pipe",
+                        source_record_id=f"source-{index}",
+                        source_uri=f"https://prices.example.test/{index}",
+                    ),
                     source_observation_id=source_observation_id,
                     technical_attributes={"type": "pipe"},
                     amount=Decimal("125.50"),
@@ -2142,6 +2198,18 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             assert price_decision.status.value == "VERIFIED"
             assert price_decision.derived_observation_id is not None
             verified_price_observation_id = price_decision.derived_observation_id
+        matrix_response = client.get(
+            f"/v1/projects/{project['id']}/boq/pricing-matrix",
+            headers=operator,
+        )
+        assert matrix_response.status_code == 200, matrix_response.text
+        matrix_payload = matrix_response.json()
+        pipe_matrix_row = next(row for row in matrix_payload["rows"] if row["item_id"] == "pipe")
+        assert pipe_matrix_row["row_status"] == "VERIFIED"
+        assert pipe_matrix_row["proposed_price"]["amount_per_unit"] == "125.500000000000"
+        assert len(pipe_matrix_row["won_tender_prices"]) == 1
+        assert len(pipe_matrix_row["fgis_cs_prices"]) == 1
+        assert len(pipe_matrix_row["market_prices"]) == 1
         risk_context = client.get(
             f"/v1/projects/{project['id']}/risks/context",
             headers=operator,
@@ -2221,11 +2289,16 @@ def test_governed_calculation_creates_independently_validated_snapshot(
             params={
                 "catalog_query": "pipe",
                 "evidence_field_name": "technical_attributes",
+                "source_item_id": "pipe",
                 "limit": 100,
             },
         )
         assert nomenclature_context.status_code == 200, nomenclature_context.text
         assert nomenclature_context.json()["catalog_version_id"]
+        assert nomenclature_context.json()["selected_source_item_id"] == "pipe"
+        assert "pipe" in {
+            item["source_item_id"] for item in nomenclature_context.json()["source_items"]
+        }
         assert {
             item["canonical_item_id"] for item in nomenclature_context.json()["catalog_items"]
         } == {"pipe"}
@@ -2500,7 +2573,7 @@ def test_governed_calculation_creates_independently_validated_snapshot(
         evidence = pipe_lineage["evidence"]
         assert evidence["basis_id"] == verified_price_observation_id
         assert evidence["document"]["revision_id"] == uploaded_payload["document_revision_id"]
-        assert len(evidence["source_observations"]) == 2
+        assert len(evidence["source_observations"]) == 3
 
         scenario_context = client.get(
             f"/v1/projects/{project['id']}/scenarios/context",

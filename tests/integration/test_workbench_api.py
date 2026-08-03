@@ -426,10 +426,10 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
                     metric="MATERIAL_COST",
                     value=Decimal("1100000.00"),
                     unit="RUB",
-                    verified=True,
+                    verified=False,
                     source_observation_id="observation-workbench",
                     occurred_on=now.date(),
-                    payload={},
+                    payload={"review_status": "REJECTED"},
                     supersedes_actual_id=None,
                     is_current=True,
                     created_at=now,
@@ -446,7 +446,7 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
                     reason="MARKET_CHANGE",
                     absolute_variance=Decimal("100000.00"),
                     relative_variance=Decimal("0.10"),
-                    payload={},
+                    payload={"variance": {"status": "REJECTED"}},
                     classified_by="portfolio-owner",
                     created_at=now,
                 )
@@ -465,6 +465,7 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
                     approved=False,
                     payload={
                         "created_by": "portfolio-owner",
+                        "review_status": "REJECTED",
                         "calibration_example": {"variance_reason": "MARKET_CHANGE"},
                     },
                     created_at=now,
@@ -638,6 +639,14 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
             items = response.json()["items"]
             actual_kinds = {item["kind"] for item in items}
             assert expected_kinds <= actual_kinds
+            if section == "ACTUALS":
+                assert {
+                    item["kind"]: item["status"] for item in items if item["kind"] in expected_kinds
+                } == {
+                    "ACTUAL": "REJECTED",
+                    "VARIANCE": "REJECTED",
+                    "CALIBRATION_EXAMPLE": "REJECTED",
+                }
             if section == "BOQ_SCOPE":
                 line_record = next(item for item in items if item["kind"] == "BOQ_LINE")
                 assert line_record["attributes"]["planned_components"] == [
@@ -656,6 +665,17 @@ def test_operator_read_models_are_scoped_paginated_and_fail_closed(
                         "factor_ids": [],
                     },
                 ]
+        rejected_actuals = client.get(
+            f"/v1/projects/{primary_id}/records",
+            headers=owner,
+            params={"section": "ACTUALS", "statuses": "REJECTED"},
+        )
+        assert rejected_actuals.status_code == 200, rejected_actuals.text
+        assert {item["kind"] for item in rejected_actuals.json()["items"]} == {
+            "ACTUAL",
+            "VARIANCE",
+            "CALIBRATION_EXAMPLE",
+        }
 
         audit_records = client.get(
             f"/v1/projects/{primary_id}/records",

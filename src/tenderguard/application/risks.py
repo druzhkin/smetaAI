@@ -294,11 +294,8 @@ class RiskService:
                 select(ObservationRow)
                 .where(
                     ObservationRow.project_id == project.id,
-                    ObservationRow.document_revision_id.in_(
-                        tuple(document_set.revision_ids)
-                    ),
-                    ObservationRow.field_name
-                    == definition.evidence_field_names[selected],
+                    ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                    ObservationRow.field_name == definition.evidence_field_names[selected],
                 )
                 .order_by(ObservationRow.created_at.desc(), ObservationRow.id)
                 .limit(limit + 1)
@@ -368,9 +365,7 @@ class RiskService:
             risk_model_content_hash=model.content_hash,
             risk_keys=definition.risk_keys,
             required_risk_keys=definition.required_risk_keys,
-            independently_verified_risk_keys=(
-                definition.independently_verified_risk_keys
-            ),
+            independently_verified_risk_keys=(definition.independently_verified_risk_keys),
             evidence_field_names=definition.evidence_field_names,
             review_role=definition.review_role,
             minimum_risk_items=definition.minimum_risk_items,
@@ -408,9 +403,7 @@ class RiskService:
             project.current_document_set_revision_id,
         )
         if document_set.id != expected_document_set_revision_id:
-            raise OptimisticLockError(
-                "Current document set changed after risk context was loaded"
-            )
+            raise OptimisticLockError("Current document set changed after risk context was loaded")
         definition, model = self._risk_model(
             project.id,
             actor.organization_id,
@@ -425,9 +418,7 @@ class RiskService:
             )
         field_name = definition.evidence_field_names[draft.risk_key]
         if self._unresolved_conflicts(project.id, field_name):
-            raise ValueError(
-                "Risk cannot be submitted while its evidence conflict is unresolved"
-            )
+            raise ValueError("Risk cannot be submitted while its evidence conflict is unresolved")
         observations = self._observations(
             project.id,
             draft.observation_ids,
@@ -662,9 +653,7 @@ class RiskService:
             "expected_risk_updated_at": expected_risk_updated_at.isoformat(),
             "expected_task_updated_at": expected_task_updated_at.isoformat(),
             "evidence_ids": list(draft.observation_ids),
-            "independence_source_ids": list(
-                row.payload.get("independence_source_ids", [])
-            ),
+            "independence_source_ids": list(row.payload.get("independence_source_ids", [])),
             "risk_model_version_id": model.id,
             "risk_model_content_hash": model.content_hash,
             "document_set_revision_id": document_set.id,
@@ -753,9 +742,7 @@ class RiskService:
             project.current_document_set_revision_id,
         )
         if document_set.id != expected_document_set_revision_id:
-            raise OptimisticLockError(
-                "Current document set changed after risk context was loaded"
-            )
+            raise OptimisticLockError("Current document set changed after risk context was loaded")
         definition, model = self._risk_model(
             project.id,
             actor.organization_id,
@@ -780,9 +767,7 @@ class RiskService:
             document_set=document_set,
         )
         if blockers:
-            raise ValueError(
-                "Risk reserve calculation is blocked: " + ", ".join(blockers)
-            )
+            raise ValueError("Risk reserve calculation is blocked: " + ", ".join(blockers))
         for row in rows:
             self._require_verified_item_integrity(
                 row=row,
@@ -794,15 +779,9 @@ class RiskService:
         policy = definition.calculation_policy(model.id)
         calculation = calculate_risk_reserve(risks, policy)
         independent = self._independent_recalculation(risks, definition, model.id)
-        if (
-            independent["expected_reserve"]
-            != str(calculation.expected_reserve)
-            or independent["per_risk_expected_impact"]
-            != {
-                key: str(value)
-                for key, value in calculation.per_risk_expected_impact.items()
-            }
-        ):
+        if independent["expected_reserve"] != str(calculation.expected_reserve) or independent[
+            "per_risk_expected_impact"
+        ] != {key: str(value) for key, value in calculation.per_risk_expected_impact.items()}:
             raise RuntimeError(
                 "Independent risk reserve validation differs from the primary engine"
             )
@@ -923,11 +902,7 @@ class RiskService:
         )
         return (
             RiskModelDefinition.model_validate(
-                {
-                    key: value
-                    for key, value in row.payload.items()
-                    if key != "_governance"
-                }
+                {key: value for key, value in row.payload.items() if key != "_governance"}
             ),
             row,
         )
@@ -966,8 +941,7 @@ class RiskService:
                 (
                     item
                     for item in components
-                    if isinstance(item, dict)
-                    and item.get("semantic_key") == reference.semantic_key
+                    if isinstance(item, dict) and item.get("semantic_key") == reference.semantic_key
                 ),
                 None,
             )
@@ -979,9 +953,7 @@ class RiskService:
             or component.get("category") != CostCategory.RISK.value
             or component.get("basis_kind") != CostBasisKind.RISK_MODEL.value
         ):
-            raise ValueError(
-                "Risk model must reference a planned RISK/RISK_MODEL component"
-            )
+            raise ValueError("Risk model must reference a planned RISK/RISK_MODEL component")
         return {
             "line_id": reference.line_id,
             "semantic_key": reference.semantic_key,
@@ -1045,8 +1017,7 @@ class RiskService:
         observation = Observation.model_validate(row.payload.get("observation"))
         if (
             row.id != observation.observation_id
-            or row.document_revision_id
-            != observation.location.document_revision_id
+            or row.document_revision_id != observation.location.document_revision_id
             or row.field_name != observation.field_name
             or row.method != observation.method.value
             or row.method_version != observation.method_version
@@ -1106,9 +1077,7 @@ class RiskService:
             else None
         )
         domain = (
-            qualification.payload.get("independence_domain")
-            if qualification is not None
-            else None
+            qualification.payload.get("independence_domain") if qualification is not None else None
         )
         if independent:
             if observation.method in {
@@ -1124,8 +1093,7 @@ class RiskService:
                 or observation.method.value
                 not in qualification.payload.get("supported_methods", [])
                 or qualification.payload.get("organization_id") != organization_id
-                or qualification.payload.get("service_actor_id")
-                != observation.actor_id
+                or qualification.payload.get("service_actor_id") != observation.actor_id
                 or not isinstance(domain, str)
                 or not domain
             ):
@@ -1143,9 +1111,7 @@ class RiskService:
                 str(qualification_id) if isinstance(qualification_id, str) else None
             ),
             adapter_status=qualification.status if qualification is not None else None,
-            adapter_valid_until=(
-                qualification.valid_until if qualification is not None else None
-            ),
+            adapter_valid_until=(qualification.valid_until if qualification is not None else None),
             independence_domain=domain if isinstance(domain, str) else None,
             eligible=not blockers,
             blockers=tuple(dict.fromkeys(blockers)),
@@ -1413,8 +1379,7 @@ class RiskService:
             or approval.decided_by != verified_by
             or approval.payload.get("risk_item_id") != row.id
             or approval.payload.get("risk_key") != row.risk_key
-            or approval.payload.get("evidence_ids")
-            != list(draft.observation_ids)
+            or approval.payload.get("evidence_ids") != list(draft.observation_ids)
             or approval.payload.get("independence_source_ids") != list(leaf_ids)
             or approval.payload.get("risk_model_version_id") != model.id
             or approval.payload.get("risk_model_content_hash") != model.content_hash
@@ -1521,9 +1486,7 @@ class RiskService:
             "risk_key": row.risk_key,
             "risk_submission_hash": content_hash(submission),
             "observation_ids": list(row.payload.get("observation_ids", [])),
-            "independence_source_ids": list(
-                row.payload.get("independence_source_ids", [])
-            ),
+            "independence_source_ids": list(row.payload.get("independence_source_ids", [])),
             "risk_model_version_id": model.id,
             "risk_model_content_hash": model.content_hash,
             "document_set_revision_id": document_set.id,
@@ -1608,14 +1571,10 @@ class RiskService:
                 or risk.correlated
             ):
                 continue
-            three_point_sum = (
-                risk.impact_min
-                + risk.impact_most_likely
-                + risk.impact_max
+            three_point_sum = risk.impact_min + risk.impact_most_likely + risk.impact_max
+            expected[risk.risk_id] = (risk.probability * three_point_sum / Decimal(3)).quantize(
+                quantum, rounding=rounding
             )
-            expected[risk.risk_id] = (
-                risk.probability * three_point_sum / Decimal(3)
-            ).quantize(quantum, rounding=rounding)
         reserve = sum(expected.values(), start=Decimal(0)).quantize(
             quantum,
             rounding=rounding,
@@ -1624,9 +1583,7 @@ class RiskService:
             "validator_version": f"independent:{policy_version}",
             "expected_reserve": str(reserve),
             "currency": policy.currency,
-            "per_risk_expected_impact": {
-                key: str(expected[key]) for key in sorted(expected)
-            },
+            "per_risk_expected_impact": {key: str(expected[key]) for key in sorted(expected)},
             "passed": len(expected) == len(risks),
         }
 
@@ -1704,12 +1661,15 @@ class RiskService:
             or not document_set_revision_id
         ):
             raise ValueError("Risk calculation provenance is incomplete")
-        if content_hash(
-            {
-                "calculation": calculation,
-                "independent_validation": independent,
-            }
-        ) != output_hash:
+        if (
+            content_hash(
+                {
+                    "calculation": calculation,
+                    "independent_validation": independent,
+                }
+            )
+            != output_hash
+        ):
             raise ValueError("Risk calculation output hash differs")
         return RiskCalculationView(
             calculation_id=row.id,
@@ -1772,9 +1732,7 @@ class RiskService:
             row_id=row.id,
             risk_key=row.risk_key,
             risk=RiskItem.model_validate(row.payload.get("risk")),
-            independence_source_ids=tuple(
-                row.payload.get("independence_source_ids", [])
-            ),
+            independence_source_ids=tuple(row.payload.get("independence_source_ids", [])),
             supersedes_risk_id=row.supersedes_risk_id,
             is_current=row.is_current,
             created_by=str(created_by),

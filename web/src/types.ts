@@ -473,6 +473,231 @@ export interface RiskDecisionResult {
   decision: "APPROVED" | "REJECTED";
 }
 
+export type ActualSourceClass =
+  | "ACCEPTANCE_CERTIFICATE"
+  | "SUPPLIER_INVOICE"
+  | "ERP_POSTING"
+  | "FINANCIAL_LEDGER"
+  | "TIMESHEET"
+  | "LOGISTICS_DOCUMENT"
+  | "RISK_REGISTER"
+  | "AS_BUILT_MEASUREMENT"
+  | "OTHER_CONTROLLED";
+
+export type ForecastBasis =
+  | "ATOMIC_QUANTITY"
+  | "ATOMIC_UNIT_RATE"
+  | "ATOMIC_AMOUNT"
+  | "PROJECT_COST_TOTAL";
+
+export type VarianceReason =
+  | "SCOPE_CHANGE"
+  | "QUANTITY_ERROR"
+  | "PRICE_CHANGE"
+  | "SUPPLIER_CHANGE"
+  | "PRODUCTIVITY_VARIANCE"
+  | "LOGISTICS_VARIANCE"
+  | "SCHEDULE_VARIANCE"
+  | "RISK_REALISED"
+  | "DATA_QUALITY"
+  | "METHODOLOGY_ERROR"
+  | "OTHER_APPROVED";
+
+export interface ActualEvidenceValue {
+  actual_key: string;
+  entity_type: string;
+  entity_id: string;
+  metric: string;
+  value: string;
+  unit: string;
+  source_class: ActualSourceClass;
+  occurred_on: string;
+}
+
+export interface ActualMetricDefinition {
+  metric: string;
+  entity_type: string;
+  evidence_field_name: string;
+  forecast_basis: ForecastBasis;
+  allowed_units: string[];
+  allowed_source_classes: ActualSourceClass[];
+}
+
+export interface ActualFact {
+  actual_id: string;
+  project_id: string;
+  entity_id: string;
+  metric: string;
+  value: string;
+  unit: string;
+  occurred_on: string;
+  source_observation_id: string;
+  verified: boolean;
+  verified_by: string | null;
+  actual_key: string | null;
+  source_class: ActualSourceClass | null;
+  status: string;
+}
+
+export interface ActualRecordView {
+  actual: ActualFact;
+  actual_key: string;
+  supersedes_actual_id: string | null;
+  is_current: boolean;
+  created_by: string;
+  policy_version_id: string;
+  policy_content_hash: string;
+  source_leaf_ids: string[];
+  project_outcome_evidence_ids: string[];
+  approval_task_id: string;
+  task_status: string;
+  task_updated_at: string;
+  created_at: string;
+}
+
+export interface ActualReviewView {
+  record: ActualRecordView;
+  assigned_role: ActorRole;
+  has_classified_variance: boolean;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface ActualEvidenceCandidate {
+  observation: EvidenceObservation;
+  observation_created_at: string;
+  evidence_value: ActualEvidenceValue | null;
+  eligible: boolean;
+  blockers: string[];
+}
+
+export interface ForecastFact {
+  forecast_id: string;
+  project_id: string;
+  entity_id: string;
+  metric: string;
+  value: string;
+  unit: string;
+  snapshot_id: string;
+  snapshot_hash: string | null;
+  cost_input_row_id: string | null;
+  forecast_basis: ForecastBasis | null;
+}
+
+export interface ForecastCandidate {
+  actual_id: string;
+  forecast: ForecastFact;
+  released_by_decision_id: string;
+}
+
+export interface ForecastCandidatePage {
+  items: ForecastCandidate[];
+  next_cursor: string | null;
+}
+
+export interface VarianceRecord {
+  forecast_id: string;
+  actual_id: string;
+  absolute_variance: string;
+  relative_variance: string | null;
+  reason: VarianceReason;
+  reason_detail: string;
+  classified_by: string;
+  status: string;
+  reviewed_by: string | null;
+}
+
+export interface VarianceView {
+  variance_record_id: string;
+  variance: VarianceRecord;
+  forecast: ForecastFact;
+  policy_version_id: string;
+  policy_content_hash: string;
+  approval_task_id: string;
+  task_status: string;
+  task_updated_at: string;
+  created_at: string;
+  assigned_role: ActorRole;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface CalibrationExample {
+  example_id: string;
+  project_id: string;
+  metric: string;
+  features_snapshot_id: string;
+  verified_actual_id: string;
+  target_value: string;
+  unit: string;
+  variance_reason: VarianceReason;
+}
+
+export interface CalibrationExampleView {
+  example: CalibrationExample;
+  approved: boolean;
+  approval_task_id: string;
+  task_status: string;
+  task_updated_at: string;
+  policy_version_id: string;
+  policy_content_hash: string;
+  created_at: string;
+  approved_by: string | null;
+  assigned_role: ActorRole;
+  decision_allowed: boolean;
+  decision_blockers: string[];
+}
+
+export interface ActualsContext {
+  project_id: string;
+  project_state: ApprovalState;
+  policy_version_id: string;
+  policy_content_hash: string;
+  record_roles: ActorRole[];
+  actual_review_role: ActorRole;
+  variance_classifier_roles: ActorRole[];
+  variance_review_role: ActorRole;
+  calibration_approval_role: ActorRole;
+  metric_definitions: ActualMetricDefinition[];
+  required_metric_keys: string[];
+  selected_metric: string;
+  project_outcome_evidence_ids: string[];
+  records: ActualReviewView[];
+  evidence_candidates: ActualEvidenceCandidate[];
+  candidates_truncated: boolean;
+  variances: VarianceView[];
+  calibration_examples: CalibrationExampleView[];
+  next_cursor: string | null;
+}
+
+export interface ActualDecisionResult {
+  record: ActualRecordView;
+  approval_id: string;
+  decision: "APPROVED" | "REJECTED";
+}
+
+export interface ActualComparisonResult {
+  forecast: ForecastFact;
+  actual: ActualFact;
+  variance: VarianceRecord;
+  variance_record_id: string;
+  calibration_example: CalibrationExample | null;
+  calibration_approved: boolean;
+}
+
+export interface VarianceDecisionResult {
+  variance: VarianceView;
+  approval_id: string;
+  decision: "APPROVED" | "REJECTED";
+  calibration_example: CalibrationExample | null;
+}
+
+export interface CalibrationDecisionResult {
+  example: CalibrationExampleView;
+  approval_id: string;
+  decision: "APPROVED" | "REJECTED";
+}
+
 export interface ConflictObservation extends EvidenceObservation {
   adapter_qualification_id: string | null;
   adapter_qualification_status: string | null;
@@ -598,6 +823,55 @@ export type QuarantineStatus =
   | "PROCESSING_FAILED"
   | "PROCESSING_DEAD_LETTERED";
 
+export type IntakeSeverity = "INFO" | "WARNING" | "BLOCKER";
+
+export interface IntakeFinding {
+  code: string;
+  severity: IntakeSeverity;
+  archive_path: string;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+export interface IntakeSheetInspection {
+  name: string;
+  state: string;
+  max_row: number;
+  max_column: number;
+  hidden_row_count: number;
+  hidden_column_count: number;
+  formula_cell_count: number;
+  formula_without_cached_value_count: number;
+  formula_error_cell_count: number;
+  non_formula_error_cell_count: number;
+}
+
+export interface IntakeFileInspection {
+  entry_id: string;
+  archive_path: string;
+  sha256: string;
+  size_bytes: number;
+  media_type: string;
+  nested_archive: boolean;
+  corrupt: boolean;
+  protected: boolean;
+  unsupported: boolean;
+  page_count: number | null;
+  embedded_file_count: number;
+  external_hyperlink_count: number;
+  external_dependency_count: number;
+  sheets: IntakeSheetInspection[];
+  findings: IntakeFinding[];
+}
+
+export interface IntakeManifest {
+  root_filename: string;
+  root_sha256: string;
+  entries: IntakeFileInspection[];
+  findings: IntakeFinding[];
+  all_files_processed: boolean;
+}
+
 export interface QuarantinedUpload {
   upload_id: string;
   project_id: string;
@@ -611,7 +885,7 @@ export interface QuarantinedUpload {
   processed_document_id: string | null;
   processed_document_revision_id: string | null;
   candidate_document_set_revision_id: string | null;
-  manifest: Record<string, unknown> | null;
+  manifest: IntakeManifest | null;
   failure_code: string | null;
   processing_attempts: number;
   processing_lease_expires_at: string | null;
@@ -646,6 +920,53 @@ export interface ReleaseGateSet {
 export interface ReleaseAttempt {
   project: ProjectView;
   decision: GateDecision;
+}
+
+export interface ExpertReworkIssue {
+  kind: "BOQ_PRICE_ROW" | "RELEASE_FINDING";
+  reference_id: string;
+  code: string;
+  comment: string;
+}
+
+export interface ExpertReworkResult {
+  rework_request_id: string;
+  project: ProjectView;
+  snapshot_id: string;
+  requested_state: ApprovalState;
+  target_stage: ApprovalState;
+  gate_hash: string;
+  issues: ExpertReworkIssue[];
+}
+
+export interface AutomationReworkIssueReference {
+  kind: string;
+  reference_id: string;
+  code: string;
+}
+
+export type AutomationReworkStatus =
+  "PENDING_DISPATCH" | "STAGE_COMMAND_QUEUED" | "BLOCKED";
+
+export interface AutomationReworkStatusItem {
+  rework_request_id: string;
+  project_id: string;
+  snapshot_id: string;
+  target_stage: ApprovalState;
+  requested_by: string;
+  requested_at: string;
+  status: AutomationReworkStatus;
+  dispatch_id: string | null;
+  dispatch_hash: string | null;
+  command_topic: string | null;
+  command_delivery_status: string | null;
+  integrity_error_code: string | null;
+  issue_references: AutomationReworkIssueReference[];
+}
+
+export interface AutomationReworkStatusPage {
+  project_id: string;
+  items: AutomationReworkStatusItem[];
 }
 
 export interface WorkbenchMetric {
@@ -755,6 +1076,7 @@ export interface BoqEvidenceCandidate {
   observation: EvidenceObservation;
   work_code: string;
   unit: string;
+  description?: string | null;
 }
 
 export interface BoqAuthoringContext {
@@ -763,6 +1085,60 @@ export interface BoqAuthoringContext {
   document_set_revision_id: string;
   evidence_field_name: string;
   evidence_candidates: BoqEvidenceCandidate[];
+  candidates_truncated: boolean;
+}
+
+export interface BoqSpreadsheetCandidate {
+  source_observation: EvidenceObservation;
+  source_observation_hash: string;
+  source_item_id: string;
+  source_position_id: string;
+  description: string;
+  specification: string | null;
+  source_reference: string | null;
+  unit: string;
+  quantity: string;
+  worksheet_name: string;
+  row_number: number;
+  proposal_observation_id: string | null;
+  proposal_task_status: string | null;
+  verified_observation_id: string | null;
+  proposal_allowed: boolean;
+  proposal_blockers: string[];
+  quantity_proposal_observation_id: string | null;
+  quantity_proposal_task_status: string | null;
+  verified_quantity_observation_id: string | null;
+  quantity_proposal_allowed: boolean;
+  quantity_proposal_blockers: string[];
+}
+
+export interface InitialQuantityEvidenceCandidate {
+  observation: EvidenceObservation;
+  observation_hash: string;
+  source_item_id: string;
+  value: string;
+  unit: string;
+}
+
+export interface InitialQuantityContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  line: BoqLine;
+  source_item_id: string | null;
+  quantity_policy_version_id: string | null;
+  evidence_candidates: InitialQuantityEvidenceCandidate[];
+  current_quantity_id: string | null;
+  current_quantity_status: string | null;
+  recording_allowed: boolean;
+  recording_blockers: string[];
+}
+
+export interface BoqSpreadsheetCandidateContext {
+  project_id: string;
+  project_state: ApprovalState;
+  document_set_revision_id: string;
+  candidates: BoqSpreadsheetCandidate[];
   candidates_truncated: boolean;
 }
 
@@ -888,6 +1264,22 @@ export type PriceEvidenceClass =
   | "INTERNAL_HISTORY"
   | "COMMERCIAL_QUOTE";
 
+export type PriceSourceType =
+  | "FGIS_CS"
+  | "WON_TENDER"
+  | "MARKETPLACE"
+  | "SUPPLIER_WEBSITE"
+  | "SUPPLIER_QUOTE"
+  | "OTHER_OFFICIAL";
+
+export interface PriceSourceReference {
+  source_type: PriceSourceType;
+  display_name: string;
+  source_item_name: string;
+  source_record_id: string;
+  source_uri: string | null;
+}
+
 export type VatBasis = "EXCLUSIVE" | "INCLUSIVE" | "NOT_APPLICABLE";
 
 export interface CommercialBasis {
@@ -907,6 +1299,7 @@ export interface PriceQuoteDraft {
   item_id: string;
   supplier_id: string | null;
   evidence_class: PriceEvidenceClass;
+  source_reference: PriceSourceReference;
   source_observation_id: string;
   technical_attributes: Record<string, string>;
   amount: string;
@@ -983,6 +1376,76 @@ export interface PriceItemContext {
   current_decision: PriceDecisionSummary | null;
 }
 
+export interface FgisCsStoredExchange {
+  request_uri: string;
+  response_object_hash: string;
+  response_object_key: string;
+  response_size_bytes: number;
+}
+
+export interface FgisCsAcquisition {
+  acquisition_id: string;
+  project_id: string;
+  item_id: string;
+  boq_item_name: string;
+  boq_unit: string;
+  nomenclature_match_id: string;
+  canonical_item_id: string;
+  document_set_revision_id: string;
+  policy_version_id: string;
+  adapter_qualification_id: string;
+  status: "UNVERIFIED";
+  basis_current: boolean;
+  ready_for_pricing: false;
+  pricing_blockers: string[];
+  artifact_object_hash: string;
+  artifact: {
+    schema_version: string;
+    request_context_hash: string;
+    request: {
+      subject_name: string;
+      price_zone_name: string | null;
+      period_name: string;
+      resource_code: string;
+    };
+    result: {
+      schema_version: string;
+      subject: { id: number; name: string };
+      price_zone: { id: number; name: string };
+      period: { id: number; name: string };
+      requested_resource_code: string;
+      price: null | {
+        source_record_id: string;
+        resource_code: string;
+        source_item_name: string;
+        unit: string;
+        aggregated_price: string;
+        estimated_price: string;
+        distance_price: string;
+        procure_storage_cost_percent: string;
+        source_amount_literals: Record<string, string>;
+        ksr_type: number;
+      };
+      public_page_uri: string;
+      api_request_uri: string;
+      response_sha256: string;
+      retrieved_at: string;
+      ready_for_pricing: false;
+      pricing_blockers: string[];
+    };
+    exchanges: FgisCsStoredExchange[];
+  };
+}
+
+export interface FgisCsAcquisitionList {
+  project_id: string;
+  item_id: string;
+  boq_item_name: string;
+  boq_unit: string;
+  acquisitions: FgisCsAcquisition[];
+  release_warning: string;
+}
+
 export interface PriceQuoteCandidate {
   project_id: string;
   item_id: string;
@@ -1009,12 +1472,92 @@ export interface PriceDecision {
     passed: boolean;
     resulting_status: string;
     missing_evidence_classes: PriceEvidenceClass[];
+    missing_source_groups: string[];
     reason: string;
   };
   relative_spread: string | null;
   approval_task_ids: string[];
   rfq_request_id: string | null;
   project_state: string;
+}
+
+export interface BoqPriceNameMatch {
+  match_id: string;
+  status: string;
+  match_class: NomenclatureMatchClass;
+  boq_item_name: string;
+  source_item_id: string;
+  canonical_item_id: string | null;
+  source_attributes: Record<string, string>;
+  canonical_attributes: Record<string, string>;
+  mismatched_attributes: string[];
+  missing_attributes: string[];
+  catalog_version_id: string;
+  assessment_method: string | null;
+}
+
+export interface BoqSourcePrice {
+  quote_id: string;
+  evidence_class: PriceEvidenceClass;
+  source_reference: PriceSourceReference;
+  source_observation_id: string;
+  source_origin_id: string;
+  source_locator: string;
+  source_document_revision_id: string;
+  observed_at: string;
+  quote_date: string;
+  valid_until: string | null;
+  available: boolean | null;
+  lead_time_days: number | null;
+  raw_amount: string;
+  raw_currency: string;
+  raw_unit: string;
+  normalized_prices: NormalizedPrice[];
+  technical_attributes: Record<string, string>;
+}
+
+export interface BoqProposedPrice {
+  status: "VERIFIED" | "BLOCKED";
+  workflow_status: string;
+  amount_per_unit: string | null;
+  currency: string | null;
+  unit: string | null;
+  decision_id: string | null;
+  as_of: string | null;
+  selection_method: string | null;
+  normalized_price_ids: string[];
+  rationale: string[];
+}
+
+export interface BoqPriceMatrixRow {
+  row_id: string;
+  boq_line_id: string;
+  line_key: string;
+  wbs_node_id: string;
+  work_code: string;
+  boq_item_name: string;
+  boq_unit: string;
+  quantity: string | null;
+  quantity_status: string;
+  item_id: string;
+  cost_category: string | null;
+  basis_kind: string | null;
+  row_status: "VERIFIED" | "BLOCKED";
+  blockers: string[];
+  name_match: BoqPriceNameMatch | null;
+  won_tender_prices: BoqSourcePrice[];
+  fgis_cs_prices: BoqSourcePrice[];
+  market_prices: BoqSourcePrice[];
+  other_prices: BoqSourcePrice[];
+  proposed_price: BoqProposedPrice;
+}
+
+export interface BoqPriceMatrix {
+  project_id: string;
+  generated_at: string;
+  rows: BoqPriceMatrixRow[];
+  blocked_row_count: number;
+  release_warning: string;
 }
 
 export type NomenclatureMatchClass =
@@ -1051,6 +1594,19 @@ export interface CatalogItem {
   attributes: Record<string, string>;
   critical_attributes: string[];
   critical_price: boolean;
+  retrieval_exact_identifier: boolean;
+  retrieval_matched_terms: string[];
+  retrieval_matched_critical_attributes: string[];
+}
+
+export interface NomenclatureSourceItem {
+  source_item_id: string;
+  boq_line_id: string;
+  line_key: string;
+  wbs_node_id: string;
+  work_code: string;
+  description: string;
+  unit: string;
 }
 
 export interface NomenclatureEvidenceCandidate {
@@ -1063,11 +1619,15 @@ export interface NomenclatureContext {
   project_state: ApprovalState;
   document_set_revision_id: string;
   catalog_version_id: string;
+  source_items: NomenclatureSourceItem[];
+  selected_source_item_id: string | null;
+  selected_source_description: string | null;
   catalog_items: CatalogItem[];
   catalog_items_truncated: boolean;
   evidence_field_name: string;
   evidence_candidates: NomenclatureEvidenceCandidate[];
   evidence_candidates_truncated: boolean;
+  retrieval_notice: string;
 }
 
 export interface NomenclatureReviewContext {

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -35,6 +37,11 @@ from tenderguard.infrastructure.database import (
 from tenderguard.infrastructure.object_store import (
     build_object_store,
     build_quarantine_store,
+)
+from tenderguard.integrations.fgiscs_public import (
+    FgisCsMaterialLookupRequest,
+    FgisCsPublicApi,
+    FgisCsPublicApiError,
 )
 
 
@@ -250,6 +257,442 @@ def dispatch_document_intake(max_events: int) -> int:
         engine.dispose()
 
 
+def dispatch_final_rework(max_events: int) -> int:
+    from tenderguard.application.automation_rework import (
+        AutomationDispatchDisposition,
+        AutomationReworkDispatcher,
+    )
+
+    if max_events < 1 or max_events > 10_000:
+        print(
+            json.dumps(
+                {"status": "BLOCKED", "detail": "max-events must be between 1 and 10000"},
+                sort_keys=True,
+            )
+        )
+        return 2
+    settings = get_settings()
+    if not settings.automation_rework_configured:
+        print(
+            json.dumps(
+                {
+                    "status": "BLOCKED",
+                    "detail": "automatic rework worker binding is not configured",
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+    engine = create_database_engine(settings)
+    dispatcher = AutomationReworkDispatcher(
+        session_factory=create_session_factory(engine),
+        settings=settings,
+        object_store=build_object_store(settings),
+    )
+    worker_instance_id = f"automation-rework-worker-{uuid4()}"
+    counts = {item.value: 0 for item in AutomationDispatchDisposition}
+    exit_code = 0
+    try:
+        for _ in range(max_events):
+            try:
+                result = dispatcher.dispatch_next(worker_id=worker_instance_id)
+            except ValueError as error:
+                print(
+                    json.dumps(
+                        {"status": "BLOCKED", "detail": str(error)[:2000]},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+                return 2
+            counts[result.disposition.value] += 1
+            if result.disposition is AutomationDispatchDisposition.IDLE:
+                break
+            if result.disposition in {
+                AutomationDispatchDisposition.BLOCKED,
+                AutomationDispatchDisposition.RETRY_SCHEDULED,
+                AutomationDispatchDisposition.DEAD_LETTERED,
+            }:
+                exit_code = 2
+        print(
+            json.dumps(
+                {
+                    "status": ("COMMANDS_QUEUED" if exit_code == 0 else "ATTENTION_REQUIRED"),
+                    "counts": counts,
+                },
+                sort_keys=True,
+            )
+        )
+        return exit_code
+    finally:
+        engine.dispose()
+
+
+def probe_fgiscs_ksr(query: str) -> int:
+    try:
+        result = FgisCsPublicApi().search_ksr(query)
+    except (FgisCsPublicApiError, ValueError) as error:
+        _emit_fgiscs_probe_error(error)
+        return 2
+    print(result.model_dump_json(indent=2))
+    return 0
+
+
+def probe_fgiscs_material(
+    *,
+    subject_name: str,
+    price_zone_name: str | None,
+    period_name: str,
+    resource_code: str,
+) -> int:
+    try:
+        request = FgisCsMaterialLookupRequest(
+            subject_name=subject_name,
+            price_zone_name=price_zone_name,
+            period_name=period_name,
+            resource_code=resource_code,
+        )
+        result = FgisCsPublicApi().lookup_material(request)
+    except (FgisCsPublicApiError, ValueError) as error:
+        _emit_fgiscs_probe_error(error)
+        return 2
+    print(result.model_dump_json(indent=2))
+    return 0
+
+
+def _emit_fgiscs_probe_error(error: Exception) -> None:
+    code = error.code if isinstance(error, FgisCsPublicApiError) else "FGIS_REQUEST_INVALID"
+    retryable = error.retryable if isinstance(error, FgisCsPublicApiError) else False
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "retryable": retryable,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def probe_boq_xlsx(
+    *,
+    input_path: Path,
+    profile_path: Path,
+    archive_entry_sha256: str | None,
+    output_path: Path | None = None,
+) -> int:
+    try:
+        from tenderguard.domain.boq_spreadsheet import BoqXlsxProfile
+        from tenderguard.infrastructure.boq_spreadsheet import (
+            BoqXlsxExtractionError,
+            extract_boq_xlsx_candidates,
+        )
+        from tenderguard.infrastructure.intake import inspect_intake
+    except ModuleNotFoundError as error:
+        if error.name != "openpyxl":
+            raise
+        _emit_boq_probe_error("BOQ_PARSER_DEPENDENCY_MISSING")
+        return 2
+
+    try:
+        settings = get_settings()
+        if not input_path.is_file():
+            raise BoqXlsxExtractionError(code="BOQ_INPUT_NOT_FOUND")
+        if input_path.stat().st_size > settings.max_upload_bytes:
+            raise BoqXlsxExtractionError(code="BOQ_INPUT_TOO_LARGE")
+        if not profile_path.is_file() or profile_path.stat().st_size > 1_000_000:
+            raise BoqXlsxExtractionError(code="BOQ_PROFILE_NOT_FOUND_OR_TOO_LARGE")
+        profile_content = profile_path.read_bytes()
+        if len(profile_content) > 1_000_000:
+            raise BoqXlsxExtractionError(code="BOQ_PROFILE_NOT_FOUND_OR_TOO_LARGE")
+        profile_payload = json.loads(profile_content.decode("utf-8"))
+        if not isinstance(profile_payload, dict):
+            raise BoqXlsxExtractionError(code="BOQ_PROFILE_JSON_INVALID")
+        profile = BoqXlsxProfile.model_validate(profile_payload)
+        root_content = input_path.read_bytes()
+        if len(root_content) > settings.max_upload_bytes:
+            raise BoqXlsxExtractionError(code="BOQ_INPUT_TOO_LARGE")
+        members: dict[str, bytes] = {}
+        manifest = inspect_intake(
+            input_path.name,
+            root_content,
+            settings,
+            on_member=lambda path, content: members.__setitem__(path, content),
+        )
+        suffix = input_path.suffix.casefold()
+        if suffix == ".xlsx":
+            workbook_content = root_content
+            workbook_archive_path = input_path.name
+        elif suffix == ".zip":
+            expected_hash = archive_entry_sha256 or profile.expected_workbook_sha256
+            if expected_hash is None:
+                raise BoqXlsxExtractionError(code="BOQ_ARCHIVE_ENTRY_FINGERPRINT_REQUIRED")
+            if len(expected_hash) != 64 or any(
+                character not in "0123456789abcdef" for character in expected_hash
+            ):
+                raise BoqXlsxExtractionError(code="BOQ_ARCHIVE_ENTRY_FINGERPRINT_INVALID")
+            matching_members = tuple(
+                (path, content)
+                for path, content in members.items()
+                if path.casefold().endswith(".xlsx")
+                and hashlib.sha256(content).hexdigest() == expected_hash
+            )
+            if len(matching_members) != 1:
+                raise BoqXlsxExtractionError(code="BOQ_ARCHIVE_ENTRY_NOT_UNIQUE")
+            workbook_archive_path, workbook_content = matching_members[0]
+        else:
+            raise BoqXlsxExtractionError(code="BOQ_INPUT_TYPE_UNSUPPORTED")
+        result = extract_boq_xlsx_candidates(
+            workbook_content=workbook_content,
+            workbook_archive_path=workbook_archive_path,
+            manifest=manifest,
+            profile=profile,
+        )
+    except BoqXlsxExtractionError as error:
+        _emit_boq_probe_error(error.code)
+        return 2
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        _emit_boq_probe_error("BOQ_PROBE_INPUT_INVALID")
+        return 2
+
+    rendered = result.model_dump_json(indent=2)
+    if output_path is not None:
+        try:
+            _write_text_exclusive(output_path, rendered)
+        except FileExistsError:
+            _emit_boq_probe_error("BOQ_OUTPUT_ALREADY_EXISTS")
+            return 2
+        except OSError:
+            _emit_boq_probe_error("BOQ_OUTPUT_WRITE_FAILED")
+            return 2
+    print(rendered)
+    return 0 if result.status == "UNVERIFIED" else 2
+
+
+def _emit_boq_probe_error(code: str) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "ready_for_boq": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def _write_text_exclusive(destination: Path, payload: str) -> None:
+    resolved = destination.resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        resolved,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        resolved.unlink(missing_ok=True)
+        raise
+
+
+def import_governed_boq_xlsx(
+    *,
+    project_id: str,
+    document_revision_id: str,
+    request_id: str,
+    reason: str,
+) -> int:
+    try:
+        from tenderguard.application.boq_spreadsheet_import import (
+            BoqSpreadsheetImportService,
+        )
+        from tenderguard.domain.enums import ActorRole
+        from tenderguard.infrastructure.auth import Actor
+        from tenderguard.infrastructure.orm import AdapterQualificationRow
+    except ModuleNotFoundError as error:
+        if error.name != "openpyxl":
+            raise
+        _emit_boq_probe_error("BOQ_PARSER_DEPENDENCY_MISSING")
+        return 2
+
+    settings = get_settings()
+    if not settings.boq_xlsx_adapter_configured:
+        _emit_boq_probe_error("BOQ_XLSX_WORKER_NOT_CONFIGURED")
+        return 2
+    assert settings.boq_xlsx_worker_actor_id is not None
+    assert settings.boq_xlsx_adapter_qualification_id is not None
+    engine = create_database_engine(settings)
+    try:
+        with create_session_factory(engine).begin() as session:
+            qualification = session.get(
+                AdapterQualificationRow,
+                settings.boq_xlsx_adapter_qualification_id,
+            )
+            organization_id = (
+                qualification.payload.get("organization_id") if qualification is not None else None
+            )
+            service_actor_id = (
+                qualification.payload.get("service_actor_id") if qualification is not None else None
+            )
+            if (
+                qualification is None
+                or qualification.adapter_name != settings.boq_xlsx_adapter
+                or not isinstance(organization_id, str)
+                or not organization_id
+                or service_actor_id != settings.boq_xlsx_worker_actor_id
+            ):
+                raise ValueError("Configured BoQ XLSX qualification is invalid")
+            result = BoqSpreadsheetImportService(
+                session=session,
+                settings=settings,
+                object_store=build_object_store(settings),
+            ).import_current_workbook(
+                actor=Actor(
+                    actor_id=settings.boq_xlsx_worker_actor_id,
+                    organization_id=organization_id,
+                    roles=frozenset({ActorRole.SYSTEM}),
+                ),
+                project_id=project_id,
+                document_revision_id=document_revision_id,
+                adapter_qualification_id=(settings.boq_xlsx_adapter_qualification_id),
+                request_id=request_id,
+                reason=reason,
+            )
+    except Exception as error:
+        _emit_boq_probe_error(getattr(error, "code", "BOQ_GOVERNED_IMPORT_BLOCKED"))
+        return 2
+    finally:
+        engine.dispose()
+    print(result.model_dump_json(indent=2))
+    return 0
+
+
+def import_governed_fgiscs_material(
+    *,
+    project_id: str,
+    item_id: str,
+    resource_code: str,
+    request_id: str,
+    reason: str,
+) -> int:
+    from tenderguard.application.fgiscs_acquisition import (
+        FgisCsAcquisitionService,
+        prepare_fgiscs_material_acquisition,
+    )
+    from tenderguard.domain.enums import ActorRole
+    from tenderguard.infrastructure.auth import Actor
+    from tenderguard.infrastructure.orm import AdapterQualificationRow
+
+    settings = get_settings()
+    if not settings.fgiscs_adapter_configured:
+        _emit_fgiscs_governed_error("FGIS_CS_WORKER_NOT_CONFIGURED")
+        return 2
+    assert settings.fgiscs_worker_actor_id is not None
+    assert settings.fgiscs_adapter_qualification_id is not None
+    engine = create_database_engine(settings)
+    object_store = build_object_store(settings)
+    factory = create_session_factory(engine)
+    try:
+        with factory() as session:
+            qualification = session.get(
+                AdapterQualificationRow,
+                settings.fgiscs_adapter_qualification_id,
+            )
+            organization_id = (
+                qualification.payload.get("organization_id") if qualification is not None else None
+            )
+            service_actor_id = (
+                qualification.payload.get("service_actor_id") if qualification is not None else None
+            )
+            if (
+                qualification is None
+                or qualification.adapter_name != settings.fgiscs_adapter
+                or not isinstance(organization_id, str)
+                or not organization_id
+                or service_actor_id != settings.fgiscs_worker_actor_id
+            ):
+                raise ValueError("Configured FGIS CS qualification is invalid")
+            actor = Actor(
+                actor_id=settings.fgiscs_worker_actor_id,
+                organization_id=organization_id,
+                roles=frozenset({ActorRole.SYSTEM}),
+            )
+            context = FgisCsAcquisitionService(
+                session=session,
+                settings=settings,
+                object_store=object_store,
+            ).request_context(
+                actor=actor,
+                project_id=project_id,
+                item_id=item_id,
+                resource_code=resource_code,
+            )
+
+        prepared = prepare_fgiscs_material_acquisition(
+            api=FgisCsPublicApi(
+                timeout_seconds=settings.integration_http_timeout_seconds,
+                max_response_bytes=settings.integration_max_response_bytes,
+            ),
+            request=context.lookup_request,
+            expected_context_hash=context.context_hash,
+            object_store=object_store,
+            max_response_bytes=settings.integration_max_response_bytes,
+        )
+
+        with factory.begin() as session:
+            result = FgisCsAcquisitionService(
+                session=session,
+                settings=settings,
+                object_store=object_store,
+            ).record_stored_acquisition(
+                actor=actor,
+                project_id=project_id,
+                item_id=item_id,
+                resource_code=resource_code,
+                expected_context_hash=context.context_hash,
+                prepared=prepared,
+                request_id=request_id,
+                reason=reason,
+            )
+    except Exception as error:
+        _emit_fgiscs_governed_error(
+            getattr(error, "code", "FGIS_CS_GOVERNED_ACQUISITION_BLOCKED"),
+            retryable=bool(getattr(error, "retryable", False)),
+        )
+        return 2
+    finally:
+        engine.dispose()
+    print(result.model_dump_json(indent=2))
+    return 0
+
+
+def _emit_fgiscs_governed_error(code: str, *, retryable: bool = False) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "retryable": retryable,
+                "ready_for_pricing": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def verify_restored_system(
     *,
     profile_version_id: str,
@@ -402,6 +845,51 @@ def main() -> None:
         help="Claim and deliver pending clean-upload outbox events",
     )
     dispatch_parser.add_argument("--max-events", type=int, default=1)
+    automation_dispatch_parser = subcommands.add_parser(
+        "dispatch-final-rework",
+        help="Validate final expert rework and queue qualified automatic stage commands",
+    )
+    automation_dispatch_parser.add_argument("--max-events", type=int, default=1)
+    ksr_parser = subcommands.add_parser(
+        "probe-fgiscs-ksr",
+        help="Retrieve unverified KSR candidates from the public FGIS CS portal",
+    )
+    ksr_parser.add_argument("--query", required=True)
+    material_parser = subcommands.add_parser(
+        "probe-fgiscs-material",
+        help="Retrieve one raw FGIS CS material record by an exact KSR code",
+    )
+    material_parser.add_argument("--subject-name", required=True)
+    material_parser.add_argument("--price-zone-name")
+    material_parser.add_argument("--period-name", required=True)
+    material_parser.add_argument("--resource-code", required=True)
+    boq_probe_parser = subcommands.add_parser(
+        "probe-boq-xlsx",
+        help="Extract provenance-rich UNVERIFIED BoQ row candidates by an exact profile",
+    )
+    boq_probe_parser.add_argument("--input", required=True, type=Path)
+    boq_probe_parser.add_argument("--profile", required=True, type=Path)
+    boq_probe_parser.add_argument(
+        "--archive-entry-sha256",
+    )
+    boq_probe_parser.add_argument("--output", type=Path)
+    boq_import_parser = subcommands.add_parser(
+        "import-governed-boq-xlsx",
+        help="Import profile-pinned XLSX rows as qualified UNVERIFIED observations",
+    )
+    boq_import_parser.add_argument("--project-id", required=True)
+    boq_import_parser.add_argument("--document-revision-id", required=True)
+    boq_import_parser.add_argument("--request-id", required=True)
+    boq_import_parser.add_argument("--reason", required=True)
+    fgiscs_import_parser = subcommands.add_parser(
+        "import-governed-fgiscs-material",
+        help="Retain and replay one policy-bound UNVERIFIED FGIS CS material response",
+    )
+    fgiscs_import_parser.add_argument("--project-id", required=True)
+    fgiscs_import_parser.add_argument("--item-id", required=True)
+    fgiscs_import_parser.add_argument("--resource-code", required=True)
+    fgiscs_import_parser.add_argument("--request-id", required=True)
+    fgiscs_import_parser.add_argument("--reason", required=True)
     recovery_parser = subcommands.add_parser(
         "verify-restored-system",
         help="Verify a restored database/object-store pair against an approved profile",
@@ -428,6 +916,47 @@ def main() -> None:
         raise SystemExit(process_quarantined_upload(arguments.upload_id))
     if arguments.command == "dispatch-document-intake":
         raise SystemExit(dispatch_document_intake(arguments.max_events))
+    if arguments.command == "dispatch-final-rework":
+        raise SystemExit(dispatch_final_rework(arguments.max_events))
+    if arguments.command == "probe-fgiscs-ksr":
+        raise SystemExit(probe_fgiscs_ksr(arguments.query))
+    if arguments.command == "probe-fgiscs-material":
+        raise SystemExit(
+            probe_fgiscs_material(
+                subject_name=arguments.subject_name,
+                price_zone_name=arguments.price_zone_name,
+                period_name=arguments.period_name,
+                resource_code=arguments.resource_code,
+            )
+        )
+    if arguments.command == "probe-boq-xlsx":
+        raise SystemExit(
+            probe_boq_xlsx(
+                input_path=arguments.input,
+                profile_path=arguments.profile,
+                archive_entry_sha256=arguments.archive_entry_sha256,
+                output_path=arguments.output,
+            )
+        )
+    if arguments.command == "import-governed-boq-xlsx":
+        raise SystemExit(
+            import_governed_boq_xlsx(
+                project_id=arguments.project_id,
+                document_revision_id=arguments.document_revision_id,
+                request_id=arguments.request_id,
+                reason=arguments.reason,
+            )
+        )
+    if arguments.command == "import-governed-fgiscs-material":
+        raise SystemExit(
+            import_governed_fgiscs_material(
+                project_id=arguments.project_id,
+                item_id=arguments.item_id,
+                resource_code=arguments.resource_code,
+                request_id=arguments.request_id,
+                reason=arguments.reason,
+            )
+        )
     if arguments.command == "verify-restored-system":
         raise SystemExit(
             verify_restored_system(

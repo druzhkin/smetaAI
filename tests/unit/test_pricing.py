@@ -6,10 +6,11 @@ import pytest
 from tenderguard.application.pricing import NormalizePriceCommand, PriceQuoteDraft
 from tenderguard.domain.enums import (
     PriceEvidenceClass,
+    PriceSourceType,
     PriceStatus,
     VatBasis,
 )
-from tenderguard.domain.models import CommercialBasis, PriceQuote
+from tenderguard.domain.models import CommercialBasis, PriceQuote, PriceSourceReference
 from tenderguard.domain.pricing import (
     NormalizationRequest,
     PriceAdjustment,
@@ -40,11 +41,28 @@ def basis(
 
 
 def quote(identifier: str, evidence: PriceEvidenceClass) -> PriceQuote:
+    source_type = {
+        PriceEvidenceClass.OFFICIAL_OR_PRIMARY: PriceSourceType.FGIS_CS,
+        PriceEvidenceClass.INDEPENDENT_MARKET: PriceSourceType.MARKETPLACE,
+        PriceEvidenceClass.INTERNAL_HISTORY: PriceSourceType.WON_TENDER,
+        PriceEvidenceClass.COMMERCIAL_QUOTE: PriceSourceType.SUPPLIER_QUOTE,
+    }[evidence]
     return PriceQuote(
         quote_id=identifier,
         item_id="pipe-1",
         supplier_id=f"supplier-{identifier}",
         evidence_class=evidence,
+        source_reference=PriceSourceReference(
+            source_type=source_type,
+            display_name=f"Source {identifier}",
+            source_item_name="Steel pipe DN100 PN16",
+            source_record_id=f"record-{identifier}",
+            source_uri=(
+                None
+                if source_type is PriceSourceType.SUPPLIER_QUOTE
+                else f"https://prices.example.test/{identifier}"
+            ),
+        ),
         source_observation_id=f"obs-{identifier}",
         technical_attributes={"diameter": "DN100", "pressure": "PN16"},
         amount=Decimal("1200"),
@@ -172,7 +190,7 @@ def test_critical_price_requires_three_way_triangulation() -> None:
 
     result = evaluate_triangulation(
         item_id="pipe-1",
-        quotes=(*two_sources, quote("q3", PriceEvidenceClass.COMMERCIAL_QUOTE)),
+        quotes=(*two_sources, quote("q3", PriceEvidenceClass.INTERNAL_HISTORY)),
         as_of=date(2026, 7, 23),
         critical=True,
     )
@@ -198,7 +216,7 @@ def test_triangulation_excludes_commercially_incomplete_or_future_quotes() -> No
     assert not result.passed
     assert set(result.missing_evidence_classes) == {
         PriceEvidenceClass.INDEPENDENT_MARKET,
-        PriceEvidenceClass.COMMERCIAL_QUOTE,
+        PriceEvidenceClass.INTERNAL_HISTORY,
     }
 
 
@@ -207,6 +225,12 @@ def test_quote_and_normalization_commands_reject_ambiguous_commercial_inputs() -
         PriceQuoteDraft(
             item_id="pipe-1",
             evidence_class=PriceEvidenceClass.COMMERCIAL_QUOTE,
+            source_reference=PriceSourceReference(
+                source_type=PriceSourceType.SUPPLIER_QUOTE,
+                display_name="Supplier",
+                source_item_name="Steel pipe DN100",
+                source_record_id="quote-1",
+            ),
             source_observation_id="observation-quote",
             technical_attributes={"diameter": "DN100"},
             amount=Decimal("100"),
@@ -222,6 +246,12 @@ def test_quote_and_normalization_commands_reject_ambiguous_commercial_inputs() -
             item_id="pipe-1",
             supplier_id="supplier-1",
             evidence_class=PriceEvidenceClass.COMMERCIAL_QUOTE,
+            source_reference=PriceSourceReference(
+                source_type=PriceSourceType.SUPPLIER_QUOTE,
+                display_name="Supplier",
+                source_item_name="Steel pipe DN100",
+                source_record_id="quote-1",
+            ),
             source_observation_id="observation-quote",
             technical_attributes={"diameter": "DN100"},
             amount=Decimal("100"),
@@ -236,4 +266,47 @@ def test_quote_and_normalization_commands_reject_ambiguous_commercial_inputs() -
         NormalizePriceCommand(
             quote_id="quote-1",
             adjustment_ids=("delivery-1", "delivery-1"),
+        )
+
+
+def test_price_source_reference_rejects_missing_or_unsafe_external_uri() -> None:
+    with pytest.raises(ValueError, match="exact HTTPS URI"):
+        PriceSourceReference(
+            source_type=PriceSourceType.FGIS_CS,
+            display_name="ФГИС ЦС",
+            source_item_name="Pipe DN100",
+            source_record_id="fgis-1",
+        )
+    with pytest.raises(ValueError, match="without credentials"):
+        PriceSourceReference(
+            source_type=PriceSourceType.MARKETPLACE,
+            display_name="Market",
+            source_item_name="Pipe DN100",
+            source_record_id="market-1",
+            source_uri="https://user:password@example.test/price",
+        )
+
+
+def test_price_quote_rejects_source_type_evidence_class_conflict() -> None:
+    with pytest.raises(ValueError, match="conflicts with the declared source type"):
+        PriceQuoteDraft(
+            item_id="pipe-1",
+            supplier_id="supplier-1",
+            evidence_class=PriceEvidenceClass.INDEPENDENT_MARKET,
+            source_reference=PriceSourceReference(
+                source_type=PriceSourceType.FGIS_CS,
+                display_name="ФГИС ЦС",
+                source_item_name="Pipe DN100",
+                source_record_id="fgis-1",
+                source_uri="https://fgis.example.test/price/1",
+            ),
+            source_observation_id="observation-quote",
+            technical_attributes={"diameter": "DN100"},
+            amount=Decimal("100"),
+            basis=basis(region="Moscow"),
+            quote_date=date(2026, 7, 20),
+            valid_until=date(2026, 8, 20),
+            lead_time_days=10,
+            available=True,
+            source_reliability=Decimal("0.9"),
         )

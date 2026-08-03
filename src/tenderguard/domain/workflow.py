@@ -69,7 +69,9 @@ _NORMAL_TRANSITIONS: dict[ApprovalState, frozenset[ApprovalState]] = {
     ),
     ApprovalState.EXPERT_REVIEW: frozenset(
         {
+            ApprovalState.EXTRACTION_IN_PROGRESS,
             ApprovalState.EXTRACTION_REVIEW,
+            ApprovalState.BOQ_IN_PROGRESS,
             ApprovalState.BOQ_REVIEW,
             ApprovalState.PRICING_IN_PROGRESS,
             ApprovalState.CALCULATION_IN_PROGRESS,

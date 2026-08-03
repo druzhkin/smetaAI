@@ -12,7 +12,12 @@ from decimal import (
 from pydantic import Field, field_validator
 
 from tenderguard.domain.common import content_hash
-from tenderguard.domain.enums import PriceEvidenceClass, PriceStatus, VatBasis
+from tenderguard.domain.enums import (
+    PriceEvidenceClass,
+    PriceSourceType,
+    PriceStatus,
+    VatBasis,
+)
 from tenderguard.domain.models import (
     CommercialBasis,
     DomainModel,
@@ -57,6 +62,7 @@ class TriangulationResult(DomainModel):
     passed: bool
     resulting_status: PriceStatus
     missing_evidence_classes: tuple[PriceEvidenceClass, ...]
+    missing_source_groups: tuple[str, ...]
     reason: str
 
 
@@ -216,27 +222,33 @@ def evaluate_triangulation(
     required = {
         PriceEvidenceClass.OFFICIAL_OR_PRIMARY,
         PriceEvidenceClass.INDEPENDENT_MARKET,
+        PriceEvidenceClass.INTERNAL_HISTORY,
     }
     missing = set(required - present)
-    has_internal_or_quote = bool(
-        present
-        & {
-            PriceEvidenceClass.INTERNAL_HISTORY,
-            PriceEvidenceClass.COMMERCIAL_QUOTE,
+    source_types = {quote.source_reference.source_type for quote in eligible}
+    missing_source_groups: list[str] = []
+    if PriceSourceType.FGIS_CS not in source_types:
+        missing_source_groups.append("FGIS_CS")
+    if PriceSourceType.WON_TENDER not in source_types:
+        missing_source_groups.append("WON_TENDER")
+    if not source_types.intersection(
+        {
+            PriceSourceType.MARKETPLACE,
+            PriceSourceType.SUPPLIER_WEBSITE,
         }
-    )
-    if critical and not has_internal_or_quote:
-        missing.add(PriceEvidenceClass.COMMERCIAL_QUOTE)
-    passed = not missing
+    ):
+        missing_source_groups.append("MARKET")
+    passed = not missing and not missing_source_groups
     return TriangulationResult(
         item_id=item_id,
         quote_ids=tuple(quote.quote_id for quote in eligible),
         passed=passed,
         resulting_status=PriceStatus.VERIFIED if passed else PriceStatus.RFQ_REQUIRED,
         missing_evidence_classes=tuple(sorted(missing, key=lambda item: item.value)),
+        missing_source_groups=tuple(missing_source_groups),
         reason=(
-            "Required independent evidence classes are present"
+            "FGIS CS, won-tender and independent-market evidence are present"
             if passed
-            else "Price requires additional independent evidence or an RFQ"
+            else "Price requires the missing source groups, independent evidence, or an RFQ"
         ),
     )

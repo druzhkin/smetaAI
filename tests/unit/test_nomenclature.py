@@ -1,9 +1,45 @@
+# ruff: noqa: RUF001
+
 from datetime import UTC, datetime
 
 import pytest
 
 from tenderguard.domain.enums import MatchClass
-from tenderguard.domain.nomenclature import approve_analogue, assess_exact_match
+from tenderguard.domain.nomenclature import (
+    approve_analogue,
+    assess_exact_match,
+    catalog_retrieval_evidence,
+)
+
+
+def test_catalog_retrieval_explains_compound_identifier_terms_without_equivalence() -> None:
+    evidence = catalog_retrieval_evidence(
+        source_name="Труба ПЭ100 DN 110 SDR 17",
+        canonical_item_id="pipe-pe100-dn110",
+        attributes={
+            "material": "ПЭ100",
+            "diameter": "DN100",
+            "sdr": "17",
+        },
+        critical_attributes=("material", "diameter", "sdr"),
+    )
+
+    assert evidence.exact_identifier_mentioned is False
+    assert {"100", "17", "dn", "пэ"}.issubset(evidence.matched_terms)
+    assert evidence.matched_critical_attributes == ("material", "sdr")
+
+
+def test_catalog_retrieval_does_not_invent_matches_for_unrelated_item() -> None:
+    evidence = catalog_retrieval_evidence(
+        source_name="Кабель силовой медный 4x16",
+        canonical_item_id="pipe-steel-dn100",
+        attributes={"material": "steel", "diameter": "DN100"},
+        critical_attributes=("material", "diameter"),
+    )
+
+    assert evidence.exact_identifier_mentioned is False
+    assert evidence.matched_terms == ()
+    assert evidence.matched_critical_attributes == ()
 
 
 def test_critical_attribute_mismatch_is_not_similarity_match() -> None:

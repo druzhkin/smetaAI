@@ -10,11 +10,13 @@ from pydantic import Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tenderguard.application.actuals import ActualsService
 from tenderguard.application.audit_integrity import AuditIntegrityService
 from tenderguard.application.operational_qualification import load_approved_profile
 from tenderguard.application.projects import ProjectService
 from tenderguard.application.snapshot_integrity import read_verified_snapshot
 from tenderguard.config import Settings
+from tenderguard.domain.actuals import ActualEvidenceValue
 from tenderguard.domain.audit import verify_chain
 from tenderguard.domain.business_qualification import (
     BusinessQualificationDataset,
@@ -412,6 +414,7 @@ class BusinessQualificationService:
                 DocumentRow.id == draft.location.document_id,
                 DocumentRow.project_id == case.project_id,
                 DocumentRow.cancelled.is_(False),
+                DocumentRevisionRow.is_current.is_(True),
                 DocumentRevisionRow.corrupt.is_(False),
                 DocumentRevisionRow.protected.is_(False),
             )
@@ -1376,14 +1379,34 @@ class BusinessQualificationService:
             raise ValueError(
                 f"Historical actual for case {case_key} has an unbound comparison basis"
             )
-        raw = observation.payload.get("observation")
-        if not isinstance(raw, dict):
-            raise ValueError("Historical actual observation payload is invalid")
         try:
-            observed_value = Decimal(str(raw.get("value")))
-        except (InvalidOperation, TypeError, ValueError) as error:
+            parsed_observation = Observation.model_validate(observation.payload.get("observation"))
+            source_revision = self.session.get(
+                DocumentRevisionRow,
+                observation.document_revision_id,
+            )
+            if source_revision is None:
+                raise ValueError("Historical actual source revision is missing")
+            evidence_value = ActualEvidenceValue.model_validate(parsed_observation.value)
+            verified_actual = ActualsService(
+                session=self.session,
+                settings=self.settings,
+                object_store=self.object_store,
+            ).require_verified_actual_integrity(
+                project_id=project_id,
+                actual_id=actual.id,
+            )
+        except (LookupError, RuntimeError, TypeError, ValueError) as error:
             raise ValueError("Historical actual observation amount is invalid") from error
-        if observed_value != actual.value or raw.get("unit") != actual.unit:
+        if (
+            evidence_value.value != actual.value
+            or evidence_value.unit != actual.unit
+            or evidence_value.entity_type != actual.entity_type
+            or evidence_value.entity_id != actual.entity_id
+            or evidence_value.metric != actual.metric
+            or verified_actual.value != actual.value
+            or parsed_observation.location.original_object_hash != source_revision.object_hash
+        ):
             raise ValueError("Historical actual does not reproduce its source observation")
         events = [
             AuditIntegrityService._event(row)
@@ -1421,6 +1444,7 @@ class BusinessQualificationService:
             or recorded[0].actor_id == verified[0].actor_id
             or recorded[0].actor_id != actual.payload.get("created_by")
             or verified[0].actor_id != actual.payload.get("verified_by")
+            or verified[0].payload.get("decision") != "APPROVED"
             or recorded[0].payload.get("actual_key") != actual.actual_key
             or recorded[0].payload.get("entity_type") != actual.entity_type
             or recorded[0].payload.get("entity_id") != actual.entity_id

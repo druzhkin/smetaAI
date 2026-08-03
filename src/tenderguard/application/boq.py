@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,18 +17,21 @@ from tenderguard.application.document_set_integrity import (
     require_confirmed_document_set_integrity,
     require_observation_in_document_set,
 )
+from tenderguard.application.evidence import EvidenceService, ObservationDraft
 from tenderguard.application.evidence_independence import (
     require_distinct_qualified_independence,
 )
 from tenderguard.application.projects import OptimisticLockError, ProjectService
 from tenderguard.application.stage_gates import scope_input_signature
 from tenderguard.config import Settings
+from tenderguard.domain.boq_spreadsheet import BoqXlsxProfile, ImportedBoqRowValue
 from tenderguard.domain.common import content_hash, ensure_utc, utc_now
 from tenderguard.domain.enums import (
     ActorRole,
     ApprovalState,
     CostBasisKind,
     CostCategory,
+    EvidenceMethod,
     FindingCode,
     Severity,
     VerificationStatus,
@@ -49,10 +52,12 @@ from tenderguard.domain.scope import ScopeEvaluation, ScopeRule, evaluate_scope
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.object_store import ObjectStore
 from tenderguard.infrastructure.orm import (
+    AdapterQualificationRow,
     ApprovalRecordRow,
     ApprovalTaskRow,
     BoqLineRow,
     ControlledVersionRow,
+    ExtractionRunRow,
     ManualChangeRow,
     ObservationRow,
     ProjectControlledVersionRow,
@@ -135,6 +140,7 @@ class BoqEvidenceCandidateView(DomainModel):
     observation: Observation
     work_code: str
     unit: str
+    description: str | None = None
 
 
 class BoqAuthoringContextView(DomainModel):
@@ -146,6 +152,74 @@ class BoqAuthoringContextView(DomainModel):
     candidates_truncated: bool
 
 
+class BoqSpreadsheetMappingCommand(DomainModel):
+    work_code: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=2000)
+    unit: str = Field(min_length=1, max_length=100)
+    expected_source_observation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    proposed_at: datetime
+
+    @field_validator("proposed_at")
+    @classmethod
+    def proposal_timestamp_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("BoQ spreadsheet mapping timestamp must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def text_is_normalized(self) -> BoqSpreadsheetMappingCommand:
+        if any(value != value.strip() for value in (self.work_code, self.description, self.unit)):
+            raise ValueError("BoQ spreadsheet mapping text must be normalized")
+        return self
+
+
+class BoqSpreadsheetQuantityCommand(DomainModel):
+    expected_source_observation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    proposed_at: datetime
+
+    @field_validator("proposed_at")
+    @classmethod
+    def proposal_timestamp_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("BoQ spreadsheet quantity timestamp must include a timezone")
+        return value
+
+
+class BoqSpreadsheetCandidateView(DomainModel):
+    source_observation: Observation
+    source_observation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_item_id: str
+    source_position_id: str
+    description: str
+    specification: str | None
+    source_reference: str | None
+    unit: str
+    quantity: Decimal
+    worksheet_name: str
+    row_number: int
+    proposal_observation_id: str | None = None
+    proposal_task_status: str | None = None
+    verified_observation_id: str | None = None
+    proposal_allowed: bool
+    proposal_blockers: tuple[str, ...] = ()
+    quantity_proposal_observation_id: str | None = None
+    quantity_proposal_task_status: str | None = None
+    verified_quantity_observation_id: str | None = None
+    quantity_proposal_allowed: bool
+    quantity_proposal_blockers: tuple[str, ...] = ()
+
+
+class BoqSpreadsheetCandidateContextView(DomainModel):
+    project_id: str
+    project_state: ApprovalState
+    document_set_revision_id: str
+    candidates: tuple[BoqSpreadsheetCandidateView, ...]
+    candidates_truncated: bool
+
+
+BOQ_LINE_MAPPING_SCHEMA = "boq-line-mapping/v1"
+
+
 class BoqLineReviewView(DomainModel):
     line: BoqLineView
     created_by: str
@@ -153,6 +227,41 @@ class BoqLineReviewView(DomainModel):
     evidence_observations: tuple[Observation, ...]
     verification_allowed: bool
     verification_blockers: tuple[str, ...]
+
+
+class InitialQuantityEvidenceCandidateView(DomainModel):
+    observation: Observation
+    observation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_item_id: str
+    value: Decimal
+    unit: str
+
+
+class InitialQuantityContextView(DomainModel):
+    project_id: str
+    project_state: ApprovalState
+    document_set_revision_id: str
+    line: BoqLineView
+    source_item_id: str | None
+    quantity_policy_version_id: str | None
+    evidence_candidates: tuple[InitialQuantityEvidenceCandidateView, ...]
+    current_quantity_id: str | None = None
+    current_quantity_status: VerificationStatus | None = None
+    recording_allowed: bool
+    recording_blockers: tuple[str, ...] = ()
+
+
+class AttachImportedQuantityCommand(DomainModel):
+    source_observation_id: str = Field(min_length=1, max_length=64)
+    expected_source_observation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_line_updated_at: datetime
+
+    @field_validator("expected_line_updated_at")
+    @classmethod
+    def line_timestamp_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Expected BoQ line timestamp must include a timezone")
+        return value
 
 
 class QuantityDraft(DomainModel):
@@ -321,6 +430,11 @@ class BoqService:
                         observation=observation,
                         work_code=value["work_code"],
                         unit=value["unit"],
+                        description=(
+                            value.get("description")
+                            if isinstance(value.get("description"), str)
+                            else None
+                        ),
                     )
                 )
         return BoqAuthoringContextView(
@@ -330,6 +444,296 @@ class BoqService:
             evidence_field_name=evidence_field_name,
             evidence_candidates=tuple(candidates),
             candidates_truncated=len(rows) > limit,
+        )
+
+    def spreadsheet_candidate_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        limit: int,
+    ) -> BoqSpreadsheetCandidateContextView:
+        if limit < 1 or limit > 100:
+            raise ValueError("BoQ spreadsheet candidate limit must be between 1 and 100")
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
+        )
+        if ApprovalState(project.state) is not ApprovalState.BOQ_IN_PROGRESS:
+            raise ValueError("BoQ spreadsheet review requires BOQ_IN_PROGRESS")
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        rows = list(
+            self.session.scalars(
+                select(ObservationRow)
+                .where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                    ObservationRow.field_name.like("boq_row_candidate:%"),
+                    ObservationRow.method == EvidenceMethod.TABLE_PARSER.value,
+                    ObservationRow.status == VerificationStatus.UNVERIFIED.value,
+                )
+                .order_by(ObservationRow.created_at, ObservationRow.id)
+                .limit(limit + 1)
+            )
+        )
+        base_blockers: list[str] = []
+        if not actor.roles.intersection({ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER}):
+            base_blockers.append("MAPPING_ROLE_REQUIRED")
+        else:
+            try:
+                manual_context = EvidenceService(
+                    session=self.session,
+                    settings=self.settings,
+                    object_store=self.object_store,
+                ).manual_evidence_context(actor=actor, project_id=project_id)
+                if ApprovalState(project.state) not in manual_context.allowed_project_states:
+                    base_blockers.append("MANUAL_EVIDENCE_STATE_NOT_ALLOWED")
+            except (RuntimeError, ValueError):
+                base_blockers.append("MANUAL_EVIDENCE_POLICY_UNAVAILABLE")
+
+        candidates: list[BoqSpreadsheetCandidateView] = []
+        for row in rows[:limit]:
+            observation, value = self._validated_spreadsheet_candidate(
+                row=row,
+                organization_id=actor.organization_id,
+            )
+            proposal, task, verified_observation_id = self._latest_mapping_proposal(
+                project_id=project_id,
+                document_revision_ids=tuple(document_set.revision_ids),
+                source_observation_id=row.id,
+            )
+            blockers = list(base_blockers)
+            if task is not None and task.status in {"PENDING", "APPROVED"}:
+                blockers.append("ACTIVE_MAPPING_PROPOSAL")
+            quantity_proposal, quantity_task, verified_quantity_id = self._latest_quantity_proposal(
+                project_id=project_id,
+                document_revision_ids=tuple(document_set.revision_ids),
+                source_observation_id=row.id,
+                source_item_id=value.source_item_id,
+                expected_quantity=value.quantity,
+                expected_unit=value.unit,
+            )
+            quantity_blockers = list(base_blockers)
+            if quantity_task is not None and quantity_task.status in {"PENDING", "APPROVED"}:
+                quantity_blockers.append("ACTIVE_QUANTITY_PROPOSAL")
+            candidates.append(
+                BoqSpreadsheetCandidateView(
+                    source_observation=observation,
+                    source_observation_hash=content_hash(row.payload),
+                    source_item_id=value.source_item_id,
+                    source_position_id=value.source_position_id,
+                    description=value.description,
+                    specification=value.specification,
+                    source_reference=value.source_reference,
+                    unit=value.unit,
+                    quantity=value.quantity,
+                    worksheet_name=value.worksheet_name,
+                    row_number=value.row_number,
+                    proposal_observation_id=proposal.id if proposal is not None else None,
+                    proposal_task_status=task.status if task is not None else None,
+                    verified_observation_id=verified_observation_id,
+                    proposal_allowed=not blockers,
+                    proposal_blockers=tuple(blockers),
+                    quantity_proposal_observation_id=(
+                        quantity_proposal.id if quantity_proposal is not None else None
+                    ),
+                    quantity_proposal_task_status=(
+                        quantity_task.status if quantity_task is not None else None
+                    ),
+                    verified_quantity_observation_id=verified_quantity_id,
+                    quantity_proposal_allowed=not quantity_blockers,
+                    quantity_proposal_blockers=tuple(quantity_blockers),
+                )
+            )
+        return BoqSpreadsheetCandidateContextView(
+            project_id=project_id,
+            project_state=ApprovalState(project.state),
+            document_set_revision_id=document_set.id,
+            candidates=tuple(candidates),
+            candidates_truncated=len(rows) > limit,
+        )
+
+    def propose_spreadsheet_mapping(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        source_observation_id: str,
+        command: BoqSpreadsheetMappingCommand,
+        request_id: str,
+        reason: str,
+    ) -> Observation:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
+        if ApprovalState(project.state) is not ApprovalState.BOQ_IN_PROGRESS:
+            raise ValueError("BoQ spreadsheet review requires BOQ_IN_PROGRESS")
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        source = self.session.scalar(
+            select(ObservationRow).where(
+                ObservationRow.id == source_observation_id,
+                ObservationRow.project_id == project_id,
+                ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+            )
+        )
+        if source is None:
+            raise LookupError(source_observation_id)
+        source_observation, source_value = self._validated_spreadsheet_candidate(
+            row=source,
+            organization_id=actor.organization_id,
+        )
+        if content_hash(source.payload) != command.expected_source_observation_hash:
+            raise OptimisticLockError(
+                "Imported BoQ row changed after it was loaded; reload before mapping"
+            )
+        _proposal, active_task, _verified_id = self._latest_mapping_proposal(
+            project_id=project_id,
+            document_revision_ids=tuple(document_set.revision_ids),
+            source_observation_id=source.id,
+        )
+        if active_task is not None and active_task.status in {"PENDING", "APPROVED"}:
+            raise ValueError("Imported BoQ row already has an active mapping proposal")
+        evidence_service = EvidenceService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        )
+        manual_context = evidence_service.manual_evidence_context(
+            actor=actor,
+            project_id=project_id,
+        )
+        if ApprovalState(project.state) not in manual_context.allowed_project_states:
+            raise ValueError("Manual evidence policy does not allow mapping in this project state")
+        mapping_value = {
+            "schema_version": BOQ_LINE_MAPPING_SCHEMA,
+            "source_item_id": source_value.source_item_id,
+            "source_position_id": source_value.source_position_id,
+            "work_code": command.work_code,
+            "description": command.description,
+            "unit": command.unit,
+            "mapping_scope": "IDENTITY_DESCRIPTION_UNIT_ONLY",
+            "quantity_promoted": False,
+        }
+        return evidence_service.record_observation(
+            actor=actor,
+            project_id=project_id,
+            draft=ObservationDraft(
+                field_name="boq_line",
+                value=mapping_value,
+                unit=command.unit,
+                method=EvidenceMethod.MANUAL,
+                method_version=manual_context.policy_version_id,
+                source_priority=source_observation.source_priority,
+                location=source_observation.location,
+                observed_at=command.proposed_at,
+                confidence=None,
+                adapter_qualification_id=None,
+                basis_metadata={},
+            ),
+            request_id=request_id,
+            reason=reason,
+            upstream_observation_ids=(source.id,),
+        )
+
+    def propose_spreadsheet_quantity(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        source_observation_id: str,
+        command: BoqSpreadsheetQuantityCommand,
+        request_id: str,
+        reason: str,
+    ) -> Observation:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.TECHNICAL_EXPERT, ActorRole.REVIEWER),
+        )
+        if ApprovalState(project.state) is not ApprovalState.BOQ_IN_PROGRESS:
+            raise ValueError("BoQ spreadsheet review requires BOQ_IN_PROGRESS")
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        source = self.session.scalar(
+            select(ObservationRow).where(
+                ObservationRow.id == source_observation_id,
+                ObservationRow.project_id == project_id,
+                ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+            )
+        )
+        if source is None:
+            raise LookupError(source_observation_id)
+        source_observation, source_value = self._validated_spreadsheet_candidate(
+            row=source,
+            organization_id=actor.organization_id,
+        )
+        if content_hash(source.payload) != command.expected_source_observation_hash:
+            raise OptimisticLockError(
+                "Imported BoQ row changed after it was loaded; reload before quantity review"
+            )
+        _proposal, active_task, _verified_id = self._latest_quantity_proposal(
+            project_id=project_id,
+            document_revision_ids=tuple(document_set.revision_ids),
+            source_observation_id=source.id,
+            source_item_id=source_value.source_item_id,
+            expected_quantity=source_value.quantity,
+            expected_unit=source_value.unit,
+        )
+        if active_task is not None and active_task.status in {"PENDING", "APPROVED"}:
+            raise ValueError("Imported BoQ row already has an active quantity proposal")
+        evidence_service = EvidenceService(
+            session=self.session,
+            settings=self.settings,
+            object_store=self.object_store,
+        )
+        manual_context = evidence_service.manual_evidence_context(
+            actor=actor,
+            project_id=project_id,
+        )
+        if ApprovalState(project.state) not in manual_context.allowed_project_states:
+            raise ValueError("Manual evidence policy does not allow quantity review in this state")
+        return evidence_service.record_observation(
+            actor=actor,
+            project_id=project_id,
+            draft=ObservationDraft(
+                field_name=f"boq_quantity:{source_value.source_item_id}",
+                value=source_value.quantity,
+                unit=source_value.unit,
+                method=EvidenceMethod.MANUAL,
+                method_version=manual_context.policy_version_id,
+                source_priority=source_observation.source_priority,
+                location=source_observation.location,
+                observed_at=command.proposed_at,
+                confidence=None,
+                adapter_qualification_id=None,
+                basis_metadata={},
+            ),
+            request_id=request_id,
+            reason=reason,
+            upstream_observation_ids=(source.id,),
         )
 
     def line_review(
@@ -403,6 +807,220 @@ class BoqService:
             verification_blockers=tuple(dict.fromkeys(blockers)),
         )
 
+    def initial_quantity_context(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        line_id: str,
+    ) -> InitialQuantityContextView:
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            required_roles=(
+                ActorRole.ESTIMATOR,
+                ActorRole.TECHNICAL_EXPERT,
+                ActorRole.REVIEWER,
+            ),
+        )
+        line = self.session.scalar(
+            select(BoqLineRow).where(
+                BoqLineRow.id == line_id,
+                BoqLineRow.project_id == project_id,
+            )
+        )
+        if line is None:
+            raise LookupError(line_id)
+        document_set = require_confirmed_document_set_integrity(
+            session=self.session,
+            settings=self.settings,
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        blockers: list[str] = []
+        if ApprovalState(project.state) not in {
+            ApprovalState.BOQ_IN_PROGRESS,
+            ApprovalState.BOQ_REVIEW,
+        }:
+            blockers.append("PROJECT_STATE_NOT_ALLOWED")
+        if not line.is_current:
+            blockers.append("LINE_SUPERSEDED")
+        if line.status != VerificationStatus.VERIFIED.value:
+            blockers.append("LINE_NOT_VERIFIED")
+        if line.payload.get("document_set_revision_id") != document_set.id:
+            blockers.append("DOCUMENT_SET_MISMATCH")
+        if not actor.roles.intersection({ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT}):
+            blockers.append("QUANTITY_RECORDING_ROLE_REQUIRED")
+        source_item_id = self._spreadsheet_source_item_for_line(
+            project_id=project_id,
+            line=line,
+            document_revision_ids=frozenset(document_set.revision_ids),
+        )
+        if source_item_id is None:
+            blockers.append("SPREADSHEET_SOURCE_MAPPING_REQUIRED")
+        evidence_candidates: list[InitialQuantityEvidenceCandidateView] = []
+        if source_item_id is not None:
+            rows = list(
+                self.session.scalars(
+                    select(ObservationRow)
+                    .where(
+                        ObservationRow.project_id == project_id,
+                        ObservationRow.document_revision_id.in_(tuple(document_set.revision_ids)),
+                        ObservationRow.field_name == f"boq_quantity:{source_item_id}",
+                        ObservationRow.status == VerificationStatus.VERIFIED.value,
+                    )
+                    .order_by(ObservationRow.created_at.desc(), ObservationRow.id.desc())
+                )
+            )
+            for row in rows:
+                observation, source_value = self._validated_quantity_evidence_for_source(
+                    row=row,
+                    source_item_id=source_item_id,
+                    organization_id=actor.organization_id,
+                )
+                quantity = Decimal(str(observation.value))
+                evidence_candidates.append(
+                    InitialQuantityEvidenceCandidateView(
+                        observation=observation,
+                        observation_hash=content_hash(row.payload),
+                        source_item_id=source_item_id,
+                        value=quantity,
+                        unit=source_value.unit,
+                    )
+                )
+        if not evidence_candidates:
+            blockers.append("VERIFIED_SPREADSHEET_QUANTITY_REQUIRED")
+        if len(evidence_candidates) > 1:
+            blockers.append("MULTIPLE_VERIFIED_SPREADSHEET_QUANTITIES")
+        current_quantity = self.session.scalar(
+            select(QuantityRow).where(
+                QuantityRow.boq_line_id == line.id,
+                QuantityRow.is_current.is_(True),
+            )
+        )
+        if current_quantity is not None:
+            blockers.append("CURRENT_QUANTITY_ALREADY_EXISTS")
+        if bool(line.payload.get("critical_quantity")):
+            blockers.append("INDEPENDENT_QUANTITY_EVIDENCE_REQUIRED")
+        quantity_policy_version_id: str | None = None
+        try:
+            policy_row = self._bound_version(
+                project_id,
+                purpose="quantity_policy",
+                kind="quantity_policy",
+            )
+            policy_payload = policy_row.payload.get("policy")
+            if not isinstance(policy_payload, dict):
+                raise ValueError("Approved quantity policy payload is missing 'policy'")
+            policy = QuantityValidationPolicy.model_validate(
+                {"policy_version": policy_row.id, **policy_payload}
+            )
+            quantity_policy_version_id = policy_row.id
+            if policy.absolute_tolerance is None or policy.relative_tolerance is None:
+                blockers.append("QUANTITY_POLICY_THRESHOLDS_UNCONFIGURED")
+        except (RuntimeError, ValueError):
+            blockers.append("QUANTITY_POLICY_UNAVAILABLE")
+        blockers = list(dict.fromkeys(blockers))
+        return InitialQuantityContextView(
+            project_id=project_id,
+            project_state=ApprovalState(project.state),
+            document_set_revision_id=document_set.id,
+            line=self._line_view(line),
+            source_item_id=source_item_id,
+            quantity_policy_version_id=quantity_policy_version_id,
+            evidence_candidates=tuple(evidence_candidates),
+            current_quantity_id=current_quantity.id if current_quantity is not None else None,
+            current_quantity_status=(
+                VerificationStatus(current_quantity.status)
+                if current_quantity is not None
+                else None
+            ),
+            recording_allowed=not blockers,
+            recording_blockers=tuple(blockers),
+        )
+
+    def attach_imported_quantity(
+        self,
+        *,
+        actor: Actor,
+        project_id: str,
+        line_id: str,
+        command: AttachImportedQuantityCommand,
+        request_id: str,
+        reason: str,
+    ) -> QuantityExecutionResult:
+        reason = reason.strip()
+        if not reason or len(reason) > 2000:
+            raise ValueError("Quantity attachment reason must contain 1 to 2000 characters")
+        project = self._project_service().get_project(
+            actor=actor,
+            project_id=project_id,
+            lock=True,
+            required_roles=(ActorRole.ESTIMATOR, ActorRole.TECHNICAL_EXPERT),
+        )
+        context = self.initial_quantity_context(
+            actor=actor,
+            project_id=project_id,
+            line_id=line_id,
+        )
+        expected_updated_at = ensure_utc(command.expected_line_updated_at)
+        if ensure_utc(context.line.updated_at) != expected_updated_at:
+            raise OptimisticLockError(
+                "BoQ line changed after quantity context was loaded; reload before attaching"
+            )
+        if context.recording_blockers:
+            raise ValueError(
+                "Initial spreadsheet quantity is BLOCKED: " + ", ".join(context.recording_blockers)
+            )
+        candidate = next(
+            (
+                item
+                for item in context.evidence_candidates
+                if item.observation.observation_id == command.source_observation_id
+            ),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("Selected quantity evidence is not in the current controlled context")
+        row = self.session.get(ObservationRow, command.source_observation_id)
+        if row is None or content_hash(row.payload) != command.expected_source_observation_hash:
+            raise OptimisticLockError(
+                "Quantity evidence changed after it was loaded; reload before attaching"
+            )
+        exponent = candidate.value.as_tuple().exponent
+        if not isinstance(exponent, int):
+            raise RuntimeError("Verified spreadsheet quantity is not finite")
+        result = self.record_quantity(
+            actor=actor,
+            project_id=project.id,
+            line_id=line_id,
+            submission=QuantitySubmission(
+                draft=QuantityDraft(
+                    value=candidate.value,
+                    unit=candidate.unit,
+                    source_observation_ids=(candidate.observation.observation_id,),
+                    source_priority=candidate.observation.source_priority,
+                    rounding_scale=max(0, -exponent),
+                    waste_factor=Decimal("0"),
+                    alternative_quantity_ids=(),
+                    manual_change_id=None,
+                ),
+                formula=None,
+                formula_input_observation_ids={},
+            ),
+            request_id=request_id,
+            reason=reason,
+        )
+        if (
+            not result.validation.passed
+            or result.quantity.status is not VerificationStatus.VERIFIED
+        ):
+            validation_blockers = ", ".join(item.code.value for item in result.validation.findings)
+            raise ValueError(
+                "Initial spreadsheet quantity validation is BLOCKED: " + validation_blockers
+            )
+        return result
+
     def create_line(
         self,
         *,
@@ -439,9 +1057,15 @@ class BoqService:
             isinstance((observation := self._validated_observation(row)).value, dict)
             and observation.value.get("work_code") == draft.work_code
             and observation.value.get("unit") == draft.unit
+            and (
+                "description" not in observation.value
+                or observation.value.get("description") == draft.description
+            )
             for row in observations.values()
         ):
-            raise ValueError("No verified evidence reproduces the BoQ work code and unit")
+            raise ValueError(
+                "No verified evidence reproduces the BoQ work code, description and unit"
+            )
         identity = {
             "project_id": project_id,
             "document_set_revision_id": document_set.id,
@@ -564,7 +1188,9 @@ class BoqService:
             document_revision_ids=frozenset(document_set.revision_ids),
         )
         if not any(self._observation_supports_line(item, row) for item in observations.values()):
-            raise ValueError("No verified evidence reproduces the BoQ work code and unit")
+            raise ValueError(
+                "No verified evidence reproduces the BoQ work code, description and unit"
+            )
         row.status = VerificationStatus.VERIFIED.value
         row.updated_at = utc_now()
         row.payload = {
@@ -1721,6 +2347,345 @@ class BoqService:
             applied_at=applied_at,
         )
 
+    def _spreadsheet_source_item_for_line(
+        self,
+        *,
+        project_id: str,
+        line: BoqLineRow,
+        document_revision_ids: frozenset[str],
+    ) -> str | None:
+        raw_ids = line.payload.get("evidence_observation_ids")
+        if not (
+            isinstance(raw_ids, list)
+            and raw_ids
+            and all(isinstance(item, str) for item in raw_ids)
+            and len(raw_ids) == len(set(raw_ids))
+        ):
+            raise RuntimeError("BoQ line evidence identity is invalid")
+        rows = self._verified_observations(
+            project_id,
+            tuple(raw_ids),
+            document_revision_ids=document_revision_ids,
+        )
+        source_item_ids: set[str] = set()
+        for row in rows.values():
+            observation = self._validated_observation(row)
+            value = observation.value
+            if not isinstance(value, dict) or value.get("schema_version") != (
+                BOQ_LINE_MAPPING_SCHEMA
+            ):
+                continue
+            source_item_id = value.get("source_item_id")
+            if not isinstance(source_item_id, str) or not source_item_id:
+                raise RuntimeError("Verified BoQ mapping lacks its source item identity")
+            source_item_ids.add(source_item_id)
+        if len(source_item_ids) > 1:
+            raise RuntimeError("BoQ line is linked to multiple spreadsheet source items")
+        return next(iter(source_item_ids), None)
+
+    def _validated_quantity_evidence_for_source(
+        self,
+        *,
+        row: ObservationRow,
+        source_item_id: str,
+        organization_id: str,
+    ) -> tuple[Observation, ImportedBoqRowValue]:
+        observation = self._validated_observation(row)
+        upstream = row.payload.get("upstream_observations")
+        if not (
+            row.field_name == f"boq_quantity:{source_item_id}"
+            and observation.field_name == row.field_name
+            and isinstance(upstream, list)
+            and len(upstream) == 1
+            and isinstance(upstream[0], dict)
+            and isinstance(upstream[0].get("observation_id"), str)
+        ):
+            raise RuntimeError("Verified spreadsheet quantity lineage is invalid")
+        source = self.session.get(ObservationRow, upstream[0]["observation_id"])
+        if source is None or source.project_id != row.project_id:
+            raise RuntimeError("Verified spreadsheet quantity source is unavailable")
+        _source_observation, source_value = self._validated_spreadsheet_candidate(
+            row=source,
+            organization_id=organization_id,
+        )
+        try:
+            quantity = Decimal(str(observation.value))
+        except (InvalidOperation, TypeError, ValueError) as error:
+            raise RuntimeError("Verified spreadsheet quantity is not an exact decimal") from error
+        if (
+            source_value.source_item_id != source_item_id
+            or not quantity.is_finite()
+            or quantity != source_value.quantity
+            or observation.unit != source_value.unit
+        ):
+            raise RuntimeError("Verified spreadsheet quantity differs from its imported source")
+        return observation, source_value
+
+    def _validated_spreadsheet_candidate(
+        self,
+        *,
+        row: ObservationRow,
+        organization_id: str,
+    ) -> tuple[Observation, ImportedBoqRowValue]:
+        observation = Observation.model_validate(row.payload.get("observation"))
+        value = ImportedBoqRowValue.model_validate(observation.value)
+        if (
+            row.id != observation.observation_id
+            or row.document_revision_id != observation.location.document_revision_id
+            or row.field_name != observation.field_name
+            or row.field_name != f"boq_row_candidate:{value.source_item_id}"
+            or row.method != EvidenceMethod.TABLE_PARSER.value
+            or observation.method is not EvidenceMethod.TABLE_PARSER
+            or row.method_version != observation.method_version
+            or row.status != VerificationStatus.UNVERIFIED.value
+            or observation.status is not VerificationStatus.UNVERIFIED
+            or observation.unit != value.unit
+        ):
+            raise RuntimeError("Imported BoQ row identity does not reproduce")
+        qualification_id = row.payload.get("adapter_qualification_id")
+        if not isinstance(qualification_id, str) or not qualification_id:
+            raise RuntimeError("Imported BoQ row lacks adapter qualification lineage")
+        qualification = self.session.get(AdapterQualificationRow, qualification_id)
+        if (
+            qualification is None
+            or qualification.status != "APPROVED"
+            or qualification.adapter_version != row.method_version
+            or qualification.payload.get("organization_id") != organization_id
+            or qualification.payload.get("service_actor_id") != observation.actor_id
+            or EvidenceMethod.TABLE_PARSER.value
+            not in qualification.payload.get("supported_methods", [])
+            or (
+                qualification.valid_until is not None
+                and qualification.valid_until < utc_now().date()
+            )
+        ):
+            raise ValueError("Imported BoQ row no longer matches its qualified adapter")
+        extraction_runs = list(
+            self.session.scalars(
+                select(ExtractionRunRow).where(
+                    ExtractionRunRow.project_id == row.project_id,
+                    ExtractionRunRow.document_revision_id == row.document_revision_id,
+                    ExtractionRunRow.adapter_qualification_id == qualification.id,
+                    ExtractionRunRow.method == EvidenceMethod.TABLE_PARSER.value,
+                    ExtractionRunRow.status == "COMPLETED",
+                )
+            )
+        )
+        profile_row = self._bound_version(
+            row.project_id,
+            purpose="boq_xlsx_profile",
+            kind="boq_xlsx_profile",
+            expected_version_id=value.workbook_profile_version_id,
+        )
+        profile = BoqXlsxProfile.model_validate(profile_row.payload.get("profile"))
+        if content_hash(profile) != value.workbook_profile_content_hash:
+            raise RuntimeError("Imported BoQ row profile content does not reproduce")
+        supporting_runs = [
+            run
+            for run in extraction_runs
+            if isinstance(run.payload.get("observation_ids"), list)
+            and row.id in run.payload["observation_ids"]
+            and run.payload.get("workbook_object_sha256") == value.workbook_object_sha256
+            and run.payload.get("profile_version_id") == value.workbook_profile_version_id
+            and run.payload.get("profile_content_hash") == profile_row.content_hash
+        ]
+        if len(supporting_runs) != 1:
+            raise RuntimeError("Imported BoQ row lacks one exact completed extraction run")
+        run = supporting_runs[0]
+        observation_ids = run.payload["observation_ids"]
+        if len(observation_ids) != len(set(observation_ids)) or run.payload.get("row_count") != len(
+            observation_ids
+        ):
+            raise RuntimeError("Imported BoQ extraction run identity does not reproduce")
+        return observation, value
+
+    def _latest_mapping_proposal(
+        self,
+        *,
+        project_id: str,
+        document_revision_ids: tuple[str, ...],
+        source_observation_id: str,
+    ) -> tuple[ObservationRow | None, ApprovalTaskRow | None, str | None]:
+        proposal_rows = list(
+            self.session.scalars(
+                select(ObservationRow)
+                .where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.document_revision_id.in_(document_revision_ids),
+                    ObservationRow.field_name == "boq_line",
+                    ObservationRow.method == EvidenceMethod.MANUAL.value,
+                    ObservationRow.status == VerificationStatus.UNVERIFIED.value,
+                )
+                .order_by(ObservationRow.created_at.desc(), ObservationRow.id.desc())
+            )
+        )
+        matching: list[ObservationRow] = []
+        for proposal in proposal_rows:
+            upstream = proposal.payload.get("upstream_observations")
+            if not (
+                isinstance(upstream, list)
+                and len(upstream) == 1
+                and isinstance(upstream[0], dict)
+                and upstream[0].get("observation_id") == source_observation_id
+            ):
+                continue
+            observation = Observation.model_validate(proposal.payload.get("observation"))
+            value = observation.value
+            if (
+                proposal.id != observation.observation_id
+                or proposal.document_revision_id != observation.location.document_revision_id
+                or proposal.field_name != observation.field_name
+                or proposal.method != observation.method.value
+                or proposal.method_version != observation.method_version
+                or proposal.status != observation.status.value
+                or observation.method is not EvidenceMethod.MANUAL
+                or observation.status is not VerificationStatus.UNVERIFIED
+                or not isinstance(value, dict)
+                or value.get("schema_version") != BOQ_LINE_MAPPING_SCHEMA
+                or value.get("mapping_scope") != "IDENTITY_DESCRIPTION_UNIT_ONLY"
+                or value.get("quantity_promoted") is not False
+                or not isinstance(value.get("work_code"), str)
+                or not isinstance(value.get("description"), str)
+                or not isinstance(value.get("unit"), str)
+                or observation.unit != value.get("unit")
+            ):
+                raise RuntimeError("BoQ spreadsheet mapping proposal identity does not reproduce")
+            matching.append(proposal)
+        return self._reviewed_candidate_proposal(
+            project_id=project_id,
+            matching=matching,
+            proposal_kind="mapping",
+        )
+
+    def _latest_quantity_proposal(
+        self,
+        *,
+        project_id: str,
+        document_revision_ids: tuple[str, ...],
+        source_observation_id: str,
+        source_item_id: str,
+        expected_quantity: Decimal,
+        expected_unit: str,
+    ) -> tuple[ObservationRow | None, ApprovalTaskRow | None, str | None]:
+        field_name = f"boq_quantity:{source_item_id}"
+        proposal_rows = list(
+            self.session.scalars(
+                select(ObservationRow)
+                .where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.document_revision_id.in_(document_revision_ids),
+                    ObservationRow.field_name == field_name,
+                    ObservationRow.method == EvidenceMethod.MANUAL.value,
+                    ObservationRow.status == VerificationStatus.UNVERIFIED.value,
+                )
+                .order_by(ObservationRow.created_at.desc(), ObservationRow.id.desc())
+            )
+        )
+        matching: list[ObservationRow] = []
+        for proposal in proposal_rows:
+            upstream = proposal.payload.get("upstream_observations")
+            if not (
+                isinstance(upstream, list)
+                and len(upstream) == 1
+                and isinstance(upstream[0], dict)
+                and upstream[0].get("observation_id") == source_observation_id
+            ):
+                continue
+            observation = Observation.model_validate(proposal.payload.get("observation"))
+            try:
+                quantity = Decimal(str(observation.value))
+            except (InvalidOperation, TypeError, ValueError) as error:
+                raise RuntimeError(
+                    "BoQ spreadsheet quantity proposal is not an exact decimal"
+                ) from error
+            if (
+                proposal.id != observation.observation_id
+                or proposal.document_revision_id != observation.location.document_revision_id
+                or proposal.field_name != observation.field_name
+                or proposal.method != observation.method.value
+                or proposal.method_version != observation.method_version
+                or proposal.status != observation.status.value
+                or observation.method is not EvidenceMethod.MANUAL
+                or observation.status is not VerificationStatus.UNVERIFIED
+                or not quantity.is_finite()
+                or quantity != expected_quantity
+                or observation.unit != expected_unit
+            ):
+                raise RuntimeError("BoQ spreadsheet quantity proposal identity does not reproduce")
+            matching.append(proposal)
+        return self._reviewed_candidate_proposal(
+            project_id=project_id,
+            matching=matching,
+            proposal_kind="quantity",
+        )
+
+    def _reviewed_candidate_proposal(
+        self,
+        *,
+        project_id: str,
+        matching: list[ObservationRow],
+        proposal_kind: str,
+    ) -> tuple[ObservationRow | None, ApprovalTaskRow | None, str | None]:
+        if not matching:
+            return None, None, None
+        tasks = list(
+            self.session.scalars(
+                select(ApprovalTaskRow).where(
+                    ApprovalTaskRow.project_id == project_id,
+                    ApprovalTaskRow.task_type == "MANUAL_EVIDENCE_REVIEW",
+                    ApprovalTaskRow.entity_type == "evidence_observation",
+                    ApprovalTaskRow.entity_id.in_(tuple(row.id for row in matching)),
+                )
+            )
+        )
+        tasks_by_proposal = {task.entity_id: task for task in tasks}
+        if len(tasks_by_proposal) != len(matching):
+            raise RuntimeError(f"BoQ spreadsheet {proposal_kind} proposal lacks its review task")
+        active = [
+            row for row in matching if tasks_by_proposal[row.id].status in {"PENDING", "APPROVED"}
+        ]
+        if len(active) > 1:
+            raise RuntimeError(f"Imported BoQ row has multiple active {proposal_kind} proposals")
+        selected = active[0] if active else matching[0]
+        task = tasks_by_proposal[selected.id]
+        verified_observation_id: str | None = None
+        decisions = list(
+            self.session.scalars(
+                select(ApprovalRecordRow).where(ApprovalRecordRow.task_id == task.id)
+            )
+        )
+        if task.status == "PENDING" and decisions:
+            raise RuntimeError(f"Pending BoQ {proposal_kind} task already has a decision record")
+        if task.status != "PENDING":
+            if len(decisions) != 1 or decisions[0].decision != task.status:
+                raise RuntimeError(f"BoQ {proposal_kind} task decision does not reproduce")
+            candidate = decisions[0].payload.get("verified_observation_id")
+            if task.status == "APPROVED":
+                if not isinstance(candidate, str) or not candidate:
+                    raise RuntimeError(f"Approved BoQ {proposal_kind} lacks verified evidence")
+                verified = self.session.get(ObservationRow, candidate)
+                if (
+                    verified is None
+                    or verified.project_id != project_id
+                    or verified.status != VerificationStatus.VERIFIED.value
+                    or verified.field_name != selected.field_name
+                ):
+                    raise RuntimeError(f"Approved BoQ {proposal_kind} evidence is unavailable")
+                EvidenceService(
+                    session=self.session,
+                    settings=self.settings,
+                    object_store=self.object_store,
+                ).require_verified_manual_derivation(
+                    project_id=project_id,
+                    observation_id=candidate,
+                )
+                verified_observation_id = candidate
+            elif candidate is not None:
+                raise RuntimeError(
+                    f"Rejected BoQ {proposal_kind} unexpectedly produced verified evidence"
+                )
+        return selected, task, verified_observation_id
+
     def _bound_version(
         self,
         project_id: str,
@@ -1769,8 +2734,7 @@ class BoqService:
                 )
         return {row.id: row for row in rows}
 
-    @staticmethod
-    def _validated_observation(row: ObservationRow) -> Observation:
+    def _validated_observation(self, row: ObservationRow) -> Observation:
         observation = Observation.model_validate(row.payload.get("observation"))
         if (
             row.id != observation.observation_id
@@ -1782,6 +2746,15 @@ class BoqService:
             or observation.status is not VerificationStatus.VERIFIED
         ):
             raise RuntimeError("Verified BoQ evidence identity does not reproduce")
+        if row.payload.get("derivation_type") == "MANUAL_EVIDENCE_REVIEW":
+            return EvidenceService(
+                session=self.session,
+                settings=self.settings,
+                object_store=self.object_store,
+            ).require_verified_manual_derivation(
+                project_id=row.project_id,
+                observation_id=row.id,
+            )
         return observation
 
     def _observation_supports_line(
@@ -1794,6 +2767,7 @@ class BoqService:
             isinstance(raw, dict)
             and raw.get("work_code") == line.work_code
             and raw.get("unit") == line.unit
+            and ("description" not in raw or raw.get("description") == line.description)
         )
 
     def _validate_quantity_evidence(

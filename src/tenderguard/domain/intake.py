@@ -4,7 +4,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from tenderguard.domain.enums import Severity
 from tenderguard.domain.models import DomainModel
@@ -74,6 +74,8 @@ class SheetInspection(DomainModel):
     hidden_column_count: int
     formula_cell_count: int
     formula_without_cached_value_count: int
+    formula_error_cell_count: int = 0
+    non_formula_error_cell_count: int = 0
 
 
 class FileInspection(DomainModel):
@@ -88,6 +90,8 @@ class FileInspection(DomainModel):
     unsupported: bool = False
     page_count: int | None = None
     embedded_file_count: int = 0
+    external_hyperlink_count: int = 0
+    external_dependency_count: int = 0
     sheets: tuple[SheetInspection, ...] = ()
     findings: tuple[IntakeFinding, ...] = ()
 
@@ -98,3 +102,21 @@ class IntakeManifest(DomainModel):
     entries: tuple[FileInspection, ...]
     findings: tuple[IntakeFinding, ...]
     all_files_processed: bool
+
+    @model_validator(mode="after")
+    def validate_processing_outcome(self) -> IntakeManifest:
+        has_blocker = any(finding.severity is Severity.BLOCKER for finding in self.findings) or any(
+            finding.severity is Severity.BLOCKER
+            for entry in self.entries
+            for finding in entry.findings
+        )
+        expected = (
+            bool(self.entries)
+            and not has_blocker
+            and not any(
+                entry.corrupt or entry.protected or entry.unsupported for entry in self.entries
+            )
+        )
+        if self.all_files_processed is not expected:
+            raise ValueError("all_files_processed contradicts intake findings or file health")
+        return self

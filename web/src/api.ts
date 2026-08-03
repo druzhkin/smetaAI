@@ -1,4 +1,9 @@
 import type {
+  ActualComparisonResult,
+  ActualDecisionResult,
+  ActualRecordView,
+  ActualsContext,
+  AutomationReworkStatusPage,
   ApprovalDecision,
   ApprovalDecisionResult,
   ApprovalState,
@@ -6,8 +11,11 @@ import type {
   BoqCostComponent,
   BoqLine,
   BoqLineReview,
+  BoqPriceMatrix,
+  BoqSpreadsheetCandidateContext,
   CalculationContext,
   CalculationExecution,
+  CalibrationDecisionResult,
   ConflictResolutionResult,
   ConflictReview,
   ContractContext,
@@ -17,6 +25,11 @@ import type {
   ContractValidation,
   DocumentSetView,
   EvidenceObservation,
+  ExpertReworkIssue,
+  ExpertReworkResult,
+  ForecastCandidatePage,
+  FgisCsAcquisitionList,
+  InitialQuantityContext,
   ManualEvidenceContext,
   ManualEvidenceDecisionResult,
   ManualEvidenceReview,
@@ -54,6 +67,8 @@ import type {
   ScopeRun,
   ScenarioContext,
   ScenarioExecution,
+  VarianceDecisionResult,
+  VarianceReason,
   WorkItemPage,
   WorkItemDetail,
 } from "./types";
@@ -699,6 +714,201 @@ export function calculateRiskReserve(
   );
 }
 
+export function getActualsContext(
+  context: RequestContext,
+  projectId: string,
+  options: {
+    metric?: string;
+    cursor?: string;
+    limit?: number;
+  },
+  signal?: AbortSignal,
+): Promise<ActualsContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/actuals/context`,
+    {
+      metric: options.metric,
+      cursor: options.cursor,
+      limit: options.limit ?? 20,
+    },
+    signal,
+  );
+}
+
+export function listActualForecastCandidates(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    actualId: string;
+    cursor?: string;
+    limit?: number;
+  },
+  signal?: AbortSignal,
+): Promise<ForecastCandidatePage> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/actuals/${encodeURIComponent(input.actualId)}/forecast-candidates`,
+    {
+      cursor: input.cursor,
+      limit: input.limit ?? 10,
+    },
+    signal,
+  );
+}
+
+export function recordActual(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    metric: string;
+    sourceObservationId: string;
+    expectedObservationCreatedAt: string;
+    actualsPolicyVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ActualRecordView> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/actuals`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        draft: {
+          metric: input.metric,
+          source_observation_id: input.sourceObservationId,
+          expected_observation_created_at: input.expectedObservationCreatedAt,
+        },
+        actuals_policy_version_id: input.actualsPolicyVersionId,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function decideActual(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    actualId: string;
+    decision: "APPROVED" | "REJECTED";
+    expectedActualCreatedAt: string;
+    expectedTaskUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ActualDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/actuals/${encodeURIComponent(input.actualId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          decision: input.decision,
+          expected_actual_created_at: input.expectedActualCreatedAt,
+          expected_task_updated_at: input.expectedTaskUpdatedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function compareActualToForecast(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    actualId: string;
+    forecastId: string;
+    releasedByDecisionId: string;
+    varianceReason: VarianceReason;
+    varianceReasonDetail: string;
+    expectedActualCreatedAt: string;
+    actualsPolicyVersionId: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ActualComparisonResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/actuals/${encodeURIComponent(input.actualId)}/compare`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          forecast_id: input.forecastId,
+          released_by_decision_id: input.releasedByDecisionId,
+          reason: input.varianceReason,
+          reason_detail: input.varianceReasonDetail,
+          expected_actual_created_at: input.expectedActualCreatedAt,
+          actuals_policy_version_id: input.actualsPolicyVersionId,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function decideVariance(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    varianceId: string;
+    decision: "APPROVED" | "REJECTED";
+    expectedVarianceCreatedAt: string;
+    expectedTaskUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<VarianceDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/actuals/variances/${encodeURIComponent(input.varianceId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          decision: input.decision,
+          expected_variance_created_at: input.expectedVarianceCreatedAt,
+          expected_task_updated_at: input.expectedTaskUpdatedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function decideCalibrationExample(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    exampleId: string;
+    decision: "APPROVED" | "REJECTED";
+    expectedExampleCreatedAt: string;
+    expectedTaskUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<CalibrationDecisionResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/calibration/${encodeURIComponent(input.exampleId)}/decision`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          decision: input.decision,
+          expected_example_created_at: input.expectedExampleCreatedAt,
+          expected_task_updated_at: input.expectedTaskUpdatedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
 export function recordManualEvidence(
   context: RequestContext,
   input: {
@@ -997,6 +1207,122 @@ export function getBoqAuthoringContext(
   );
 }
 
+export function getBoqSpreadsheetCandidates(
+  context: RequestContext,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<BoqSpreadsheetCandidateContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/boq/spreadsheet-candidates`,
+    { limit: 100 },
+    signal,
+  );
+}
+
+export function proposeBoqSpreadsheetMapping(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    observationId: string;
+    workCode: string;
+    description: string;
+    unit: string;
+    expectedSourceObservationHash: string;
+    proposedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<EvidenceObservation> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/spreadsheet-candidates/${encodeURIComponent(input.observationId)}/mapping`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          work_code: input.workCode,
+          description: input.description,
+          unit: input.unit,
+          expected_source_observation_hash: input.expectedSourceObservationHash,
+          proposed_at: input.proposedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function proposeBoqSpreadsheetQuantity(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    observationId: string;
+    expectedSourceObservationHash: string;
+    proposedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<EvidenceObservation> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/spreadsheet-candidates/${encodeURIComponent(input.observationId)}/quantity-evidence`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          expected_source_observation_hash: input.expectedSourceObservationHash,
+          proposed_at: input.proposedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function getInitialQuantityContext(
+  context: RequestContext,
+  projectId: string,
+  lineId: string,
+  signal?: AbortSignal,
+): Promise<InitialQuantityContext> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/boq/lines/${encodeURIComponent(lineId)}/initial-quantity-context`,
+    undefined,
+    signal,
+  );
+}
+
+export function attachImportedQuantity(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    lineId: string;
+    sourceObservationId: string;
+    expectedSourceObservationHash: string;
+    expectedLineUpdatedAt: string;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<QuantityExecution> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/boq/lines/${encodeURIComponent(input.lineId)}/initial-quantity`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        command: {
+          source_observation_id: input.sourceObservationId,
+          expected_source_observation_hash: input.expectedSourceObservationHash,
+          expected_line_updated_at: input.expectedLineUpdatedAt,
+        },
+        reason: input.reason,
+      },
+    },
+  );
+}
+
 export function createBoqLine(
   context: RequestContext,
   input: {
@@ -1164,12 +1490,40 @@ export function getPriceItemContext(
   );
 }
 
+export function getFgisCsAcquisitions(
+  context: RequestContext,
+  projectId: string,
+  itemId: string,
+  signal?: AbortSignal,
+): Promise<FgisCsAcquisitionList> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(itemId)}/fgiscs-acquisitions`,
+    { limit: 20 },
+    signal,
+  );
+}
+
+export function getBoqPriceMatrix(
+  context: RequestContext,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<BoqPriceMatrix> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/boq/pricing-matrix`,
+    undefined,
+    signal,
+  );
+}
+
 export function getNomenclatureContext(
   context: RequestContext,
   projectId: string,
   options: {
     catalogQuery?: string;
     evidenceFieldName: string;
+    sourceItemId?: string;
   },
   signal?: AbortSignal,
 ): Promise<NomenclatureContext> {
@@ -1179,6 +1533,7 @@ export function getNomenclatureContext(
     {
       catalog_query: options.catalogQuery,
       evidence_field_name: options.evidenceFieldName,
+      source_item_id: options.sourceItemId,
       limit: 100,
     },
     signal,
@@ -1459,6 +1814,19 @@ export function getReleaseGates(
   );
 }
 
+export function getAutomationReworkStatus(
+  context: RequestContext,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<AutomationReworkStatusPage> {
+  return request(
+    context,
+    `/projects/${encodeURIComponent(projectId)}/final-review/rework-status`,
+    { limit: 20 },
+    signal,
+  );
+}
+
 export function attemptRelease(
   context: RequestContext,
   input: {
@@ -1478,6 +1846,34 @@ export function attemptRelease(
       body: {
         expected_row_version: input.expectedRowVersion,
         gate_hash: input.gateHash,
+        reason: input.reason,
+      },
+    },
+  );
+}
+
+export function requestFinalExpertRework(
+  context: RequestContext,
+  input: {
+    projectId: string;
+    gateTarget: "bid" | "internal";
+    expectedProjectRowVersion: number;
+    gateHash: string;
+    issues: ExpertReworkIssue[];
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<ExpertReworkResult> {
+  return mutate(
+    context,
+    `/projects/${encodeURIComponent(input.projectId)}/final-review/rework`,
+    {
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        expected_project_row_version: input.expectedProjectRowVersion,
+        gate_target: input.gateTarget,
+        gate_hash: input.gateHash,
+        issues: input.issues,
         reason: input.reason,
       },
     },

@@ -37,8 +37,10 @@ Nothing crosses a boundary merely because a model reports high confidence.
   still count.
 - `intake`: separately stored streamed quarantine, qualification-bound malware
   results, leased outbox delivery, bounded retry/dead-letter/replay, worker-only
-  bounded archive expansion, manifest, file health, Excel visibility/formula
-  checks, document revision, and referenced-document discovery.
+  bounded archive expansion, manifest, file health, strict OOXML identity and
+  XML-declaration checks, external-relationship classification, Excel
+  visibility/formula/error checks, document revision, and referenced-document
+  discovery.
 - `evidence`: source locations, extraction runs, independent observations,
   conflicts, mandatory conflict-review tasks, manual corrections, and
   verification status.
@@ -232,3 +234,12 @@ Production deployment requires:
   inputs and have no software defaults.
 - `BLOCKED` is a first-class state and cannot be bypassed through API or direct
   workflow transition.
+- Final expert review is a control-plane boundary after a fixed snapshot. An
+  accepted result uses the existing release decision. Selected current rows or
+  findings create an immutable, snapshot/gate-hash-bound rework request,
+  deterministically move the project to the earliest processing stage, and
+  publish a durable outbox handoff. A qualified dispatcher now provides
+  idempotent leased routing into exact extraction, BoQ, pricing or calculation
+  commands and retains an immutable dispatch hash. The consumers that execute
+  those four commands and prove completion are still explicit open worker
+  boundaries.

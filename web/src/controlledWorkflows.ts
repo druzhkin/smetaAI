@@ -211,6 +211,14 @@ export function validateNomenclatureAssessment(
     return "Укажите точный semantic key компонента текущего BoQ.";
   }
   if (
+    context.selected_source_item_id !== draft.sourceItemId ||
+    !context.source_items.some(
+      (item) => item.source_item_id === draft.sourceItemId,
+    )
+  ) {
+    return "Выберите позицию из текущего проверенного BoQ и дождитесь связанного серверного контекста.";
+  }
+  if (
     !context.catalog_items.some(
       (item) => item.canonical_item_id === draft.canonicalItemId,
     )

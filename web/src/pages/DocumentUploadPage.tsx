@@ -11,6 +11,7 @@ import {
 import { useAuth } from "../auth";
 import { ErrorBlock, LoadingBlock } from "../components/Feedback";
 import { Icon } from "../components/Icon";
+import { IntakeManifestResult } from "../components/IntakeManifestResult";
 import { StatusPill } from "../components/StatusPill";
 import { formatBytes, formatDateTime } from "../format";
 import {
@@ -259,6 +260,9 @@ export function DocumentUploadPage({
                 означает успешную проверку.
               </span>
             </div>
+          )}
+          {(receipt.status === "PROCESSED" || receipt.manifest !== null) && (
+            <IntakeManifestResult manifest={receipt.manifest} />
           )}
           {statusQuery.isError && (
             <ErrorBlock

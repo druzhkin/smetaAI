@@ -42,6 +42,13 @@ const quote = {
     item_id: "pipe-1",
     supplier_id: "supplier-1",
     evidence_class: "COMMERCIAL_QUOTE",
+    source_reference: {
+      source_type: "SUPPLIER_QUOTE",
+      display_name: "Supplier 1",
+      source_item_name: "Steel pipe DN100",
+      source_record_id: "quote-1",
+      source_uri: null,
+    },
     source_observation_id: "observation-1",
     technical_attributes: { diameter: "DN100" },
     amount: "100",

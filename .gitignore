@@ -3,6 +3,13 @@
 node_modules/
 .playwright-cli/
 output/
+outputs/
+.firecrawl/
+.tmp-docx-qa/
+profiles/diagnostic/
+scripts/build_estimate_report_docx.py
+scripts/build_project_progress_report_docx.py
+scripts/render_docx_with_word.py
 __pycache__/
 .pytest_cache/
 .mypy_cache/

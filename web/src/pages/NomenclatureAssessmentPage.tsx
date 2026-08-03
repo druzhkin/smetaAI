@@ -56,6 +56,7 @@ export function NomenclatureAssessmentPage({
       "nomenclature-context",
       projectId,
       deferredCatalogQuery,
+      draft.sourceItemId,
       "technical_attributes",
     ],
     queryFn: ({ signal }) =>
@@ -67,6 +68,9 @@ export function NomenclatureAssessmentPage({
             ? {}
             : { catalogQuery: deferredCatalogQuery }),
           evidenceFieldName: "technical_attributes",
+          ...(draft.sourceItemId === ""
+            ? {}
+            : { sourceItemId: draft.sourceItemId }),
         },
         signal,
       ),
@@ -135,6 +139,9 @@ export function NomenclatureAssessmentPage({
   }
   const project = projectQuery.data;
   const nomenclature = nomenclatureQuery.data;
+  const selectedSourceItem = nomenclature.source_items.find(
+    (item) => item.source_item_id === draft.sourceItemId,
+  );
   const selectedCatalogItem = nomenclature.catalog_items.find(
     (item) => item.canonical_item_id === draft.canonicalItemId,
   );
@@ -209,65 +216,101 @@ export function NomenclatureAssessmentPage({
       <form className="entry-form controlled-form" onSubmit={submit}>
         <section className="entry-form__intro">
           <p className="eyebrow">01 · позиция BoQ</p>
-          <h2>Укажите semantic key компонента стоимости</h2>
+          <h2>Выберите позицию из текущего проверенного ВОР</h2>
           <p>
-            Сервер примет ID только если он встречается ровно в одном текущем
-            проверенном компоненте BoQ.
+            Список сформирован сервером. Ручной ввод идентификатора исключён,
+            чтобы характеристики одной позиции нельзя было применить к другой.
           </p>
         </section>
-        <label className="field">
-          <span>Semantic key исходной позиции</span>
-          <input
-            maxLength={128}
-            value={draft.sourceItemId}
-            onChange={(event) => change({ sourceItemId: event.target.value })}
-          />
-        </label>
+        {nomenclature.source_items.length === 0 ? (
+          <p className="inline-error" role="alert">
+            Нет текущих проверенных компонентов ВОР. Сопоставление
+            заблокировано.
+          </p>
+        ) : (
+          <div className="evidence-choice-grid">
+            {nomenclature.source_items.map((item) => (
+              <label className="evidence-choice" key={item.source_item_id}>
+                <input
+                  type="radio"
+                  name="nomenclature-source-item"
+                  checked={draft.sourceItemId === item.source_item_id}
+                  onChange={() =>
+                    change({
+                      sourceItemId: item.source_item_id,
+                      sourceAttributesObservationId: "",
+                      canonicalItemId: "",
+                    })
+                  }
+                />
+                <span className="evidence-choice__body">
+                  <strong>{item.description}</strong>
+                  <span>
+                    {item.line_key} · {item.work_code} · {item.unit}
+                  </span>
+                  <small>Semantic key: {item.source_item_id}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
 
         <section className="entry-form__section">
           <div className="entry-form__intro">
             <p className="eyebrow">02 · техническое доказательство</p>
             <h2>Выберите проверенный набор атрибутов</h2>
           </div>
-          <div className="evidence-choice-grid">
-            {nomenclature.evidence_candidates.map((candidate) => (
-              <label
-                className="evidence-choice"
-                key={candidate.observation.observation_id}
-              >
-                <input
-                  type="radio"
-                  name="nomenclature-evidence"
-                  checked={
-                    draft.sourceAttributesObservationId ===
-                    candidate.observation.observation_id
-                  }
-                  onChange={() =>
-                    change({
-                      sourceAttributesObservationId:
-                        candidate.observation.observation_id,
-                    })
-                  }
-                />
-                <span className="evidence-choice__body">
-                  <strong>{candidate.observation.observation_id}</strong>
-                  <span className="attribute-chips">
-                    {Object.entries(candidate.attributes).map(
-                      ([key, value]) => (
-                        <span key={key}>
-                          {key}: {value}
-                        </span>
-                      ),
-                    )}
+          {draft.sourceItemId === "" ? (
+            <p className="inline-warning">
+              Сначала выберите позицию ВОР. Сервер покажет только
+              доказательства, привязанные именно к ней.
+            </p>
+          ) : nomenclature.evidence_candidates.length === 0 ? (
+            <p className="inline-error" role="alert">
+              Для выбранной позиции нет проверенного связанного набора
+              технических характеристик. Сопоставление заблокировано.
+            </p>
+          ) : (
+            <div className="evidence-choice-grid">
+              {nomenclature.evidence_candidates.map((candidate) => (
+                <label
+                  className="evidence-choice"
+                  key={candidate.observation.observation_id}
+                >
+                  <input
+                    type="radio"
+                    name="nomenclature-evidence"
+                    checked={
+                      draft.sourceAttributesObservationId ===
+                      candidate.observation.observation_id
+                    }
+                    onChange={() =>
+                      change({
+                        sourceAttributesObservationId:
+                          candidate.observation.observation_id,
+                      })
+                    }
+                  />
+                  <span className="evidence-choice__body">
+                    <strong>{candidate.observation.observation_id}</strong>
+                    <span className="attribute-chips">
+                      {Object.entries(candidate.attributes).map(
+                        ([key, value]) => (
+                          <span key={key}>
+                            {key}: {value}
+                          </span>
+                        ),
+                      )}
+                    </span>
+                    <small>
+                      {candidate.observation.method} ·{" "}
+                      {candidate.observation.location.locator}
+                    </small>
                   </span>
-                  <small>
-                    {candidate.observation.method} ·{" "}
-                    {candidate.observation.location.locator}
-                  </small>
-                </span>
-              </label>
-            ))}
-          </div>
+                </label>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="entry-form__section">
@@ -310,6 +353,27 @@ export function NomenclatureAssessmentPage({
                       </span>
                     ))}
                   </span>
+                  {draft.sourceItemId !== "" && (
+                    <span className="attribute-chips">
+                      {item.retrieval_exact_identifier && (
+                        <span>точный ID упомянут</span>
+                      )}
+                      {item.retrieval_matched_critical_attributes.map(
+                        (attribute) => (
+                          <span key={`critical-${attribute}`}>
+                            найдено значение: {attribute}
+                          </span>
+                        ),
+                      )}
+                      {item.retrieval_matched_terms.length > 0 ? (
+                        <span>
+                          термины: {item.retrieval_matched_terms.join(", ")}
+                        </span>
+                      ) : (
+                        <span>лексических совпадений нет</span>
+                      )}
+                    </span>
+                  )}
                   {item.critical_price && (
                     <em>Критичная цена по методологии</em>
                   )}
@@ -317,6 +381,14 @@ export function NomenclatureAssessmentPage({
               </label>
             ))}
           </div>
+          {selectedSourceItem !== undefined && (
+            <p className="inline-warning">
+              Кандидаты ранжированы только по буквальным терминам наименования «
+              {selectedSourceItem.description}». Это не подтверждает техническую
+              эквивалентность; решение строится только по проверенным
+              критическим характеристикам. {nomenclature.retrieval_notice}
+            </p>
+          )}
           {nomenclature.catalog_items_truncated && (
             <p className="inline-warning">
               Результат ограничен 100 позициями. Уточните поиск.

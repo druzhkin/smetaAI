@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -14,6 +15,7 @@ from tenderguard.domain.enums import (
     FindingCode,
     MatchClass,
     PriceEvidenceClass,
+    PriceSourceType,
     PriceStatus,
     Severity,
     VatBasis,
@@ -220,11 +222,37 @@ class CommercialBasis(DomainModel):
         return self
 
 
+class PriceSourceReference(DomainModel):
+    source_type: PriceSourceType
+    display_name: str = Field(min_length=1, max_length=500)
+    source_item_name: str = Field(min_length=1, max_length=1000)
+    source_record_id: str = Field(min_length=1, max_length=500)
+    source_uri: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def external_sources_have_safe_uri(self) -> PriceSourceReference:
+        if self.source_type is not PriceSourceType.SUPPLIER_QUOTE and self.source_uri is None:
+            raise ValueError("An external price source requires its exact HTTPS URI")
+        if self.source_uri is not None:
+            parsed = urlsplit(self.source_uri)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or "\\" in self.source_uri
+                or any(character.isspace() for character in self.source_uri)
+            ):
+                raise ValueError("Price source URI must be an HTTPS address without credentials")
+        return self
+
+
 class PriceQuote(DomainModel):
     quote_id: str
     item_id: str
     supplier_id: str | None = None
     evidence_class: PriceEvidenceClass
+    source_reference: PriceSourceReference
     source_observation_id: str
     technical_attributes: dict[str, str]
     amount: Decimal = Field(gt=0, max_digits=38, decimal_places=12)

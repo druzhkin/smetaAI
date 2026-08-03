@@ -126,6 +126,9 @@ export const taskLabels: Record<string, string> = {
   PASSPORT_FACT_REVIEW: "Проверка факта паспорта",
   CONTRACT_TERM_REVIEW: "Проверка договорного условия",
   RISK_ITEM_REVIEW: "Проверка параметров риска",
+  ACTUAL_FACT_REVIEW: "Проверка фактического значения",
+  VARIANCE_CLASSIFICATION_REVIEW: "Проверка причины отклонения",
+  CALIBRATION_EXAMPLE_REVIEW: "Проверка калибровочного примера",
 };
 
 export const findingLabels: Record<string, string> = {

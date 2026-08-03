@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -31,8 +31,9 @@ from tenderguard.domain.enums import (
     ApprovalState,
     CostCategory,
     EvidenceMethod,
+    VerificationStatus,
 )
-from tenderguard.domain.models import EvidenceLocation
+from tenderguard.domain.models import EvidenceLocation, Observation
 from tenderguard.infrastructure.auth import Actor
 from tenderguard.infrastructure.database import (
     create_database_engine,
@@ -297,6 +298,42 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
             request_id="request-approve-calculation-version",
             reason="Independently approve deterministic calculation basis",
         )
+        actuals_policy = governance.create_version(
+            actor=governance_creator,
+            kind="actuals_policy",
+            version_label="qualification-actuals-v1",
+            payload={
+                "metric_definitions": [
+                    {
+                        "metric": "PROJECT_TOTAL_COST",
+                        "entity_type": "PROJECT",
+                        "evidence_field_name": "actual_project_total",
+                        "forecast_basis": "PROJECT_COST_TOTAL",
+                        "allowed_units": ["RUB"],
+                        "allowed_source_classes": ["FINANCIAL_LEDGER"],
+                    }
+                ],
+                "required_metric_keys": ["PROJECT_TOTAL_COST"],
+                "independently_verified_metric_keys": [],
+                "record_roles": ["PROCUREMENT"],
+                "actual_review_role": "AUDITOR",
+                "variance_classifier_roles": ["AUDITOR"],
+                "variance_review_role": "REVIEWER",
+                "calibration_approval_role": "METHODOLOGY_OWNER",
+                "project_outcome_field_name": "project_execution_status",
+                "eligible_project_outcomes": ["COMPLETED"],
+                "relative_variance_scale": 6,
+                "relative_variance_rounding_mode": "ROUND_HALF_EVEN",
+            },
+            request_id="request-create-actuals-policy",
+            reason="Create governed historical actual policy",
+        )
+        actuals_policy = governance.approve_version(
+            actor=final_approver,
+            version_id=actuals_policy.version_id,
+            request_id="request-approve-actuals-policy",
+            reason="Independently approve historical actual policy",
+        )
         now = utc_now()
         for project_id in project_ids:
             snapshot_id, document_id, revision_id = _add_project_and_snapshot(
@@ -320,10 +357,67 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
                 locator="page:1",
                 page=1,
             )
+            governance.bind_to_project(
+                actor=final_approver,
+                project_id=project_id,
+                version_id=actuals_policy.version_id,
+                purpose="actuals_policy",
+                request_id=f"request-bind-actuals-policy-{project_id}",
+                reason="Bind the governed actuals policy",
+            )
         session.flush()
+        outcome = Observation(
+            observation_id="observation-historical-outcome",
+            field_name="project_execution_status",
+            value="COMPLETED",
+            unit=None,
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="verified-financial-ledger-v1",
+            source_priority=1,
+            location=locations["project-historical"],
+            observed_at=now,
+            actor_id="verified-financial-ledger",
+            status=VerificationStatus.VERIFIED,
+        )
+        actual_value = {
+            "actual_key": "verified-project-total",
+            "entity_type": "PROJECT",
+            "entity_id": "project-historical",
+            "metric": "PROJECT_TOTAL_COST",
+            "value": "105",
+            "unit": "RUB",
+            "source_class": "FINANCIAL_LEDGER",
+            "occurred_on": "2026-07-01",
+        }
+        actual_observation = Observation(
+            observation_id="observation-historical-total",
+            field_name="actual_project_total",
+            value=actual_value,
+            unit=None,
+            method=EvidenceMethod.RULE_ENGINE,
+            method_version="verified-financial-ledger-v1",
+            source_priority=1,
+            location=locations["project-historical"],
+            observed_at=now,
+            actor_id="verified-financial-ledger",
+            status=VerificationStatus.VERIFIED,
+        )
         session.add(
             ObservationRow(
-                id="observation-historical-total",
+                id=outcome.observation_id,
+                project_id="project-historical",
+                document_revision_id=locations["project-historical"].document_revision_id,
+                field_name=outcome.field_name,
+                method=outcome.method.value,
+                method_version=outcome.method_version,
+                status=outcome.status.value,
+                payload={"observation": outcome.model_dump(mode="json")},
+                created_at=now,
+            )
+        )
+        session.add(
+            ObservationRow(
+                id=actual_observation.observation_id,
                 project_id="project-historical",
                 document_revision_id=locations["project-historical"].document_revision_id,
                 field_name="actual_project_total",
@@ -332,11 +426,7 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
                 status="VERIFIED",
                 payload={
                     "comparison_basis_hash": COMPARISON_BASIS_HASH,
-                    "observation": {
-                        "value": "105",
-                        "unit": "RUB",
-                        "location": locations["project-historical"].model_dump(mode="json"),
-                    },
+                    "observation": actual_observation.model_dump(mode="json"),
                 },
                 created_at=now,
             )
@@ -348,15 +438,11 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
             actor=actual_recorder,
             project_id="project-historical",
             draft=ActualRecordDraft(
-                actual_key="verified-project-total",
-                entity_type="PROJECT",
-                entity_id="project-historical",
                 metric="PROJECT_TOTAL_COST",
-                value="105",
-                unit="RUB",
                 source_observation_id="observation-historical-total",
-                occurred_on=date(2026, 7, 1),
+                expected_observation_created_at=now,
             ),
+            actuals_policy_version_id=actuals_policy.version_id,
             request_id="request-record-project-actual",
             reason="Record reconciled final project cost",
         )
@@ -365,6 +451,8 @@ def test_business_qualification_requires_locked_blind_references_and_four_eyes(
             actor=actual_reviewer,
             project_id="project-historical",
             actual_id=actual_id,
+            expected_actual_created_at=recorded.created_at,
+            expected_task_updated_at=recorded.task_updated_at,
             request_id="request-verify-project-actual",
             reason="Independently verify final project cost against ledger evidence",
         )

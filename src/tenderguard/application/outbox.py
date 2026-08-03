@@ -56,6 +56,15 @@ class OutboxDeliveryPolicy:
             retry_max_seconds=settings.integration_job_retry_max_seconds,
         )
 
+    @classmethod
+    def automation(cls, settings: Settings) -> OutboxDeliveryPolicy:
+        return cls(
+            lease_seconds=settings.automation_job_lease_seconds,
+            max_attempts=settings.automation_job_max_attempts,
+            retry_base_seconds=settings.automation_job_retry_base_seconds,
+            retry_max_seconds=settings.automation_job_retry_max_seconds,
+        )
+
 
 class OutboxDeliveryService:
     """Short-transaction claim and settlement operations for durable outbox delivery."""

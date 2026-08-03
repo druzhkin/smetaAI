@@ -9,6 +9,8 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import { ErrorBlock, LoadingBlock } from "../components/Feedback";
+import { AutomationReworkStatusPanel } from "../components/AutomationReworkStatusPanel";
+import { FinalExpertReviewPanel } from "../components/FinalExpertReviewPanel";
 import { Icon } from "../components/Icon";
 import { StatusPill } from "../components/StatusPill";
 import { findingLabels } from "../labels";
@@ -327,6 +329,20 @@ export function ReleasePage({
           </div>
         </section>
       )}
+
+      <FinalExpertReviewPanel
+        key={draft.target}
+        context={requestContext}
+        project={gates.project}
+        target={draft.target}
+        decision={decision}
+        gateHash={gateHash}
+      />
+
+      <AutomationReworkStatusPanel
+        context={requestContext}
+        projectId={projectId}
+      />
 
       {mutation.isSuccess && (
         <section className="success-panel" role="status">

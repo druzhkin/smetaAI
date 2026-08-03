@@ -2092,6 +2092,11 @@ class ProjectService:
                 self.settings.document_processor_qualification_id,
                 self.settings.document_processor_adapter,
             )
+        elif access.capability == "FINAL_REVIEW_REWORK":
+            configured = (
+                self.settings.automation_rework_qualification_id,
+                self.settings.automation_rework_adapter,
+            )
         if configured is not None and (
             qualification.id != configured[0] or qualification.adapter_name != configured[1]
         ):

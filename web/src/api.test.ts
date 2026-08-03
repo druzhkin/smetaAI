@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  attachImportedQuantity,
   applyQuantityManualChange,
   assessNomenclature,
   attemptRelease,
@@ -17,7 +18,12 @@ import {
   finalizeNomenclatureAnalogue,
   getBoqAuthoringContext,
   getBoqLineReview,
+  getBoqPriceMatrix,
+  getBoqSpreadsheetCandidates,
+  getAutomationReworkStatus,
+  getInitialQuantityContext,
   getCalculationContext,
+  getFgisCsAcquisitions,
   getNomenclatureContext,
   getNomenclatureReview,
   getPriceQuoteCandidate,
@@ -26,10 +32,13 @@ import {
   getScenarioContext,
   normalizePriceQuote,
   proposeNomenclatureAnalogue,
+  proposeBoqSpreadsheetMapping,
+  proposeBoqSpreadsheetQuantity,
   proposeQuantityChange,
   reconcileEvidence,
   recordManualEvidence,
   recordPriceQuoteFromObservation,
+  requestFinalExpertRework,
   resolveConflict,
   runScopeCompleteness,
   submitRiskItem,
@@ -48,6 +57,218 @@ afterEach(() => {
 });
 
 describe("controlled mutations", () => {
+  it("loads imported BoQ rows and proposes only identity mapping fields", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project_id: "project/1",
+            project_state: "BOQ_IN_PROGRESS",
+            document_set_revision_id: "document-set-1",
+            candidates: [],
+            candidates_truncated: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            observation_id: "mapping-1",
+            status: "UNVERIFIED",
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getBoqSpreadsheetCandidates(context, "project/1");
+    await proposeBoqSpreadsheetMapping(context, {
+      projectId: "project/1",
+      observationId: "source/1",
+      workCode: "CABLE-INSTALLATION",
+      description: "Cable installation",
+      unit: "m",
+      expectedSourceObservationHash: "a".repeat(64),
+      proposedAt: "2026-07-31T10:00:00.000Z",
+      reason: "Map identity without promoting quantity",
+      idempotencyKey: "mapping-operation-1",
+    });
+
+    const [getUrl] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(getUrl.pathname).toBe(
+      "/v1/projects/project%2F1/boq/spreadsheet-candidates",
+    );
+    const [postUrl, postInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(postUrl.pathname).toBe(
+      "/v1/projects/project%2F1/boq/spreadsheet-candidates/source%2F1/mapping",
+    );
+    expect(postInit.headers).toMatchObject({
+      "Idempotency-Key": "mapping-operation-1",
+    });
+    expect(JSON.parse(String(postInit.body))).toEqual({
+      command: {
+        work_code: "CABLE-INSTALLATION",
+        description: "Cable installation",
+        unit: "m",
+        expected_source_observation_hash: "a".repeat(64),
+        proposed_at: "2026-07-31T10:00:00.000Z",
+      },
+      reason: "Map identity without promoting quantity",
+    });
+  });
+
+  it("reviews and attaches an imported quantity without accepting browser values", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ observation_id: "quantity-review-1" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            project_id: "project/1",
+            evidence_candidates: [],
+            recording_allowed: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ quantity: { quantity_id: "quantity-1" } }),
+          {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await proposeBoqSpreadsheetQuantity(context, {
+      projectId: "project/1",
+      observationId: "source/1",
+      expectedSourceObservationHash: "b".repeat(64),
+      proposedAt: "2026-07-31T10:00:00.000Z",
+      reason: "Review exact imported quantity separately",
+      idempotencyKey: "quantity-review-operation-1",
+    });
+    await getInitialQuantityContext(context, "project/1", "line/1");
+    await attachImportedQuantity(context, {
+      projectId: "project/1",
+      lineId: "line/1",
+      sourceObservationId: "verified/quantity/1",
+      expectedSourceObservationHash: "c".repeat(64),
+      expectedLineUpdatedAt: "2026-07-31T11:00:00.000Z",
+      reason: "Attach the independently reviewed server value",
+      idempotencyKey: "quantity-attach-operation-1",
+    });
+
+    const [proposalUrl, proposalInit] = fetchMock.mock.calls[0] as [
+      URL,
+      RequestInit,
+    ];
+    expect(proposalUrl.pathname).toBe(
+      "/v1/projects/project%2F1/boq/spreadsheet-candidates/source%2F1/quantity-evidence",
+    );
+    expect(JSON.parse(String(proposalInit.body))).toEqual({
+      command: {
+        expected_source_observation_hash: "b".repeat(64),
+        proposed_at: "2026-07-31T10:00:00.000Z",
+      },
+      reason: "Review exact imported quantity separately",
+    });
+    const [contextUrl] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(contextUrl.pathname).toBe(
+      "/v1/projects/project%2F1/boq/lines/line%2F1/initial-quantity-context",
+    );
+    const [attachUrl, attachInit] = fetchMock.mock.calls[2] as [
+      URL,
+      RequestInit,
+    ];
+    expect(attachUrl.pathname).toBe(
+      "/v1/projects/project%2F1/boq/lines/line%2F1/initial-quantity",
+    );
+    expect(attachInit.headers).toMatchObject({
+      "Idempotency-Key": "quantity-attach-operation-1",
+    });
+    const attachBody = JSON.parse(String(attachInit.body)) as {
+      command: Record<string, unknown>;
+      reason: string;
+    };
+    expect(attachBody).toEqual({
+      command: {
+        source_observation_id: "verified/quantity/1",
+        expected_source_observation_hash: "c".repeat(64),
+        expected_line_updated_at: "2026-07-31T11:00:00.000Z",
+      },
+      reason: "Attach the independently reviewed server value",
+    });
+    expect(attachBody.command).not.toHaveProperty("value");
+    expect(attachBody.command).not.toHaveProperty("unit");
+    expect(attachBody.command).not.toHaveProperty("waste_factor");
+    expect(attachBody.command).not.toHaveProperty("rounding_scale");
+  });
+
+  it("loads the project-scoped BoQ pricing matrix without client-side values", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          project_id: "project/1",
+          generated_at: "2026-07-30T10:00:00Z",
+          rows: [],
+          blocked_row_count: 0,
+          release_warning: "Release gate remains authoritative.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getBoqPriceMatrix(context, "project/1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/v1/projects/project%2F1/boq/pricing-matrix");
+    expect(init.method).toBe("GET");
+  });
+
+  it("loads governed FGIS CS acquisitions as read-only evidence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          project_id: "project/1",
+          item_id: "item/1",
+          boq_item_name: "Sand",
+          boq_unit: "m3",
+          acquisitions: [],
+          release_warning: "Raw source evidence only.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getFgisCsAcquisitions(context, "project/1", "item/1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe(
+      "/v1/projects/project%2F1/pricing/items/item%2F1/fgiscs-acquisitions",
+    );
+    expect(url.searchParams.get("limit")).toBe("20");
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+  });
+
   it("sends the optimistic version and stable idempotency key", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -571,7 +792,8 @@ describe("controlled mutations", () => {
 
     await getNomenclatureContext(context, "project/1", {
       catalogQuery: "pump/500",
-      evidenceFieldName: "technical/attributes",
+      evidenceFieldName: "technical_attributes",
+      sourceItemId: "material/pipe",
     });
     await assessNomenclature(context, {
       projectId: "project/1",
@@ -601,6 +823,9 @@ describe("controlled mutations", () => {
       "/v1/projects/project%2F1/nomenclature/context",
     );
     expect(calls[0]?.[0].searchParams.get("catalog_query")).toBe("pump/500");
+    expect(calls[0]?.[0].searchParams.get("source_item_id")).toBe(
+      "material/pipe",
+    );
     expect(JSON.parse(String(calls[1]?.[1].body))).toEqual({
       draft: {
         source_item_id: "material/pipe",
@@ -1013,5 +1238,81 @@ describe("controlled mutations", () => {
       gate_hash: gateHash,
       reason: "Independent complete hard-stop review",
     });
+  });
+
+  it("returns only exact final-review references and never a replacement price", async () => {
+    const gateHash = "e".repeat(64);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          rework_request_id: "expert-rework-1",
+          target_stage: "PRICING_IN_PROGRESS",
+        }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestFinalExpertRework(context, {
+      projectId: "project/1",
+      gateTarget: "bid",
+      expectedProjectRowVersion: 23,
+      gateHash,
+      issues: [
+        {
+          kind: "BOQ_PRICE_ROW",
+          reference_id: "line/1:1",
+          code: "EXPERT_RECHECK_REQUESTED",
+          comment: "Повторно проверить сопоставление и условия доставки.",
+        },
+      ],
+      reason: "Повторно проверить сопоставление и условия доставки.",
+      idempotencyKey: "final-rework-operation",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/v1/projects/project%2F1/final-review/rework");
+    expect(init.headers).toMatchObject({
+      "Idempotency-Key": "final-rework-operation",
+    });
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toEqual({
+      expected_project_row_version: 23,
+      gate_target: "bid",
+      gate_hash: gateHash,
+      issues: [
+        {
+          kind: "BOQ_PRICE_ROW",
+          reference_id: "line/1:1",
+          code: "EXPERT_RECHECK_REQUESTED",
+          comment: "Повторно проверить сопоставление и условия доставки.",
+        },
+      ],
+      reason: "Повторно проверить сопоставление и условия доставки.",
+    });
+    expect(body).not.toHaveProperty("amount");
+    expect(body).not.toHaveProperty("price");
+  });
+
+  it("loads automatic rework status as a bounded read request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ project_id: "project/1", items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getAutomationReworkStatus(context, "project/1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe(
+      "/v1/projects/project%2F1/final-review/rework-status",
+    );
+    expect(url.searchParams.get("limit")).toBe("20");
+    expect(init.method).toBe("GET");
   });
 });

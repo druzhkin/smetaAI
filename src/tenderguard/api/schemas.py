@@ -7,9 +7,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tenderguard.application.actuals import (
     ActualComparisonResult,
+    ActualDecisionCommand,
+    ActualDecisionResult,
     ActualRecordDraft,
     ActualRecordView,
+    ActualsContextView,
+    CalibrationDecisionCommand,
+    CalibrationDecisionResult,
     CompareActualCommand,
+    ForecastCandidatePage,
+    VarianceDecisionCommand,
+    VarianceDecisionResult,
 )
 from tenderguard.application.approvals import (
     ApprovalDecisionCommand,
@@ -21,11 +29,17 @@ from tenderguard.application.audit_integrity import (
     AuditAnchorStatus,
     AuditCheckpointView,
 )
+from tenderguard.application.automation_rework import AutomationReworkStatusPage
 from tenderguard.application.boq import (
+    AttachImportedQuantityCommand,
     BoqAuthoringContextView,
     BoqLineDraft,
     BoqLineReviewView,
     BoqLineView,
+    BoqSpreadsheetCandidateContextView,
+    BoqSpreadsheetMappingCommand,
+    BoqSpreadsheetQuantityCommand,
+    InitialQuantityContextView,
     QuantityChangeContextView,
     QuantityExecutionResult,
     QuantityManualChangeView,
@@ -71,6 +85,11 @@ from tenderguard.application.exports import (
     ExportArtifactView,
     ExportVerificationResult,
 )
+from tenderguard.application.fgiscs_acquisition import FgisCsAcquisitionListView
+from tenderguard.application.final_review import (
+    ExpertReworkCommand,
+    ExpertReworkResult,
+)
 from tenderguard.application.integrations import (
     IntegrationInboxClaim,
     IntegrationInboxMessageView,
@@ -89,6 +108,7 @@ from tenderguard.application.passport import (
 )
 from tenderguard.application.pricing import (
     AnalogueProposalCommand,
+    BoqPriceMatrixView,
     NomenclatureAssessmentDraft,
     NomenclatureContextView,
     NomenclatureMatchView,
@@ -253,6 +273,18 @@ class ReleaseAttemptResponse(ApiModel):
     decision: GateDecision
 
 
+class RequestExpertReworkRequest(ExpertReworkCommand):
+    pass
+
+
+class ExpertReworkResponse(ExpertReworkResult):
+    pass
+
+
+class AutomationReworkStatusResponse(AutomationReworkStatusPage):
+    pass
+
+
 class CreateControlledVersionRequest(ApiModel):
     kind: str = Field(min_length=1, max_length=100)
     version_label: str = Field(min_length=1, max_length=200)
@@ -395,8 +427,31 @@ class BoqAuthoringContextResponse(BoqAuthoringContextView):
     pass
 
 
+class BoqSpreadsheetCandidateContextResponse(BoqSpreadsheetCandidateContextView):
+    pass
+
+
+class ProposeBoqSpreadsheetMappingRequest(ApiModel):
+    command: BoqSpreadsheetMappingCommand
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ProposeBoqSpreadsheetQuantityRequest(ApiModel):
+    command: BoqSpreadsheetQuantityCommand
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class BoqLineReviewResponse(BoqLineReviewView):
     pass
+
+
+class InitialQuantityContextResponse(InitialQuantityContextView):
+    pass
+
+
+class AttachImportedQuantityRequest(ApiModel):
+    command: AttachImportedQuantityCommand
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class RecordQuantityRequest(ApiModel):
@@ -470,6 +525,14 @@ class PriceQuoteResponse(PriceQuoteView):
 
 
 class PriceItemContextResponse(PriceItemContextView):
+    pass
+
+
+class FgisCsAcquisitionListResponse(FgisCsAcquisitionListView):
+    pass
+
+
+class BoqPriceMatrixResponse(BoqPriceMatrixView):
     pass
 
 
@@ -686,10 +749,18 @@ class RiskItemDecisionResponse(RiskItemDecisionResult):
 
 class RecordActualRequest(ApiModel):
     draft: ActualRecordDraft
+    actuals_policy_version_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
 
 
 class VerifyActualRequest(ApiModel):
+    expected_actual_created_at: datetime
+    expected_task_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class DecideActualRequest(ApiModel):
+    command: ActualDecisionCommand
     reason: str = Field(min_length=1, max_length=2000)
 
 
@@ -698,15 +769,47 @@ class CompareActualRequest(ApiModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
-class ApproveCalibrationRequest(ApiModel):
+class DecideVarianceRequest(ApiModel):
+    command: VarianceDecisionCommand
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class ApproveCalibrationRequest(ApiModel):
+    expected_example_created_at: datetime
+    expected_task_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class DecideCalibrationRequest(ApiModel):
+    command: CalibrationDecisionCommand
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ActualsContextResponse(ActualsContextView):
+    pass
+
+
+class ForecastCandidatePageResponse(ForecastCandidatePage):
+    pass
 
 
 class ActualRecordResponse(ActualRecordView):
     pass
 
 
+class ActualDecisionResponse(ActualDecisionResult):
+    pass
+
+
 class ActualComparisonResponse(ActualComparisonResult):
+    pass
+
+
+class VarianceDecisionResponse(VarianceDecisionResult):
+    pass
+
+
+class CalibrationDecisionResponse(CalibrationDecisionResult):
     pass
 
 

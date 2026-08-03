@@ -48,7 +48,11 @@ See [architecture](docs/architecture.md), [safety case](docs/safety-case.md),
 [requirements traceability](docs/requirements-traceability.md),
 [governed commercial cost models](docs/commercial-cost-models.md), the
 [controlled calculation and release contract](docs/calculation-release-control.md),
-and the [signed export package specification](docs/signed-export-package.md). The
+and the [signed export package specification](docs/signed-export-package.md).
+The [controlled spreadsheet contract](docs/boq-spreadsheet-contract.md)
+defines the qualified/profile-bound XLSX row import, independent identity and
+quantity review, fail-closed initial attachment, and the still-unimplemented
+evidence-preserving export boundary. The
 [signed integration contract](docs/integration-delivery.md) defines the
 transport trust boundary. The [operator UI contract](docs/operator-ui.md)
 defines browser authentication, information barriers, deployment, and the
@@ -81,7 +85,9 @@ The repository currently connects and integration-tests:
   correction/supersession, late-conflict blocking, and a no-manual-value
   operator workflow; BoQ lines, quantity verification, planned cost
   components, and attested scope-completeness evaluations;
-- deterministic critical-attribute nomenclature matching, governed analogues,
+- deterministic literal catalog-candidate retrieval with disclosed matched
+  terms and no equivalence/confidence claim; exact source-item-bound
+  critical-attribute nomenclature matching; governed analogues,
   policy-versioned quote normalization with deterministic integrity replay,
   commercially complete/independent source triangulation, price decisions,
   and RFQ state;
@@ -160,6 +166,11 @@ The repository currently connects and integration-tests:
   independent policy-assigned approval, while only the original author may
   apply the server-held after-state and every accepted application remains
   linked to its approval and resulting quantity;
+- governed spreadsheet quantity intake in which identity and quantity receive
+  separate four-eyes decisions, every derived manual observation is fully
+  replayed at use time, and the browser can attach only the exact server-held
+  value to a verified non-critical line. Critical single-source quantities,
+  policy gaps, drift and ambiguity remain `BLOCKED`;
 - governed price-source registration, normalization, and triangulation in the
   operator UI: the browser submits only a verified observation identifier,
   selects references from the bound approved price policy, and never
@@ -168,6 +179,18 @@ The repository currently connects and integration-tests:
   RFQ/expert review when evidence is insufficient; verified price decisions
   are replayed again before calculation, while PostgreSQL guards protect quote
   inputs, normalized prices, and decision history from in-place mutation;
+- governed FGIS CS source acquisition that binds an exact KSR-code request to
+  the current project version, confirmed document set, approved acquisition
+  policy, qualified SYSTEM adapter and verified nomenclature evidence. Every
+  accepted HTTP body and the canonical manifest are retained by SHA-256 and
+  replayed before use; the operator UI shows the BoQ and official source names
+  side by side, while the result remains `UNVERIFIED` and `BLOCKED` and never
+  creates a price quote automatically;
+- a fail-closed post-row BoQ pricing matrix that places the exact BoQ/TZ,
+  catalog, won-tender, FGIS CS and market source names side by side, preserves
+  direct source/document locators and commercial bases, and withholds the
+  proposed amount unless source passports, all three required source groups,
+  nomenclature, policy, deterministic decision replay and approvals pass;
 - governed calculation and release surfaces: the browser displays a
   server-generated candidate and submits only its hash, project version and
   reason; the server rebuilds all atomic inputs and policy before fixing the
@@ -175,8 +198,23 @@ The repository currently connects and integration-tests:
   expose every hard stop and a context-bound gate hash; the approver must
   attest the exact project and target, while PostgreSQL prevents in-place
   mutation of calculation runs, atomic inputs, scenarios and release records;
+- one final expert-review surface after the fixed calculation snapshot: an
+  expert can accept through the existing hash-bound release gate or select
+  exact current BoQ price rows/release findings and return them to the earliest
+  deterministic processing stage. The immutable rework request retains the
+  snapshot, gate hash, row/finding identifiers and reason, while an outbox
+  event provides the automation-worker handoff. A qualification-bound,
+  lease/retry/dead-letter dispatcher now validates that immutable request and
+  creates exactly one immutable stage command; the UI shows dispatch state
+  without representing queue acceptance as completed rework;
 - revisioned verified actuals, forecast-to-actual variance classification, and
-  methodology-owner approval before facts become calibration examples.
+  methodology-owner approval before facts become calibration examples; the
+  governed operator UI selects only server-held evidence and released
+  forecasts, loads actual/variance/calibration history and per-actual forecast
+  candidates through bounded policy/project-scoped cursors, submits no factual
+  value or variance arithmetic, and exposes exact roles, provenance, optimistic
+  versions and four-eyes/integrity blockers. Forecast comparison replays the
+  exact selected release decision and its fixed snapshot;
 - governed historical/blind/parallel business qualification with a
   closed-population dataset, pre-reference forecast locking, two-step
   professional evidence, exact unrounded metrics, independent material
@@ -210,6 +248,16 @@ uv run alembic upgrade head
 uv run uvicorn tenderguard.api.main:app --reload
 uv run pytest
 ```
+
+Run one bounded batch of final-review dispatches from the scheduler/worker
+runtime after configuring and qualifying its dedicated SYSTEM identity:
+
+```powershell
+uv run tenderguard dispatch-final-rework --max-events 100
+```
+
+This command only validates and routes work. It does not claim that extraction,
+pricing or recalculation has completed.
 
 Run the operator UI development server in a second terminal:
 
@@ -255,7 +303,8 @@ accessibility evidence, and business qualification of the operator interface
 remain to be completed. Controlled reconciliation, current-set BoQ
 authoring/review, governed project-passport authoring/review, scope execution,
 deterministic nomenclature assessment, analogue review, and governed contract
-term/cost-impact authoring and review are implemented;
+term/cost-impact authoring/review plus actual/variance/calibration review are
+implemented;
 that implementation is not a substitute for real provider, methodology,
 catalog-owner, or user-acceptance evidence.
 Application actor/organisation quotas are implemented, but independently
@@ -278,6 +327,8 @@ The non-business readiness evidence contract is specified in the
 [production gate evidence registry](docs/production-gate-evidence.md).
 The governed model/rule/catalog lifecycle is specified in
 [controlled-version integrity](docs/controlled-version-integrity.md).
+The policy-bound raw FGIS CS evidence workflow is specified in
+[governed FGIS CS acquisition](docs/fgiscs-acquisition.md).
 Open security findings are in
 [the security review](security_best_practices_report.md).
 The untrusted-file boundary is specified in the
@@ -290,9 +341,23 @@ Signed transport, inbox, and replay semantics are specified in
 [the integration-delivery contract](docs/integration-delivery.md).
 Manual correction and four-eyes verification are specified in
 [the governed manual-evidence contract](docs/manual-evidence-review.md).
+The zero-touch processing boundary, final expert decision, and automatic
+rework dispatch are specified in
+[the final expert-review contract](docs/final-expert-review.md).
+The acquisition limits and provenance requirements for sources that do not
+require a commercial data subscription are documented in
+[the free public data-source register](docs/free-public-data-sources.md).
 Contract-term evidence, review, cost impact and independent stage gating are
 specified in
 [the governed contract-risk workflow](docs/contract-risk-workflow.md).
 Risk evidence, four-eyes review, reserve calculation and independent stage
 gating are specified in
 [the governed risk-reserve workflow](docs/risk-reserve-workflow.md).
+Runtime procedures are maintained in the
+[operations runbook](docs/operations-runbook.md), with application quota
+semantics in the
+[distributed rate-limiting contract](docs/distributed-rate-limiting.md).
+Methodology ownership and version governance are specified in
+[the methodology-governance contract](docs/methodology-governance.md).
+The dated baseline findings remain available in the
+[internal audit report](docs/internal-audit-2026-07-23.md).

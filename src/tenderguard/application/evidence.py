@@ -50,6 +50,7 @@ from tenderguard.infrastructure.orm import (
     DocumentSetRevisionRow,
     ObservationRow,
     ProjectControlledVersionRow,
+    ProjectRow,
 )
 
 
@@ -265,6 +266,7 @@ class EvidenceService:
         draft: ObservationDraft,
         request_id: str,
         reason: str,
+        upstream_observation_ids: tuple[str, ...] = (),
     ) -> Observation:
         reason = reason.strip()
         if not reason or len(reason) > 2000:
@@ -308,6 +310,10 @@ class EvidenceService:
         manual_policy_row: ControlledVersionRow | None = None
         manual_policy: ManualEvidencePolicy | None = None
         document_set: DocumentSetRevisionRow | None = None
+        if len(upstream_observation_ids) != len(set(upstream_observation_ids)):
+            raise ValueError("Upstream evidence observation IDs must be unique")
+        if upstream_observation_ids and draft.method is not EvidenceMethod.MANUAL:
+            raise ValueError("Only governed manual evidence may declare upstream observations")
         if draft.method is EvidenceMethod.MANUAL:
             manual_policy_row, manual_policy = self._manual_evidence_policy(
                 project_id=project_id,
@@ -329,6 +335,11 @@ class EvidenceService:
                 raise ValueError(
                     "Manual evidence must point to a revision in the confirmed current document set"
                 )
+        upstream_lineage = self._validated_upstream_lineage(
+            project_id=project_id,
+            document_set=document_set,
+            observation_ids=upstream_observation_ids,
+        )
         identity = {
             "project_id": project_id,
             "field_name": draft.field_name,
@@ -340,6 +351,7 @@ class EvidenceService:
             "observed_at": draft.observed_at,
             "actor_id": actor.actor_id,
             "basis_metadata": draft.basis_metadata,
+            **({"upstream_observations": upstream_lineage} if upstream_lineage else {}),
         }
         observation = Observation(
             observation_id=f"observation-{content_hash(identity)[:24]}",
@@ -360,6 +372,7 @@ class EvidenceService:
             "observation": observation.model_dump(mode="json"),
             "adapter_qualification_id": draft.adapter_qualification_id,
             **({"manual_reason": reason} if draft.method is EvidenceMethod.MANUAL else {}),
+            **({"upstream_observations": upstream_lineage} if upstream_lineage else {}),
         }
         existing = self.session.get(ObservationRow, observation.observation_id)
         if existing is not None:
@@ -423,6 +436,7 @@ class EvidenceService:
                 "method_version": observation.method_version,
                 "adapter_qualification_id": draft.adapter_qualification_id,
                 "manual_evidence_review_task_id": task.id if task is not None else None,
+                "upstream_observation_ids": [item["observation_id"] for item in upstream_lineage],
             },
         )
         return observation
@@ -486,6 +500,161 @@ class EvidenceService:
             ),
             documents=documents,
         )
+
+    def require_verified_manual_derivation(
+        self,
+        *,
+        project_id: str,
+        observation_id: str,
+    ) -> Observation:
+        """Replay the complete current manual-review chain before evidence use."""
+
+        project = self.session.get(ProjectRow, project_id)
+        if project is None:
+            raise LookupError(project_id)
+        derived = self.session.scalar(
+            select(ObservationRow).where(
+                ObservationRow.id == observation_id,
+                ObservationRow.project_id == project_id,
+            )
+        )
+        if derived is None:
+            raise LookupError(observation_id)
+        observation = Observation.model_validate(derived.payload.get("observation"))
+        if (
+            derived.payload.get("derivation_type") != "MANUAL_EVIDENCE_REVIEW"
+            or derived.id != observation.observation_id
+            or derived.document_revision_id != observation.location.document_revision_id
+            or derived.field_name != observation.field_name
+            or derived.method != EvidenceMethod.RULE_ENGINE.value
+            or observation.method is not EvidenceMethod.RULE_ENGINE
+            or derived.method_version != observation.method_version
+            or derived.status != VerificationStatus.VERIFIED.value
+            or observation.status is not VerificationStatus.VERIFIED
+        ):
+            raise RuntimeError("Verified manual evidence derivation identity does not reproduce")
+        policy_row, policy = self._manual_evidence_policy(
+            project_id=project_id,
+            organization_id=project.organization_id,
+        )
+        document_set = self._confirmed_current_document_set(
+            project_id=project_id,
+            document_set_revision_id=project.current_document_set_revision_id,
+        )
+        source_ids = derived.payload.get("source_observation_ids")
+        if not (
+            isinstance(source_ids, list) and len(source_ids) == 1 and isinstance(source_ids[0], str)
+        ):
+            raise RuntimeError("Verified manual evidence has invalid direct-source lineage")
+        source = self.session.get(ObservationRow, source_ids[0])
+        if source is None or source.project_id != project_id:
+            raise RuntimeError("Verified manual evidence source is unavailable")
+        source_observation = Observation.model_validate(source.payload.get("observation"))
+        source_hash = content_hash(source.payload)
+        if (
+            source.id != source_observation.observation_id
+            or source.document_revision_id != source_observation.location.document_revision_id
+            or source.document_revision_id not in document_set.revision_ids
+            or source.field_name != source_observation.field_name
+            or source.field_name != derived.field_name
+            or source.method != EvidenceMethod.MANUAL.value
+            or source_observation.method is not EvidenceMethod.MANUAL
+            or source.method_version != policy_row.id
+            or source_observation.method_version != policy_row.id
+            or source.status != VerificationStatus.UNVERIFIED.value
+            or source_observation.status is not VerificationStatus.UNVERIFIED
+            or not isinstance(source.payload.get("manual_reason"), str)
+            or not source.payload["manual_reason"].strip()
+            or derived.method_version != policy_row.id
+            or derived.document_revision_id != source.document_revision_id
+            or derived.payload.get("source_observation_hash") != source_hash
+            or derived.payload.get("manual_evidence_policy_version_id") != policy_row.id
+            or derived.payload.get("document_set_revision_id") != document_set.id
+            or derived.payload.get("upstream_observations")
+            != source.payload.get("upstream_observations")
+        ):
+            raise RuntimeError("Verified manual evidence source chain does not reproduce")
+        upstream_blockers = self._manual_upstream_lineage_blockers(
+            source=source,
+            document_set=document_set,
+        )
+        if upstream_blockers:
+            raise RuntimeError(
+                "Verified manual evidence upstream chain is invalid: "
+                + ", ".join(upstream_blockers)
+            )
+        task_id = derived.payload.get("approval_task_id")
+        approval_id = derived.payload.get("approval_record_id")
+        if not isinstance(task_id, str) or not isinstance(approval_id, str):
+            raise RuntimeError("Verified manual evidence approval identity is missing")
+        task = self.session.get(ApprovalTaskRow, task_id)
+        approval = self.session.get(ApprovalRecordRow, approval_id)
+        expected_task_payload = {
+            "created_by": source_observation.actor_id,
+            "source_observation_id": source.id,
+            "source_observation_hash": source_hash,
+            "observation_ids": [source.id],
+            "policy_version_id": policy_row.id,
+            "policy_content_hash": policy_row.content_hash,
+            "document_set_revision_id": document_set.id,
+            "document_revision_id": source.document_revision_id,
+            "review_role": policy.review_role.value,
+        }
+        if (
+            task is None
+            or task.project_id != project_id
+            or task.task_type != "MANUAL_EVIDENCE_REVIEW"
+            or task.entity_type != "evidence_observation"
+            or task.entity_id != source.id
+            or task.assigned_role != policy.review_role.value
+            or not task.required
+            or task.status != ApprovalDecision.APPROVED.value
+            or task.payload != expected_task_payload
+            or approval is None
+            or approval.task_id != task.id
+            or approval.decision != ApprovalDecision.APPROVED.value
+            or approval.decided_by != observation.actor_id
+            or approval.decided_by == source_observation.actor_id
+            or approval.decided_by == task.payload.get("created_by")
+        ):
+            raise RuntimeError("Verified manual evidence approval chain does not reproduce")
+        upstream = source.payload.get("upstream_observations")
+        expected_evidence_ids = [source.id]
+        if isinstance(upstream, list):
+            expected_evidence_ids.extend(str(item["observation_id"]) for item in upstream)
+        expected_evidence_ids.append(derived.id)
+        task_created_at = ensure_utc(task.created_at)
+        if (
+            approval.payload.get("project_id") != project_id
+            or approval.payload.get("evidence_ids") != expected_evidence_ids
+            or approval.payload.get("source_observation_hash") != source_hash
+            or approval.payload.get("policy_version_id") != policy_row.id
+            or approval.payload.get("document_set_revision_id") != document_set.id
+            or approval.payload.get("verified_observation_id") != derived.id
+            or task_created_at is None
+            or approval.payload.get("expected_task_updated_at") != task_created_at.isoformat()
+            or not isinstance(approval.reason, str)
+            or not approval.reason.strip()
+            or len(approval.reason) > 2000
+            or ensure_utc(task.updated_at) != ensure_utc(approval.decided_at)
+            or ensure_utc(approval.decided_at) != ensure_utc(derived.created_at)
+            or ensure_utc(approval.decided_at) != ensure_utc(observation.observed_at)
+        ):
+            raise RuntimeError("Verified manual evidence decision payload does not reproduce")
+        expected_observation = source_observation.model_copy(
+            update={
+                "observation_id": derived.id,
+                "method": EvidenceMethod.RULE_ENGINE,
+                "method_version": policy_row.id,
+                "observed_at": observation.observed_at,
+                "actor_id": approval.decided_by,
+                "confidence": None,
+                "status": VerificationStatus.VERIFIED,
+            }
+        )
+        if observation != expected_observation:
+            raise RuntimeError("Verified manual evidence derived content does not reproduce")
+        return observation
 
     def manual_evidence_review(
         self,
@@ -557,6 +726,12 @@ class EvidenceService:
             policy_row=policy_row,
             policy=policy,
             document_set=document_set,
+        )
+        blockers.extend(
+            self._manual_upstream_lineage_blockers(
+                source=source,
+                document_set=document_set,
+            )
         )
         verified_observation_id = None
         decisions = tuple(
@@ -653,6 +828,7 @@ class EvidenceService:
             if existing is not None:
                 raise RuntimeError("Manual evidence review already produced a derived observation")
             basis_metadata = self._validated_basis_metadata(source, source_observation)
+            upstream_lineage = source.payload.get("upstream_observations")
             self.session.add(
                 ObservationRow(
                     id=verified.observation_id,
@@ -671,6 +847,7 @@ class EvidenceService:
                         "document_set_revision_id": review.document_set_revision_id,
                         "approval_task_id": task.id,
                         "approval_record_id": approval_id,
+                        **({"upstream_observations": upstream_lineage} if upstream_lineage else {}),
                         **basis_metadata,
                     },
                     created_at=now,
@@ -678,7 +855,14 @@ class EvidenceService:
             )
         task.status = command.decision.value
         task.updated_at = now
+        upstream_lineage = source.payload.get("upstream_observations")
         evidence_ids = [source.id]
+        if isinstance(upstream_lineage, list):
+            evidence_ids.extend(
+                str(item["observation_id"])
+                for item in upstream_lineage
+                if isinstance(item, dict) and isinstance(item.get("observation_id"), str)
+            )
         if verified is not None:
             evidence_ids.append(verified.observation_id)
         self.session.add(
@@ -724,6 +908,7 @@ class EvidenceService:
                 "approval_record_id": approval_id,
                 "policy_version_id": review.policy_version_id,
                 "document_set_revision_id": review.document_set_revision_id,
+                "upstream_observation_ids": evidence_ids[1:-1] if verified else evidence_ids[1:],
             },
         )
         final_review = review.model_copy(
@@ -1446,6 +1631,85 @@ class EvidenceService:
     @staticmethod
     def _conflict_task_id(conflict_id: str) -> str:
         return f"approval-task-conflict-{content_hash(conflict_id)[:24]}"
+
+    def _validated_upstream_lineage(
+        self,
+        *,
+        project_id: str,
+        document_set: DocumentSetRevisionRow | None,
+        observation_ids: tuple[str, ...],
+    ) -> list[dict[str, str]]:
+        if not observation_ids:
+            return []
+        if document_set is None:
+            raise ValueError("Upstream evidence requires a confirmed current document set")
+        rows = list(
+            self.session.scalars(
+                select(ObservationRow).where(
+                    ObservationRow.project_id == project_id,
+                    ObservationRow.id.in_(observation_ids),
+                )
+            )
+        )
+        rows_by_id = {row.id: row for row in rows}
+        if set(rows_by_id) != set(observation_ids):
+            raise ValueError("One or more upstream evidence observations do not exist")
+        lineage: list[dict[str, str]] = []
+        for observation_id in observation_ids:
+            row = rows_by_id[observation_id]
+            observation = Observation.model_validate(row.payload.get("observation"))
+            if (
+                row.document_revision_id not in document_set.revision_ids
+                or row.id != observation.observation_id
+                or row.document_revision_id != observation.location.document_revision_id
+                or row.field_name != observation.field_name
+                or row.method != observation.method.value
+                or row.method_version != observation.method_version
+                or row.status != observation.status.value
+            ):
+                raise RuntimeError("Upstream evidence identity does not reproduce")
+            lineage.append(
+                {
+                    "observation_id": row.id,
+                    "observation_hash": content_hash(row.payload),
+                }
+            )
+        return lineage
+
+    def _manual_upstream_lineage_blockers(
+        self,
+        *,
+        source: ObservationRow,
+        document_set: DocumentSetRevisionRow,
+    ) -> list[str]:
+        stored = source.payload.get("upstream_observations")
+        if stored is None:
+            return []
+        if not isinstance(stored, list) or not stored:
+            return ["UPSTREAM_EVIDENCE_LINEAGE_INVALID"]
+        observation_ids: list[str] = []
+        for item in stored:
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"observation_id", "observation_hash"}
+                or not isinstance(item.get("observation_id"), str)
+                or not isinstance(item.get("observation_hash"), str)
+            ):
+                return ["UPSTREAM_EVIDENCE_LINEAGE_INVALID"]
+            observation_ids.append(item["observation_id"])
+        if len(observation_ids) != len(set(observation_ids)):
+            return ["UPSTREAM_EVIDENCE_LINEAGE_INVALID"]
+        try:
+            current = self._validated_upstream_lineage(
+                project_id=source.project_id,
+                document_set=document_set,
+                observation_ids=tuple(observation_ids),
+            )
+        except (RuntimeError, ValueError):
+            return ["UPSTREAM_EVIDENCE_DRIFT"]
+        if current != stored:
+            return ["UPSTREAM_EVIDENCE_DRIFT"]
+        return []
 
     def _manual_evidence_policy(
         self,

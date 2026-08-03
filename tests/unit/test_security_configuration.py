@@ -75,6 +75,7 @@ def test_production_rejects_development_audit_key_and_sqlite() -> None:
     assert "PostgreSQL is required" in message
     assert "qualified malware scanner binding" in message
     assert "qualified isolated document processor binding" in message
+    assert "qualified automatic rework dispatcher binding" in message
     assert "OIDC web client ID" in message
     assert "immutable application build reference" in message
     assert "distributed actor/organization rate limiting" in message
@@ -98,6 +99,72 @@ def test_enabled_distributed_rate_limit_requires_complete_explicit_policy() -> N
             rate_limit_enabled=True,
             rate_limit_identity_key_id="incomplete-rate-limit-policy",
         )
+
+
+def test_partial_boq_xlsx_worker_binding_is_rejected() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="BoQ XLSX worker configuration requires",
+    ):
+        Settings(
+            app_env="test",
+            boq_xlsx_adapter="qualified-xlsx-parser",
+        )
+
+
+def test_complete_boq_xlsx_worker_binding_is_detected() -> None:
+    settings = Settings(
+        app_env="test",
+        boq_xlsx_adapter="qualified-xlsx-parser",
+        boq_xlsx_adapter_qualification_id="qualification-xlsx-parser-v1",
+        boq_xlsx_worker_actor_id="xlsx-parser-worker",
+    )
+
+    assert settings.boq_xlsx_adapter_configured is True
+
+
+def test_partial_fgiscs_worker_binding_is_rejected() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="FGIS CS worker configuration requires",
+    ):
+        Settings(
+            app_env="test",
+            fgiscs_adapter="tenderguard-fgiscs-public",
+        )
+
+
+def test_complete_fgiscs_worker_binding_is_detected() -> None:
+    settings = Settings(
+        app_env="test",
+        fgiscs_adapter="tenderguard-fgiscs-public",
+        fgiscs_adapter_qualification_id="qualification-fgiscs-v1",
+        fgiscs_worker_actor_id="fgiscs-worker",
+    )
+
+    assert settings.fgiscs_adapter_configured is True
+
+
+def test_partial_automation_rework_binding_is_rejected() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="Automatic rework configuration requires",
+    ):
+        Settings(
+            app_env="test",
+            automation_rework_adapter="qualified-automation-dispatcher",
+        )
+
+
+def test_complete_automation_rework_binding_is_detected() -> None:
+    settings = Settings(
+        app_env="test",
+        automation_rework_adapter="qualified-automation-dispatcher",
+        automation_rework_qualification_id="qualification-automation-v1",
+        automation_rework_worker_actor_id="automation-worker",
+    )
+
+    assert settings.automation_rework_configured is True
 
 
 @pytest.mark.parametrize(
@@ -129,6 +196,17 @@ def test_enabled_distributed_rate_limit_requires_complete_explicit_policy() -> N
             {
                 "integration_job_retry_base_seconds": 60,
                 "integration_job_retry_max_seconds": 30,
+            },
+            "retry maximum",
+        ),
+        (
+            {"automation_job_lease_seconds": 30, "automation_job_timeout_seconds": 30},
+            "Automation job timeout must be shorter",
+        ),
+        (
+            {
+                "automation_job_retry_base_seconds": 60,
+                "automation_job_retry_max_seconds": 30,
             },
             "retry maximum",
         ),
@@ -187,6 +265,9 @@ def test_production_docs_are_disabled_and_security_headers_are_present(
         document_processor_adapter="production-intake",
         document_processor_qualification_id="qualification-intake-production",
         document_worker_actor_id="document-worker",
+        automation_rework_adapter="production-automation-dispatcher",
+        automation_rework_qualification_id="qualification-automation-production",
+        automation_rework_worker_actor_id="automation-worker",
         rate_limit_enabled=True,
         rate_limit_identity_key_id="production-rate-limit-key-1",
         rate_limit_identity_key="production-rate-limit-identity-key-at-least-32-bytes",

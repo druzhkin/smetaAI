@@ -280,6 +280,40 @@ class _Cursor(DomainModel):
     record_id: str
 
 
+def _payload_string(payload: dict[str, Any], *path: str) -> str | None:
+    value: object = payload
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _actual_record_status(row: ActualRecordRow) -> str:
+    return _payload_string(row.payload, "review_status") or (
+        VerificationStatus.VERIFIED.value if row.verified else VerificationStatus.UNVERIFIED.value
+    )
+
+
+def _variance_record_status(row: VarianceRecordRow) -> str:
+    return _payload_string(row.payload, "variance", "status") or VerificationStatus.UNVERIFIED.value
+
+
+def _calibration_record_status(row: CalibrationExampleRow) -> str:
+    if row.approved:
+        return "APPROVED"
+    review_status = _payload_string(row.payload, "review_status")
+    return (
+        review_status
+        if review_status
+        in {
+            VerificationStatus.IN_REVIEW.value,
+            VerificationStatus.REJECTED.value,
+        }
+        else "DRAFT"
+    )
+
+
 class ProjectReadService:
     """Authorization-preserving read models for dense operator workflows."""
 
@@ -2000,12 +2034,17 @@ class ProjectReadService:
         statuses: frozenset[str],
     ) -> list[ProjectRecord]:
         actuals = select(ActualRecordRow).where(ActualRecordRow.project_id == project_id)
+        actual_status = func.coalesce(
+            ActualRecordRow.payload["review_status"].as_string(),
+            case(
+                (ActualRecordRow.verified.is_(True), VerificationStatus.VERIFIED.value),
+                else_=VerificationStatus.UNVERIFIED.value,
+            ),
+        )
         if current_only:
             actuals = actuals.where(ActualRecordRow.is_current.is_(True))
         if statuses:
-            verified = {value == "VERIFIED" for value in statuses}
-            if len(verified) == 1:
-                actuals = actuals.where(ActualRecordRow.verified.is_(verified.pop()))
+            actuals = actuals.where(actual_status.in_(tuple(statuses)))
         if query:
             pattern = f"%{self._escape_like(query)}%"
             actuals = actuals.where(
@@ -2027,7 +2066,7 @@ class ProjectReadService:
                 kind="ACTUAL",
                 title=row.metric,
                 subtitle=f"{row.entity_type} · {row.entity_id}",
-                status="VERIFIED" if row.verified else "UNVERIFIED",
+                status=_actual_record_status(row),
                 current=row.is_current,
                 amount=row.value,
                 unit=row.unit,
@@ -2041,6 +2080,12 @@ class ProjectReadService:
             for row in self.session.scalars(actuals.limit(limit))
         ]
         variances = select(VarianceRecordRow).where(VarianceRecordRow.project_id == project_id)
+        variance_status = func.coalesce(
+            VarianceRecordRow.payload["variance"]["status"].as_string(),
+            VerificationStatus.UNVERIFIED.value,
+        )
+        if statuses:
+            variances = variances.where(variance_status.in_(tuple(statuses)))
         if query:
             variances = variances.where(
                 VarianceRecordRow.metric.ilike(
@@ -2061,6 +2106,7 @@ class ProjectReadService:
                 kind="VARIANCE",
                 title=row.metric,
                 subtitle=row.reason,
+                status=_variance_record_status(row),
                 amount=row.absolute_variance,
                 occurred_at=row.created_at,
                 attributes={
@@ -2075,14 +2121,23 @@ class ProjectReadService:
         calibrations = select(CalibrationExampleRow).where(
             CalibrationExampleRow.project_id == project_id
         )
+        calibration_review_status = CalibrationExampleRow.payload["review_status"].as_string()
+        calibration_status = case(
+            (CalibrationExampleRow.approved.is_(True), "APPROVED"),
+            (
+                calibration_review_status == VerificationStatus.REJECTED.value,
+                VerificationStatus.REJECTED.value,
+            ),
+            (
+                calibration_review_status == VerificationStatus.IN_REVIEW.value,
+                VerificationStatus.IN_REVIEW.value,
+            ),
+            else_="DRAFT",
+        )
         if current_only:
             calibrations = calibrations.where(CalibrationExampleRow.approved.is_(True))
         if statuses:
-            approved_values = {value == "APPROVED" for value in statuses}
-            if len(approved_values) == 1:
-                calibrations = calibrations.where(
-                    CalibrationExampleRow.approved.is_(approved_values.pop())
-                )
+            calibrations = calibrations.where(calibration_status.in_(tuple(statuses)))
         if query:
             calibrations = calibrations.where(
                 CalibrationExampleRow.metric.ilike(
@@ -2106,7 +2161,7 @@ class ProjectReadService:
                 kind="CALIBRATION_EXAMPLE",
                 title=row.metric,
                 subtitle="Verified-fact calibration candidate",
-                status="APPROVED" if row.approved else "DRAFT",
+                status=_calibration_record_status(row),
                 current=row.approved,
                 amount=row.target_value,
                 unit=row.unit,

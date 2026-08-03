@@ -17,7 +17,17 @@ The interface does not make an estimate reliable by rendering it. Backend
 authorization, workflow guards, version checks, idempotency, four-eyes
 segregation, independent validation, and release policy remain authoritative.
 
-The current interface includes seventeen controlled mutation families:
+The current interface includes controlled mutation families plus read-only
+BoQ pricing and automatic-rework status surfaces:
+
+- authorised financial users may open a post-row BoQ price matrix that fixes
+  the operator's comparison surface: original BoQ/TZ name and quantity,
+  catalog name and critical-attribute matrix, exact source-side names for won
+  tenders, FGIS CS and independent market websites/portals, direct source URI
+  and locator, normalized bases, and the deterministic system rationale. A
+  missing group, stale match, failed lineage replay, RFQ or pending approval
+  renders `BLOCKED` and withholds the proposed amount. The matrix is not a bid
+  release decision;
 
 - an estimator may register a project in `DRAFT`; the organisation comes from
   the authenticated identity, the creator receives a versioned owner
@@ -66,16 +76,30 @@ The current interface includes seventeen controlled mutation families:
   observations and server blockers; submission binds the line's
   timezone-aware `updated_at`. Author self-review, stale timestamps,
   superseded document sets and old-set evidence fail closed;
+- a technical expert may separately send the exact imported XLSX quantity to
+  four-eyes review without typing or changing the number. After both that
+  review and BoQ line verification, an estimator or technical expert may
+  attach the single server-held quantity from the BoQ record. The attachment
+  command contains no value, unit, formula, rounding or waste coefficient;
+  policy drift, multiple candidates, an existing quantity and any critical
+  single-source line display `BLOCKED`;
 - in `BOQ_REVIEW`, a reviewer or technical expert may run the approved
   Scope Completeness Engine for a WBS node. The server binds the current BoQ
   signature and controlled rule pack and persists findings; an empty UI list
   is not treated as evidence unless the evaluation is recorded;
 - procurement or a technical expert may assess a BoQ component against the
-  current approved catalog. The browser selects only the semantic component,
-  canonical item and verified technical-attribute observation; it does not
-  submit a match class. The server reproduces the unique current BoQ
-  component, catalog audit chain, critical attributes, document set and
-  evidence before calculating `EXACT`, `INSUFFICIENT_DATA`, or
+  current approved catalog. The browser selects the source component from the
+  server's current verified BoQ list instead of accepting a typed semantic
+  key. Changing that component clears the selected evidence and catalog item.
+  Only technical-attribute observations whose field and structured value are
+  bound to the selected source component are shown. Catalog candidates may be
+  ordered by disclosed literal term matches to reduce mechanical search, but
+  the screen labels that order as retrieval only and never displays an AI
+  confidence. The browser submits only the semantic component, canonical item
+  and verified technical-attribute observation; it does not submit a match
+  class. The server reproduces the unique current BoQ component, exact
+  evidence binding, catalog audit chain, critical attributes and document set
+  before calculating `EXACT`, `INSUFFICIENT_DATA`, or
   `TECHNICALLY_UNACCEPTABLE`;
 - a technical expert may propose only an explicitly permitted functional or
   conditionally acceptable analogue. The review screen shows the immutable
@@ -113,6 +137,25 @@ The current interface includes seventeen controlled mutation families:
   user may request reserve calculation without submitting a financial value.
   The server performs two separate calculations, persists input/output hashes
   and binds the verified reserve to the model-declared BoQ component;
+- a policy-authorised post-bid operator may create an actual revision only by
+  selecting an eligible verified observation from the server-held actuals
+  context. The browser submits no value, unit, source class or occurrence date;
+  it binds the exact observation creation timestamp and approved actuals-policy
+  version. A different policy-assigned reviewer sees source leaves, project
+  outcome evidence, task version and integrity/four-eyes blockers. Only a
+  current approved fact may be compared with a forecast from its released
+  snapshot. Actual, variance and calibration history is loaded through a
+  bounded opaque cursor tied to the current project, metric and approved policy;
+  released forecast candidates are loaded separately for the selected verified
+  actual. The comparison command names the exact release decision, which the
+  backend retrieves and replays once with its fixed snapshot. A malformed,
+  stale or cross-scope cursor is rejected rather than widened. The classifier
+  chooses one closed-list reason and an explanation, while the backend computes
+  exact Decimal absolute/relative variance. A separate reviewer must reproduce
+  and decide that variance; approval creates a still-pending calibration
+  candidate. Only an independent methodology owner may accept or reject the
+  reproducible candidate, and the UI states that approval neither proves model
+  accuracy nor authorises price release;
 - an assigned expert may record an approval, rejection, or
   changes-requested decision for an existing approval task. The operation
   requires the exact task timestamp, a reason, project-scoped evidence
@@ -125,6 +168,11 @@ The current interface includes seventeen controlled mutation families:
   The server rebuilds the candidate under lock, performs the primary and
   independent calculations, stores a content-addressed snapshot and hides any
   later amount whose snapshot/run integrity check fails;
+- at final review, a reviewer or approver may select exact current price rows
+  or hard-stop findings and return them without entering a replacement price.
+  A separate status panel shows whether the immutable request is awaiting
+  dispatch, has one stage command queued, or is blocked. Queue delivery and
+  acknowledgement are explicitly not rendered as completed recalculation;
 - an approver may select internal or bid release only when the target decision
   has no hard-stop findings and the workflow state permits the transition.
   The screen renders every finding and a target-specific gate hash. Submission
@@ -138,8 +186,8 @@ audit chain. An unsupported file, invalid logical key, stale task or conflict,
 stale document-set candidate, self-confirmation, self-resolution, missing
 role, or unacknowledged command fails closed.
 
-General-purpose workflow transitions, actuals/calibration authoring and several
-specialist maintenance surfaces are not represented as operator mutations.
+General-purpose workflow transitions and several specialist maintenance
+surfaces are not represented as operator mutations.
 Production acceptance still requires role-based user testing, accessibility
 verification, organisation-owned methodology/catalog qualification, and
 business-process qualification.
@@ -208,6 +256,12 @@ Every project view preserves visible workflow state and blocker count,
 including at mobile breakpoints. A blocked calculation must never be presented
 as ready with minor remarks.
 
+The wide BoQ pricing matrix deliberately uses a horizontally scrollable ledger
+with a sticky original-position column. Source cells show the original and
+source-side names together so an operator can verify the mapping without
+opening a second screen. The direct source link is rendered only from the
+server-validated HTTPS source passport; text remains escaped by React.
+
 ## Browser security policy
 
 The API applies:
@@ -266,6 +320,9 @@ Before production use, retain:
 - dependency and image vulnerability scans tied to the released digest;
 - CSP violation monitoring and authentication-failure alerts;
 - controlled-action workflow tests for every additional mutation surface;
+- actuals role separation, blocked-source, stale observation/task, released
+  forecast, rejected variance, methodology-owner and mobile operator
+  acceptance results;
 - manual-evidence policy binding, self-review, stale-document-set, exact-value
   and rejection/return operator acceptance results;
 - quarantine allowlist, size-limit, retry/idempotency, infected-file, scanner

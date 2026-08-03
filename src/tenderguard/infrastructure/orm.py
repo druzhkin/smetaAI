@@ -437,6 +437,42 @@ class PriceQuoteRow(Base, TimestampMixin):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class FgisCsAcquisitionRow(Base):
+    __tablename__ = "fgiscs_acquisitions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    nomenclature_match_id: Mapped[str] = mapped_column(
+        ForeignKey("nomenclature_matches.id"), nullable=False, index=True
+    )
+    document_set_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("document_set_revisions.id"), nullable=False, index=True
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        ForeignKey("controlled_versions.id"), nullable=False, index=True
+    )
+    adapter_qualification_id: Mapped[str] = mapped_column(
+        ForeignKey("adapter_qualifications.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    artifact_object_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    artifact_object_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    artifact_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "item_id",
+            "artifact_object_hash",
+            name="uq_fgiscs_acquisition_artifact_per_item",
+        ),
+    )
+
+
 class NormalizedPriceRow(Base):
     __tablename__ = "normalized_prices"
 
@@ -690,6 +726,84 @@ class ReleaseDecisionRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     decided_by: Mapped[str] = mapped_column(String(128), nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExpertReworkRequestRow(Base):
+    __tablename__ = "expert_rework_requests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("calculation_snapshots.id"), nullable=False, index=True
+    )
+    requested_state: Mapped[str] = mapped_column(String(64), nullable=False)
+    gate_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "requested_state IN ('APPROVED_FOR_BID', 'APPROVED_FOR_INTERNAL_USE')",
+            name="ck_expert_rework_requested_state",
+        ),
+        CheckConstraint(
+            "target_stage IN ("
+            "'EXTRACTION_IN_PROGRESS', 'BOQ_IN_PROGRESS', "
+            "'PRICING_IN_PROGRESS', 'CALCULATION_IN_PROGRESS', 'BLOCKED'"
+            ")",
+            name="ck_expert_rework_target_stage",
+        ),
+    )
+
+
+class AutomationReworkDispatchRow(Base):
+    __tablename__ = "automation_rework_dispatches"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rework_request_id: Mapped[str] = mapped_column(
+        ForeignKey("expert_rework_requests.id"), nullable=False, unique=True, index=True
+    )
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    source_outbox_event_id: Mapped[str] = mapped_column(
+        ForeignKey("outbox_events.id"), nullable=False, unique=True
+    )
+    command_outbox_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("outbox_events.id"), unique=True
+    )
+    target_stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    command_topic: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dispatch_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    worker_qualification_id: Mapped[str] = mapped_column(
+        ForeignKey("adapter_qualifications.id"), nullable=False
+    )
+    worker_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    dispatched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_stage IN ("
+            "'EXTRACTION_IN_PROGRESS', 'BOQ_IN_PROGRESS', "
+            "'PRICING_IN_PROGRESS', 'CALCULATION_IN_PROGRESS', 'BLOCKED'"
+            ")",
+            name="ck_automation_rework_dispatch_target_stage",
+        ),
+        CheckConstraint(
+            "status IN ('STAGE_COMMAND_QUEUED', 'BLOCKED')",
+            name="ck_automation_rework_dispatch_status",
+        ),
+        CheckConstraint(
+            "(status = 'STAGE_COMMAND_QUEUED' AND command_outbox_event_id IS NOT NULL "
+            "AND command_topic IS NOT NULL) OR "
+            "(status = 'BLOCKED' AND command_outbox_event_id IS NULL "
+            "AND command_topic IS NULL)",
+            name="ck_automation_rework_dispatch_command",
+        ),
+    )
 
 
 class AuditEventRow(Base):

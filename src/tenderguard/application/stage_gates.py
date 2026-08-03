@@ -1129,11 +1129,7 @@ def risk_stage_blockers(
             kind="risk_model",
         )
         definition = RiskModelDefinition.model_validate(
-            {
-                key: value
-                for key, value in model.payload.items()
-                if key != "_governance"
-            }
+            {key: value for key, value in model.payload.items() if key != "_governance"}
         )
         document_set = require_confirmed_document_set_integrity(
             session=session,
@@ -1196,10 +1192,7 @@ def risk_stage_blockers(
     if (
         independent["expected_reserve"] != str(primary.expected_reserve)
         or independent["per_risk_expected_impact"]
-        != {
-            key: str(value)
-            for key, value in primary.per_risk_expected_impact.items()
-        }
+        != {key: str(value) for key, value in primary.per_risk_expected_impact.items()}
         or not primary.passed
     ):
         blockers.append("risk-calculation:independent-validation-failed")
@@ -1234,20 +1227,16 @@ def risk_stage_blockers(
         or calculation.expected_reserve != primary.expected_reserve
         or calculation.currency != primary.currency
         or calculation.unit != definition.reserve_unit
-        or calculation.payload.get("calculation")
-        != primary.model_dump(mode="json")
+        or calculation.payload.get("calculation") != primary.model_dump(mode="json")
         or calculation.payload.get("independent_validation") != independent
         or calculation.payload.get("input_signature") != expected_signature
         or calculation.payload.get("output_hash") != expected_output_hash
-        or calculation.payload.get("risk_item_ids")
-        != [row.id for row in risk_rows]
-        or calculation.payload.get("risk_item_signatures")
-        != risk_item_signatures
+        or calculation.payload.get("risk_item_ids") != [row.id for row in risk_rows]
+        or calculation.payload.get("risk_item_signatures") != risk_item_signatures
         or calculation.payload.get("risk_model_version_id") != model.id
         or calculation.payload.get("risk_model_content_hash") != model.content_hash
         or calculation.payload.get("document_set_revision_id") != document_set.id
-        or calculation.payload.get("document_set_manifest_hash")
-        != document_set.manifest_hash
+        or calculation.payload.get("document_set_manifest_hash") != document_set.manifest_hash
         or calculation.payload.get("reserve_cost_component") != reserve_reference
         or calculation.payload.get("basis_type") != "RISK_RESERVE"
         or calculation.payload.get("unit_rate") != str(primary.expected_reserve)
@@ -1334,8 +1323,7 @@ def _require_risk_item_integrity(
         or row.payload.get("review_decision") != "APPROVED"
         or row.payload.get("risk_model_version_id") != model.id
         or row.payload.get("risk_model_content_hash") != model.content_hash
-        or row.payload.get("document_set_revision_id")
-        != document_set_revision_id
+        or row.payload.get("document_set_revision_id") != document_set_revision_id
         or row.payload.get("review_role") != definition.review_role.value
         or not isinstance(task_id, str)
         or not task_id
@@ -1356,14 +1344,11 @@ def _require_risk_item_integrity(
     ordered = tuple(by_id[item] for item in observation_ids)
     expected_hash = content_hash(evidence_value)
     for evidence_row in ordered:
-        observation = Observation.model_validate(
-            evidence_row.payload.get("observation")
-        )
+        observation = Observation.model_validate(evidence_row.payload.get("observation"))
         if (
             evidence_row.id != observation.observation_id
             or evidence_row.project_id != row.project_id
-            or evidence_row.document_revision_id
-            != observation.location.document_revision_id
+            or evidence_row.document_revision_id != observation.location.document_revision_id
             or evidence_row.document_revision_id not in document_revision_ids
             or evidence_row.field_name != field_name
             or evidence_row.field_name != observation.field_name
@@ -1386,14 +1371,11 @@ def _require_risk_item_integrity(
         observations=ordered,
     )
     for evidence_row in leaves:
-        observation = Observation.model_validate(
-            evidence_row.payload.get("observation")
-        )
+        observation = Observation.model_validate(evidence_row.payload.get("observation"))
         if (
             evidence_row.id != observation.observation_id
             or evidence_row.project_id != row.project_id
-            or evidence_row.document_revision_id
-            != observation.location.document_revision_id
+            or evidence_row.document_revision_id != observation.location.document_revision_id
             or evidence_row.document_revision_id not in document_revision_ids
             or evidence_row.field_name != field_name
             or evidence_row.field_name != observation.field_name
@@ -1455,9 +1437,7 @@ def _require_risk_item_integrity(
         or task.payload != expected_task_payload
     ):
         raise ValueError("Risk review task integrity failed")
-    approval = session.scalar(
-        select(ApprovalRecordRow).where(ApprovalRecordRow.task_id == task.id)
-    )
+    approval = session.scalar(select(ApprovalRecordRow).where(ApprovalRecordRow.task_id == task.id))
     if (
         approval is None
         or approval.decision != "APPROVED"
@@ -1465,12 +1445,10 @@ def _require_risk_item_integrity(
         or approval.payload.get("risk_item_id") != row.id
         or approval.payload.get("risk_key") != row.risk_key
         or approval.payload.get("evidence_ids") != observation_ids
-        or approval.payload.get("independence_source_ids")
-        != independence_source_ids
+        or approval.payload.get("independence_source_ids") != independence_source_ids
         or approval.payload.get("risk_model_version_id") != model.id
         or approval.payload.get("risk_model_content_hash") != model.content_hash
-        or approval.payload.get("document_set_revision_id")
-        != document_set_revision_id
+        or approval.payload.get("document_set_revision_id") != document_set_revision_id
         or approval.payload.get("risk_submission_hash") != submission_hash
     ):
         raise ValueError("Risk approval record integrity failed")
@@ -1538,8 +1516,7 @@ def _require_risk_reserve_component(
             (
                 item
                 for item in components
-                if isinstance(item, dict)
-                and item.get("semantic_key") == reference.semantic_key
+                if isinstance(item, dict) and item.get("semantic_key") == reference.semantic_key
             ),
             None,
         )
@@ -1579,11 +1556,7 @@ def _independent_risk_recalculation(
             continue
         expected[risk.risk_id] = (
             risk.probability
-            * (
-                risk.impact_min
-                + risk.impact_most_likely
-                + risk.impact_max
-            )
+            * (risk.impact_min + risk.impact_most_likely + risk.impact_max)
             / Decimal(3)
         ).quantize(quantum, rounding=rounding)
     reserve = sum(expected.values(), start=Decimal(0)).quantize(
@@ -1594,8 +1567,6 @@ def _independent_risk_recalculation(
         "validator_version": f"independent:{policy_version}",
         "expected_reserve": str(reserve),
         "currency": policy.currency,
-        "per_risk_expected_impact": {
-            key: str(expected[key]) for key in sorted(expected)
-        },
+        "per_risk_expected_impact": {key: str(expected[key]) for key in sorted(expected)},
         "passed": len(expected) == len(risks),
     }
