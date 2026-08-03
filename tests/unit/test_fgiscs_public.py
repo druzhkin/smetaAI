@@ -18,12 +18,15 @@ from tenderguard.application.fgiscs_diagnostic import (
 from tenderguard.integrations.fgiscs_public import (
     FGIS_CS_PUBLIC_SCHEMA_VERSION,
     FgisCsKsrSearchAcquisition,
+    FgisCsMaterialHistoryAcquisition,
+    FgisCsMaterialHistoryRequest,
     FgisCsMaterialLookupRequest,
     FgisCsPublicApi,
     FgisCsPublicApiError,
     FgisCsRawHttpExchange,
     replay_fgiscs_ksr_search_acquisition,
     replay_fgiscs_material_acquisition,
+    replay_fgiscs_material_history_acquisition,
 )
 
 _PERIOD_NAME = "2 квартал 2026 \u0433."
@@ -244,6 +247,172 @@ def test_material_acquisition_retains_and_replays_every_raw_response(
         replay_fgiscs_material_acquisition(altered)
     assert mismatch.value.code == "FGIS_NON_EXACT_SEARCH_RESULT"
 
+    failed_exchange = FgisCsRawHttpExchange(
+        request_uri=acquired.exchanges[-1].request_uri,
+        response_body=acquired.exchanges[-1].response_body,
+        status_code=422,
+    )
+    with pytest.raises(ValueError, match="contains a failed HTTP response"):
+        acquired.__class__(
+            request=acquired.request,
+            result=acquired.result,
+            exchanges=(*acquired.exchanges[:-1], failed_exchange),
+        )
+
+
+def test_material_history_reuses_metadata_and_replays_complete_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    older_period = "1 квартал 2026 г."  # noqa: RUF001
+    code_one = "02.3.01.02-1102"
+    code_two = "01.7.06.08-0008"
+    requests = _install_responses(
+        monkeypatch,
+        [
+            _Response(_json([{"id": 331, "name": "Московская область"}])),
+            _Response(_json([{"id": 127, "name": "Московская область"}])),
+            _Response(
+                _json(
+                    [
+                        {"id": 426, "name": _PERIOD_NAME},
+                        {"id": 425, "name": older_period},
+                    ]
+                )
+            ),
+            _Response(_json(_price_payload(code=code_one))),
+            _Response(_json({"items": []})),
+            _Response(_json({"items": []})),
+            _Response(_json(_price_payload(code=code_two))),
+        ],
+    )
+    request = FgisCsMaterialHistoryRequest(
+        subject_name="Московская область",
+        price_zone_name=None,
+        resource_codes=(code_one, code_two),
+    )
+
+    acquired = FgisCsPublicApi().acquire_material_history(
+        request,
+        retrieved_at=datetime(2026, 8, 3, 15, 0, tzinfo=UTC),
+    )
+
+    assert len(requests) == 7
+    assert len(acquired.exchanges) == 7
+    assert [item.requested_resource_code for item in acquired.result.observations] == [
+        code_one,
+        code_one,
+        code_two,
+        code_two,
+    ]
+    assert [item.period.id for item in acquired.result.observations] == [426, 425, 426, 425]
+    assert [item.price is not None for item in acquired.result.observations] == [
+        True,
+        False,
+        False,
+        True,
+    ]
+    assert not acquired.result.ready_for_pricing
+    assert replay_fgiscs_material_history_acquisition(acquired) == acquired.result
+
+    with pytest.raises(ValueError, match="journal is incomplete"):
+        FgisCsMaterialHistoryAcquisition(
+            request=acquired.request,
+            result=acquired.result,
+            exchanges=acquired.exchanges[:-1],
+        )
+    altered_exchange = FgisCsRawHttpExchange(
+        request_uri=acquired.exchanges[-1].request_uri + "&unexpected=1",
+        response_body=acquired.exchanges[-1].response_body,
+    )
+    altered = FgisCsMaterialHistoryAcquisition(
+        request=acquired.request,
+        result=acquired.result,
+        exchanges=(*acquired.exchanges[:-1], altered_exchange),
+    )
+    with pytest.raises(ValueError, match="journal does not reproduce"):
+        replay_fgiscs_material_history_acquisition(altered)
+
+
+def test_material_history_rejects_duplicate_codes_before_network() -> None:
+    with pytest.raises(ValueError, match="duplicate resource codes"):
+        FgisCsMaterialHistoryRequest(
+            subject_name="Московская область",
+            resource_codes=("02.3.01.02-1102", "02.3.01.02-1102"),
+        )
+
+
+def test_material_history_retains_422_cell_and_continues_replayably(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code_one = "02.3.01.02-1102"
+    code_two = "01.7.06.08-0008"
+    requests = _install_responses(
+        monkeypatch,
+        [
+            *_metadata_responses(),
+            _Response(_json({"detail": "unprocessable period"}), status=422),
+            _Response(_json(_price_payload(code=code_two))),
+        ],
+    )
+
+    acquired = FgisCsPublicApi().acquire_material_history(
+        FgisCsMaterialHistoryRequest(
+            subject_name="Московская область",
+            resource_codes=(code_one, code_two),
+        ),
+        retrieved_at=datetime(2026, 8, 3, 15, 0, tzinfo=UTC),
+    )
+
+    assert len(requests) == 5
+    assert len(acquired.exchanges) == 5
+    failed, successful = acquired.result.observations
+    assert failed.price is None
+    assert failed.response_status_code == 422
+    assert failed.acquisition_error_code == "FGIS_HTTP_422"
+    assert "FGIS_HTTP_422" in failed.pricing_blockers
+    assert acquired.exchanges[3].status_code == 422
+    assert successful.price is not None
+    assert replay_fgiscs_material_history_acquisition(acquired) == acquired.result
+
+    altered_error = FgisCsRawHttpExchange(
+        request_uri=acquired.exchanges[3].request_uri,
+        response_body=acquired.exchanges[3].response_body,
+        status_code=404,
+        media_type=acquired.exchanges[3].media_type,
+    )
+    altered = FgisCsMaterialHistoryAcquisition(
+        request=acquired.request,
+        result=acquired.result,
+        exchanges=(*acquired.exchanges[:3], altered_error, acquired.exchanges[4]),
+    )
+    with pytest.raises(ValueError, match="does not reproduce"):
+        replay_fgiscs_material_history_acquisition(altered)
+
+
+def test_material_history_stops_on_retryable_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_responses(
+        monkeypatch,
+        [
+            *_metadata_responses(),
+            _Response(_json({"detail": "rate limited"}), status=429),
+        ],
+    )
+
+    with pytest.raises(FgisCsPublicApiError) as captured:
+        FgisCsPublicApi().acquire_material_history(
+            FgisCsMaterialHistoryRequest(
+                subject_name="Московская область",
+                resource_codes=("02.3.01.02-1102",),
+            )
+        )
+
+    assert captured.value.code == "FGIS_HTTP_429"
+    assert captured.value.retryable
+    assert captured.value.exchange is not None
+    assert captured.value.exchange.status_code == 429
+
 
 def test_lookup_material_returns_not_found_without_inventing_a_price(
     monkeypatch: pytest.MonkeyPatch,
@@ -348,6 +517,17 @@ def test_ksr_acquisition_retains_and_replays_raw_response(
     )
     with pytest.raises(ValueError, match="does not reproduce"):
         replay_fgiscs_ksr_search_acquisition(altered)
+
+    with pytest.raises(ValueError, match="contains a failed HTTP response"):
+        FgisCsKsrSearchAcquisition(
+            query=acquired.query,
+            result=acquired.result,
+            exchange=FgisCsRawHttpExchange(
+                request_uri=acquired.exchange.request_uri,
+                response_body=acquired.exchange.response_body,
+                status_code=422,
+            ),
+        )
 
 
 def test_ksr_search_rejects_schema_drift_and_duplicate_identity(

@@ -22,6 +22,7 @@ FGIS_CS_ORIGIN = f"https://{FGIS_CS_HOST}"
 FGIS_CS_PUBLIC_SCHEMA_VERSION = "fgiscs-public-api/v1"
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_HISTORY_CELL_ERROR_STATUS_CODES = frozenset({400, 404, 422})
 _SUBJECTS_PATH = "/api/EstimatedPrice/CountrySubjects"
 _PRICE_ZONES_PATH = "/api/EstimatedPrice/PriceZones"
 _PERIODS_PATH = "/api/EstimatedPrice/Periods"
@@ -38,12 +39,22 @@ FgisCsFetch = Callable[
 class FgisCsRawHttpExchange:
     request_uri: str
     response_body: bytes
+    status_code: int = 200
+    media_type: str = "application/json"
 
     def __post_init__(self) -> None:
         if not self.request_uri.startswith(f"{FGIS_CS_ORIGIN}/api/"):
             raise ValueError("FGIS CS captured request URI is outside the approved origin")
         if not self.response_body:
             raise ValueError("FGIS CS captured response body is empty")
+        if not 100 <= self.status_code <= 599:
+            raise ValueError("FGIS CS captured response status is invalid")
+        if (
+            not self.media_type
+            or self.media_type != self.media_type.strip()
+            or any(character in self.media_type for character in "\r\n\x00")
+        ):
+            raise ValueError("FGIS CS captured response media type is invalid")
 
     @property
     def response_sha256(self) -> str:
@@ -59,6 +70,23 @@ class FgisCsMaterialAcquisition:
     def __post_init__(self) -> None:
         if len(self.exchanges) != 4:
             raise ValueError("FGIS CS material acquisition must retain exactly four responses")
+        if any(
+            item.status_code != 200 or item.media_type != "application/json"
+            for item in self.exchanges
+        ):
+            raise ValueError("FGIS CS material acquisition contains a failed HTTP response")
+
+
+@dataclass(frozen=True)
+class FgisCsMaterialHistoryAcquisition:
+    request: FgisCsMaterialHistoryRequest
+    result: FgisCsMaterialHistoryResult
+    exchanges: tuple[FgisCsRawHttpExchange, ...]
+
+    def __post_init__(self) -> None:
+        expected = 3 + len(self.result.observations)
+        if len(self.exchanges) != expected:
+            raise ValueError("FGIS CS material history acquisition response journal is incomplete")
 
 
 @dataclass(frozen=True)
@@ -68,6 +96,8 @@ class FgisCsKsrSearchAcquisition:
     exchange: FgisCsRawHttpExchange
 
     def __post_init__(self) -> None:
+        if self.exchange.status_code != 200 or self.exchange.media_type != "application/json":
+            raise ValueError("FGIS CS KSR acquisition contains a failed HTTP response")
         if self.result.query != self.query:
             raise ValueError("FGIS CS KSR acquisition query does not match its result")
         if self.result.api_request_uri != self.exchange.request_uri:
@@ -77,9 +107,16 @@ class FgisCsKsrSearchAcquisition:
 
 
 class FgisCsPublicApiError(RuntimeError):
-    def __init__(self, *, code: str, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        code: str,
+        retryable: bool = False,
+        exchange: FgisCsRawHttpExchange | None = None,
+    ) -> None:
         self.code = code
         self.retryable = retryable
+        self.exchange = exchange
         super().__init__(code)
 
 
@@ -109,6 +146,36 @@ class FgisCsMaterialLookupRequest(DomainModel):
         if value != value.strip() or any(character in value for character in "\r\n\x00"):
             raise ValueError("FGIS CS lookup values must be exact single-line literals")
         return value
+
+
+class FgisCsMaterialHistoryRequest(DomainModel):
+    subject_name: str = Field(min_length=1, max_length=500)
+    price_zone_name: str | None = Field(default=None, min_length=1, max_length=500)
+    resource_codes: tuple[str, ...] = Field(min_length=1, max_length=100)
+
+    @field_validator("subject_name", "price_zone_name")
+    @classmethod
+    def lookup_values_are_exact_literals(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if value != value.strip() or any(character in value for character in "\r\n\x00"):
+            raise ValueError("FGIS CS history lookup values must be exact single-line literals")
+        return value
+
+    @field_validator("resource_codes")
+    @classmethod
+    def resource_codes_are_exact_and_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("FGIS CS history request contains duplicate resource codes")
+        if any(
+            not value
+            or len(value) > 200
+            or value != value.strip()
+            or any(character in value for character in "\r\n\x00")
+            for value in values
+        ):
+            raise ValueError("FGIS CS history resource codes must be exact single-line literals")
+        return values
 
 
 class FgisCsMaterialPrice(DomainModel):
@@ -180,6 +247,98 @@ class FgisCsMaterialLookupResult(DomainModel):
             raise ValueError("Raw FGIS CS public data cannot be released as a normalized price")
         if self.price is not None and self.price.resource_code != self.requested_resource_code:
             raise ValueError("FGIS CS result code does not match the requested code")
+        return self
+
+
+class FgisCsMaterialHistoryObservation(DomainModel):
+    period: FgisCsReference
+    requested_resource_code: str = Field(min_length=1, max_length=200)
+    price: FgisCsMaterialPrice | None
+    api_request_uri: str = Field(pattern=r"^https://")
+    response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_status_code: int = Field(ge=100, le=599)
+    response_media_type: str = Field(min_length=1, max_length=200)
+    acquisition_error_code: str | None = Field(default=None, min_length=1, max_length=200)
+    acquisition_error_retryable: bool = False
+    ready_for_pricing: bool = False
+    pricing_blockers: tuple[str, ...] = (
+        "APPROVED_FGIS_MAPPING_REQUIRED",
+        "PROJECT_PRICE_PERIOD_NOT_SELECTED",
+        "COMMERCIAL_BASIS_NOT_ESTABLISHED",
+    )
+
+    @field_validator("response_media_type")
+    @classmethod
+    def response_media_type_is_exact(cls, value: str) -> str:
+        if value != value.strip() or any(character in value for character in "\r\n\x00"):
+            raise ValueError("FGIS CS history media type must be an exact single-line literal")
+        return value
+
+    @model_validator(mode="after")
+    def observation_is_fail_closed(self) -> FgisCsMaterialHistoryObservation:
+        if self.ready_for_pricing or not self.pricing_blockers:
+            raise ValueError("FGIS CS history observation cannot release a price")
+        if self.price is not None and self.price.resource_code != self.requested_resource_code:
+            raise ValueError("FGIS CS history price code differs from the request")
+        if self.acquisition_error_code is None:
+            if self.response_status_code != 200 or self.acquisition_error_retryable:
+                raise ValueError("Successful FGIS CS history observation has an error status")
+        else:
+            if self.price is not None or self.response_status_code == 200:
+                raise ValueError("Failed FGIS CS history observation contains a price")
+            if self.acquisition_error_code not in self.pricing_blockers:
+                raise ValueError("FGIS CS history acquisition error requires a blocker")
+        return self
+
+
+class FgisCsMaterialHistoryResult(DomainModel):
+    schema_version: str
+    subject: FgisCsReference
+    price_zone: FgisCsReference
+    resource_codes: tuple[str, ...] = Field(min_length=1, max_length=100)
+    periods: tuple[FgisCsReference, ...] = Field(min_length=1, max_length=1000)
+    observations: tuple[FgisCsMaterialHistoryObservation, ...] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    public_page_uri: str = Field(pattern=r"^https://")
+    retrieved_at: datetime
+    ready_for_pricing: bool = False
+    pricing_blockers: tuple[str, ...] = (
+        "APPROVED_FGIS_MAPPING_REQUIRED",
+        "PROJECT_PRICE_PERIOD_NOT_SELECTED",
+        "COMMERCIAL_BASIS_NOT_ESTABLISHED",
+    )
+
+    @field_validator("retrieved_at")
+    @classmethod
+    def retrieved_at_is_aware(cls, value: datetime) -> datetime:
+        normalized = ensure_utc(value)
+        if normalized is None or value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("FGIS CS history timestamp must include a timezone")
+        return normalized
+
+    @model_validator(mode="after")
+    def history_is_complete_and_fail_closed(self) -> FgisCsMaterialHistoryResult:
+        if self.schema_version != FGIS_CS_PUBLIC_SCHEMA_VERSION:
+            raise ValueError("Unsupported FGIS CS public response schema")
+        if self.ready_for_pricing or not self.pricing_blockers:
+            raise ValueError("FGIS CS material history cannot release a price")
+        if len(self.resource_codes) != len(set(self.resource_codes)):
+            raise ValueError("FGIS CS material history contains duplicate resource codes")
+        period_identities = tuple((item.id, item.name) for item in self.periods)
+        if len(period_identities) != len(set(period_identities)):
+            raise ValueError("FGIS CS material history contains duplicate periods")
+        expected_pairs = tuple(
+            (resource_code, period.id)
+            for resource_code in self.resource_codes
+            for period in self.periods
+        )
+        actual_pairs = tuple(
+            (item.requested_resource_code, item.period.id) for item in self.observations
+        )
+        if actual_pairs != expected_pairs:
+            raise ValueError("FGIS CS material history observation grid is incomplete or reordered")
         return self
 
 
@@ -346,6 +505,43 @@ class FgisCsPublicApi:
             exchanges=tuple(exchanges),
         )
 
+    def acquire_material_history(
+        self,
+        request: FgisCsMaterialHistoryRequest,
+        *,
+        retrieved_at: datetime | None = None,
+    ) -> FgisCsMaterialHistoryAcquisition:
+        exchanges: list[FgisCsRawHttpExchange] = []
+
+        def captured_fetch(
+            path: str,
+            parameters: dict[str, str | int],
+        ) -> tuple[Any, bytes, str]:
+            try:
+                raw, payload, request_uri = self._get_json(path, parameters)
+            except FgisCsPublicApiError as error:
+                if error.exchange is not None:
+                    exchanges.append(error.exchange)
+                raise
+            exchanges.append(
+                FgisCsRawHttpExchange(
+                    request_uri=request_uri,
+                    response_body=payload,
+                )
+            )
+            return raw, payload, request_uri
+
+        result = self._lookup_material_history_with_fetch(
+            request,
+            fetch=captured_fetch,
+            retrieved_at=retrieved_at or utc_now(),
+        )
+        return FgisCsMaterialHistoryAcquisition(
+            request=request,
+            result=result,
+            exchanges=tuple(exchanges),
+        )
+
     def _lookup_material_with_fetch(
         self,
         request: FgisCsMaterialLookupRequest,
@@ -382,35 +578,13 @@ class FgisCsPublicApi:
             request.period_name,
             label="PERIOD",
         )
-        search_parameters: dict[str, str | int] = {
-            "countrySubjectId": subject.id,
-            "priceZoneId": price_zone.id,
-            "periodId": period.id,
-            "search": request.resource_code,
-            "refresh": "{}",
-            "materials": "true",
-            "value": request.resource_code,
-            "page": 1,
-            "take": 25,
-            "sort": "{}",
-        }
-        raw, payload, request_uri = fetch(
-            _MATERIAL_SEARCH_PATH,
-            search_parameters,
+        price, payload, request_uri = self._lookup_exact_material_record_with_fetch(
+            subject=subject,
+            price_zone=price_zone,
+            period=period,
+            resource_code=request.resource_code,
+            fetch=fetch,
         )
-        try:
-            envelope = _FgisCsMaterialSearchEnvelope.model_validate(raw)
-        except ValueError as error:
-            raise FgisCsPublicApiError(code="FGIS_PRICE_SCHEMA_INVALID") from error
-        items = tuple(item for group in envelope.items for item in group.items)
-        non_exact_codes = sorted(
-            {item.code for item in items if item.code != request.resource_code}
-        )
-        if non_exact_codes:
-            raise FgisCsPublicApiError(code="FGIS_NON_EXACT_SEARCH_RESULT")
-        if len(items) > 1:
-            raise FgisCsPublicApiError(code="FGIS_AMBIGUOUS_EXACT_PRICE")
-        price = self._material_price(items[0]) if items else None
         return FgisCsMaterialLookupResult(
             schema_version=FGIS_CS_PUBLIC_SCHEMA_VERSION,
             subject=subject,
@@ -423,6 +597,137 @@ class FgisCsPublicApi:
             response_sha256=hashlib.sha256(payload).hexdigest(),
             retrieved_at=retrieved_at,
         )
+
+    def _lookup_material_history_with_fetch(
+        self,
+        request: FgisCsMaterialHistoryRequest,
+        *,
+        fetch: FgisCsFetch,
+        retrieved_at: datetime,
+    ) -> FgisCsMaterialHistoryResult:
+        subject = self._resolve_exact(
+            self._get_references_with_fetch(_SUBJECTS_PATH, {}, fetch=fetch),
+            request.subject_name,
+            label="SUBJECT",
+        )
+        zones = self._get_references_with_fetch(
+            _PRICE_ZONES_PATH,
+            {"subjectId": subject.id},
+            fetch=fetch,
+        )
+        if request.price_zone_name is None:
+            if len(zones) != 1:
+                raise FgisCsPublicApiError(code="FGIS_PRICE_ZONE_REQUIRED")
+            price_zone = zones[0]
+        else:
+            price_zone = self._resolve_exact(
+                zones,
+                request.price_zone_name,
+                label="PRICE_ZONE",
+            )
+        periods = self._get_references_with_fetch(
+            _PERIODS_PATH,
+            {"priceZoneId": price_zone.id},
+            fetch=fetch,
+        )
+        if not periods:
+            raise FgisCsPublicApiError(code="FGIS_PERIODS_NOT_FOUND")
+        if len(request.resource_codes) * len(periods) > 10_000:
+            raise FgisCsPublicApiError(code="FGIS_HISTORY_GRID_TOO_LARGE")
+        observations: list[FgisCsMaterialHistoryObservation] = []
+        for resource_code in request.resource_codes:
+            for period in periods:
+                try:
+                    price, payload, request_uri = self._lookup_exact_material_record_with_fetch(
+                        subject=subject,
+                        price_zone=price_zone,
+                        period=period,
+                        resource_code=resource_code,
+                        fetch=fetch,
+                    )
+                except FgisCsPublicApiError as error:
+                    if (
+                        error.retryable
+                        or error.exchange is None
+                        or error.exchange.status_code not in _HISTORY_CELL_ERROR_STATUS_CODES
+                    ):
+                        raise
+                    observations.append(
+                        FgisCsMaterialHistoryObservation(
+                            period=period,
+                            requested_resource_code=resource_code,
+                            price=None,
+                            api_request_uri=error.exchange.request_uri,
+                            response_sha256=error.exchange.response_sha256,
+                            response_status_code=error.exchange.status_code,
+                            response_media_type=error.exchange.media_type,
+                            acquisition_error_code=error.code,
+                            acquisition_error_retryable=False,
+                            pricing_blockers=(
+                                "APPROVED_FGIS_MAPPING_REQUIRED",
+                                "PROJECT_PRICE_PERIOD_NOT_SELECTED",
+                                "COMMERCIAL_BASIS_NOT_ESTABLISHED",
+                                error.code,
+                            ),
+                        )
+                    )
+                    continue
+                observations.append(
+                    FgisCsMaterialHistoryObservation(
+                        period=period,
+                        requested_resource_code=resource_code,
+                        price=price,
+                        api_request_uri=request_uri,
+                        response_sha256=hashlib.sha256(payload).hexdigest(),
+                        response_status_code=200,
+                        response_media_type="application/json",
+                    )
+                )
+        return FgisCsMaterialHistoryResult(
+            schema_version=FGIS_CS_PUBLIC_SCHEMA_VERSION,
+            subject=subject,
+            price_zone=price_zone,
+            resource_codes=request.resource_codes,
+            periods=periods,
+            observations=tuple(observations),
+            public_page_uri=f"{FGIS_CS_ORIGIN}/prices?subjectId={subject.id}",
+            retrieved_at=retrieved_at,
+        )
+
+    def _lookup_exact_material_record_with_fetch(
+        self,
+        *,
+        subject: FgisCsReference,
+        price_zone: FgisCsReference,
+        period: FgisCsReference,
+        resource_code: str,
+        fetch: FgisCsFetch,
+    ) -> tuple[FgisCsMaterialPrice | None, bytes, str]:
+        search_parameters: dict[str, str | int] = {
+            "countrySubjectId": subject.id,
+            "priceZoneId": price_zone.id,
+            "periodId": period.id,
+            "search": resource_code,
+            "refresh": "{}",
+            "materials": "true",
+            "value": resource_code,
+            "page": 1,
+            "take": 25,
+            "sort": "{}",
+        }
+        raw, payload, request_uri = fetch(_MATERIAL_SEARCH_PATH, search_parameters)
+        try:
+            envelope = _FgisCsMaterialSearchEnvelope.model_validate(raw)
+        except ValueError as error:
+            raise FgisCsPublicApiError(code="FGIS_PRICE_SCHEMA_INVALID") from error
+        items = tuple(item for group in envelope.items for item in group.items)
+        non_exact_codes = sorted({item.code for item in items if item.code != resource_code})
+        if non_exact_codes:
+            raise FgisCsPublicApiError(code="FGIS_NON_EXACT_SEARCH_RESULT")
+        if len(items) > 1:
+            raise FgisCsPublicApiError(code="FGIS_AMBIGUOUS_EXACT_PRICE")
+        price = self._material_price(items[0]) if items else None
+        return price, payload, request_uri
 
     def list_subjects(self) -> tuple[FgisCsReference, ...]:
         return self._get_references(_SUBJECTS_PATH, {})
@@ -575,21 +880,36 @@ class FgisCsPublicApi:
             payload = response.read(self._max_response_bytes + 1)
             if len(payload) > self._max_response_bytes:
                 raise FgisCsPublicApiError(code="FGIS_RESPONSE_TOO_LARGE")
+            media_type = response.headers.get_content_type().lower()
+            request_uri = f"{FGIS_CS_ORIGIN}{request_path}"
+            exchange = (
+                FgisCsRawHttpExchange(
+                    request_uri=request_uri,
+                    response_body=payload,
+                    status_code=response.status,
+                    media_type=media_type,
+                )
+                if payload
+                else None
+            )
             if response.status in _RETRYABLE_STATUS_CODES:
                 raise FgisCsPublicApiError(
                     code=f"FGIS_HTTP_{response.status}",
                     retryable=True,
+                    exchange=exchange,
                 )
             if response.status != 200:
-                raise FgisCsPublicApiError(code=f"FGIS_HTTP_{response.status}")
-            media_type = response.headers.get_content_type().lower()
+                raise FgisCsPublicApiError(
+                    code=f"FGIS_HTTP_{response.status}",
+                    exchange=exchange,
+                )
             if media_type != "application/json":
                 raise FgisCsPublicApiError(code="FGIS_MEDIA_TYPE_INVALID")
             try:
                 raw = json.loads(payload.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise FgisCsPublicApiError(code="FGIS_JSON_INVALID") from error
-            return raw, payload, f"{FGIS_CS_ORIGIN}{request_path}"
+            return raw, payload, request_uri
         except FgisCsPublicApiError:
             raise
         except (OSError, TimeoutError, http.client.HTTPException) as error:
@@ -676,6 +996,56 @@ def replay_fgiscs_material_acquisition(
         raise ValueError("FGIS CS acquisition response journal has unexpected entries")
     if replayed != acquisition.result:
         raise ValueError("FGIS CS retained result does not reproduce from raw responses")
+    return replayed
+
+
+def replay_fgiscs_material_history_acquisition(
+    acquisition: FgisCsMaterialHistoryAcquisition,
+) -> FgisCsMaterialHistoryResult:
+    pending = iter(acquisition.exchanges)
+
+    def replay_fetch(
+        path: str,
+        parameters: dict[str, str | int],
+    ) -> tuple[Any, bytes, str]:
+        try:
+            exchange = next(pending)
+        except StopIteration as error:
+            raise ValueError("FGIS CS history response journal is incomplete") from error
+        query = urlencode(parameters)
+        request_path = f"{path}?{query}" if query else path
+        expected_uri = f"{FGIS_CS_ORIGIN}{request_path}"
+        if exchange.request_uri != expected_uri:
+            raise ValueError("FGIS CS history request journal does not reproduce")
+        if exchange.status_code != 200:
+            raise FgisCsPublicApiError(
+                code=f"FGIS_HTTP_{exchange.status_code}",
+                retryable=exchange.status_code in _RETRYABLE_STATUS_CODES,
+                exchange=exchange,
+            )
+        if exchange.media_type != "application/json":
+            raise ValueError("FGIS CS history retained success response is not JSON")
+        try:
+            raw = json.loads(exchange.response_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(
+                "FGIS CS history acquisition contains invalid retained JSON"
+            ) from error
+        return raw, exchange.response_body, exchange.request_uri
+
+    replayed = FgisCsPublicApi()._lookup_material_history_with_fetch(
+        acquisition.request,
+        fetch=replay_fetch,
+        retrieved_at=acquisition.result.retrieved_at,
+    )
+    try:
+        next(pending)
+    except StopIteration:
+        pass
+    else:
+        raise ValueError("FGIS CS history response journal has unexpected entries")
+    if replayed != acquisition.result:
+        raise ValueError("FGIS CS history result does not reproduce from raw responses")
     return replayed
 
 

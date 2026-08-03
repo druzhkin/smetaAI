@@ -191,6 +191,13 @@ The repository currently connects and integration-tests:
   and the atomic output package retains every raw JSON response by SHA-256 plus
   the source and official names side by side. Retrieval remains `UNVERIFIED`;
   it neither approves a mapping nor supplies a price;
+- hash-bound batch FGIS CS history research for the exact KSR candidates
+  retained by that BoQ package. Subject, price zone and all portal-listed
+  periods are fetched once, the complete code-by-period grid is retained and
+  replayed from raw HTTP bodies, and HTTP status/media type remain in the
+  manifest. A portal-level `400`, `404` or `422` blocks that exact observation;
+  authentication, throttling, transport and server failures abort publication.
+  Published fields remain diagnostic evidence and never become a bid price;
 - a fail-closed post-row BoQ pricing matrix that places the exact BoQ/TZ,
   catalog, won-tender, FGIS CS and market source names side by side, preserves
   direct source/document locators and commercial bases, and withholds the
