@@ -10,12 +10,19 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from tenderguard.application.fgiscs_diagnostic import (
+    PreparedFgisCsDiagnosticMaterialPackage,
+    prepare_fgiscs_diagnostic_material_package,
+    verify_fgiscs_diagnostic_material_package,
+)
 from tenderguard.integrations.fgiscs_public import (
     FGIS_CS_PUBLIC_SCHEMA_VERSION,
+    FgisCsKsrSearchAcquisition,
     FgisCsMaterialLookupRequest,
     FgisCsPublicApi,
     FgisCsPublicApiError,
     FgisCsRawHttpExchange,
+    replay_fgiscs_ksr_search_acquisition,
     replay_fgiscs_material_acquisition,
 )
 
@@ -199,6 +206,31 @@ def test_material_acquisition_retains_and_replays_every_raw_response(
     assert all(exchange.response_sha256 for exchange in acquired.exchanges)
     assert replay_fgiscs_material_acquisition(acquired) == acquired.result
 
+    prepared = prepare_fgiscs_diagnostic_material_package(acquired)
+    assert prepared.manifest.status == "UNVERIFIED"
+    assert not prepared.manifest.ready_for_pricing
+    assert [item.sequence for item in prepared.manifest.raw_responses] == [1, 2, 3, 4]
+    assert prepared.manifest.raw_responses[-1].sha256 == acquired.result.response_sha256
+    assert tuple(item[0] for item in prepared.raw_files) == tuple(
+        reference.file_name for reference in prepared.manifest.raw_responses
+    )
+    assert (
+        verify_fgiscs_diagnostic_material_package(
+            prepared.manifest,
+            prepared.raw_files,
+        )
+        == prepared.manifest
+    )
+    corrupted = (
+        *prepared.raw_files[:-1],
+        (prepared.raw_files[-1][0], prepared.raw_files[-1][1] + b" "),
+    )
+    with pytest.raises(ValueError, match="raw response differs"):
+        PreparedFgisCsDiagnosticMaterialPackage(
+            manifest=prepared.manifest,
+            raw_files=corrupted,
+        )
+
     tampered = FgisCsRawHttpExchange(
         request_uri=acquired.exchanges[-1].request_uri,
         response_body=_json(_price_payload(code="02.3.01.02-9999")),
@@ -221,11 +253,14 @@ def test_lookup_material_returns_not_found_without_inventing_a_price(
         [*_metadata_responses(), _Response(_json({"items": []}))],
     )
 
-    result = FgisCsPublicApi().lookup_material(_request())
+    acquired = FgisCsPublicApi().acquire_material(_request())
+    result = acquired.result
 
     assert result.price is None
     assert not result.ready_for_pricing
     assert result.requested_resource_code == "02.3.01.02-1102"
+    prepared = prepare_fgiscs_diagnostic_material_package(acquired)
+    assert "FGIS_PRICE_NOT_PUBLISHED" in prepared.manifest.blockers
 
 
 def test_ksr_search_returns_unverified_source_names_and_units(
@@ -263,6 +298,56 @@ def test_ksr_search_returns_unverified_source_names_and_units(
     parsed = urlsplit(requests[0][1])
     assert parsed.path == "/api/Ksr/TipSearch"
     assert parse_qs(parsed.query) == {"value": ["песок природный"]}
+
+
+def test_ksr_acquisition_retains_and_replays_raw_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _json(
+        [
+            {
+                "id": 9225217,
+                "title": "02.3.01.02-1102",
+                "description": "Песок",
+                "name": "Песок природный",
+                "unitName": "м3",
+            }
+        ]
+    )
+    _install_responses(monkeypatch, [_Response(payload)])
+    acquired = FgisCsPublicApi().acquire_ksr_search(
+        "песок природный",
+        retrieved_at=datetime(2026, 7, 31, 9, 30, tzinfo=UTC),
+    )
+
+    assert acquired.exchange.response_body == payload
+    assert acquired.exchange.response_sha256 == acquired.result.response_sha256
+    assert replay_fgiscs_ksr_search_acquisition(acquired) == acquired.result
+
+    altered_payload = _json(
+        [
+            {
+                "id": 9225217,
+                "title": "02.3.01.02-1102",
+                "description": "Песок",
+                "name": "Другое наименование",
+                "unitName": "м3",
+            }
+        ]
+    )
+    altered_exchange = FgisCsRawHttpExchange(
+        request_uri=acquired.exchange.request_uri,
+        response_body=altered_payload,
+    )
+    altered = FgisCsKsrSearchAcquisition(
+        query=acquired.query,
+        result=acquired.result.model_copy(
+            update={"response_sha256": altered_exchange.response_sha256}
+        ),
+        exchange=altered_exchange,
+    )
+    with pytest.raises(ValueError, match="does not reproduce"):
+        replay_fgiscs_ksr_search_acquisition(altered)
 
 
 def test_ksr_search_rejects_schema_drift_and_duplicate_identity(

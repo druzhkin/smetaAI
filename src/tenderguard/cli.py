@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,7 +22,7 @@ from tenderguard.application.operational_qualification import (
 from tenderguard.application.projects import ProjectService
 from tenderguard.application.recovery_verification import RecoveryVerificationService
 from tenderguard.config import get_settings
-from tenderguard.domain.common import utc_now
+from tenderguard.domain.common import canonical_json, utc_now
 from tenderguard.domain.jobs import DispatchDisposition
 from tenderguard.domain.operational_qualification import (
     LoadProfile,
@@ -331,7 +333,7 @@ def dispatch_final_rework(max_events: int) -> int:
 def probe_fgiscs_ksr(query: str) -> int:
     try:
         result = FgisCsPublicApi().search_ksr(query)
-    except (FgisCsPublicApiError, ValueError) as error:
+    except (FgisCsPublicApiError, ValueError, RuntimeError) as error:
         _emit_fgiscs_probe_error(error)
         return 2
     print(result.model_dump_json(indent=2))
@@ -344,6 +346,7 @@ def probe_fgiscs_material(
     price_zone_name: str | None,
     period_name: str,
     resource_code: str,
+    output_dir: Path | None = None,
 ) -> int:
     try:
         request = FgisCsMaterialLookupRequest(
@@ -352,17 +355,62 @@ def probe_fgiscs_material(
             period_name=period_name,
             resource_code=resource_code,
         )
-        result = FgisCsPublicApi().lookup_material(request)
-    except (FgisCsPublicApiError, ValueError) as error:
+        api = FgisCsPublicApi()
+        if output_dir is None:
+            output_json = api.lookup_material(request).model_dump_json(indent=2)
+        else:
+            from tenderguard.application.fgiscs_diagnostic import (
+                prepare_fgiscs_diagnostic_material_package,
+            )
+
+            prepared = prepare_fgiscs_diagnostic_material_package(api.acquire_material(request))
+            resolved_output = output_dir.resolve()
+            if resolved_output == Path.cwd().resolve() or resolved_output.parent == resolved_output:
+                raise ValueError("FGIS CS diagnostic output directory is too broad")
+            resolved_output.parent.mkdir(parents=True, exist_ok=True)
+            if resolved_output.exists():
+                raise FileExistsError(resolved_output)
+            staging = resolved_output.parent / f".{resolved_output.name}.staging-{uuid4().hex}"
+            staging.mkdir()
+            raw_dir = staging / "raw"
+            try:
+                raw_dir.mkdir()
+                for relative_name, content in prepared.raw_files:
+                    _write_bytes_exclusive(staging / relative_name, content)
+                _write_bytes_exclusive(
+                    staging / "manifest.json",
+                    canonical_json(prepared.manifest) + b"\n",
+                )
+                staging.rename(resolved_output)
+            except Exception:
+                for relative_name, _ in prepared.raw_files:
+                    (staging / relative_name).unlink(missing_ok=True)
+                if raw_dir.exists():
+                    raw_dir.rmdir()
+                (staging / "manifest.json").unlink(missing_ok=True)
+                staging.rmdir()
+                raise
+            output_json = prepared.manifest.model_dump_json(indent=2)
+    except FileExistsError:
+        _emit_fgiscs_probe_error_code("FGIS_DIAGNOSTIC_OUTPUT_ALREADY_EXISTS")
+        return 2
+    except (FgisCsPublicApiError, ValueError, RuntimeError) as error:
         _emit_fgiscs_probe_error(error)
         return 2
-    print(result.model_dump_json(indent=2))
+    except OSError:
+        _emit_fgiscs_probe_error_code("FGIS_DIAGNOSTIC_PACKAGE_WRITE_FAILED")
+        return 2
+    print(output_json)
     return 0
 
 
 def _emit_fgiscs_probe_error(error: Exception) -> None:
     code = error.code if isinstance(error, FgisCsPublicApiError) else "FGIS_REQUEST_INVALID"
     retryable = error.retryable if isinstance(error, FgisCsPublicApiError) else False
+    _emit_fgiscs_probe_error_code(code, retryable=retryable)
+
+
+def _emit_fgiscs_probe_error_code(code: str, *, retryable: bool = False) -> None:
     print(
         json.dumps(
             {
@@ -504,6 +552,245 @@ def _write_text_exclusive(destination: Path, payload: str) -> None:
     except Exception:
         resolved.unlink(missing_ok=True)
         raise
+
+
+def _write_bytes_exclusive(destination: Path, payload: bytes) -> None:
+    resolved = destination.resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        resolved,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        resolved.unlink(missing_ok=True)
+        raise
+
+
+def export_boq_analysis(
+    *,
+    input_path: Path,
+    input_kind: str,
+    project_id: str,
+    project_code: str,
+    release_state: str,
+    output_dir: Path,
+) -> int:
+    try:
+        from tenderguard.application.analysis_reporting import (
+            BoqAnalysisArtifactEntry,
+            BoqAnalysisArtifactManifest,
+            analysis_report_hash,
+            build_analysis_from_extraction,
+            build_analysis_from_price_matrix,
+        )
+        from tenderguard.application.pricing import BoqPriceMatrixView
+        from tenderguard.domain.boq_spreadsheet import BoqXlsxExtractionResult
+        from tenderguard.infrastructure.boq_analysis_export import (
+            DOCX_MEDIA_TYPE,
+            XLSX_MEDIA_TYPE,
+            build_boq_analysis_docx,
+            build_boq_analysis_workbook,
+        )
+    except ModuleNotFoundError as error:
+        if error.name not in {"docx", "openpyxl"}:
+            raise
+        _emit_boq_analysis_error("ANALYSIS_EXPORT_DEPENDENCY_MISSING")
+        return 2
+
+    try:
+        if not input_path.is_file() or input_path.stat().st_size > 50_000_000:
+            raise ValueError("Analysis input is missing or too large")
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Analysis input must be a JSON object")
+        if input_kind == "price-matrix":
+            matrix = BoqPriceMatrixView.model_validate(payload)
+            if matrix.project_id != project_id:
+                raise ValueError("Price matrix project differs from the requested project")
+            report = build_analysis_from_price_matrix(
+                matrix=matrix,
+                project_code=project_code,
+                release_state=release_state,
+            )
+        elif input_kind == "xlsx-extraction":
+            extraction = BoqXlsxExtractionResult.model_validate(payload)
+            if release_state != "BLOCKED":
+                raise ValueError("Raw XLSX extraction can only produce a BLOCKED analysis")
+            report = build_analysis_from_extraction(
+                extraction=extraction,
+                project_id=project_id,
+                project_code=project_code,
+            )
+        else:
+            raise ValueError("Unsupported analysis input kind")
+
+        workbook_content = build_boq_analysis_workbook(report)
+        document_content = build_boq_analysis_docx(report)
+        safe_project_code = re.sub(r"[^\w.-]+", "_", project_code, flags=re.UNICODE).strip("._")
+        if not safe_project_code:
+            safe_project_code = "project"
+        safe_project_code = safe_project_code[:80]
+        suffix = report.analysis_status
+        workbook_name = f"{safe_project_code}_ценовая_матрица_{suffix}.xlsx"
+        document_name = f"{safe_project_code}_отчет_{suffix}.docx"
+        manifest = BoqAnalysisArtifactManifest(
+            project_id=report.project_id,
+            project_code=report.project_code,
+            report_content_hash=analysis_report_hash(report),
+            source_content_hash=report.source_content_hash,
+            analysis_status=report.analysis_status,
+            release_state=report.release_state,
+            generated_at=report.generated_at,
+            artifacts=(
+                BoqAnalysisArtifactEntry(
+                    filename=workbook_name,
+                    media_type=XLSX_MEDIA_TYPE,
+                    sha256=hashlib.sha256(workbook_content).hexdigest(),
+                    size_bytes=len(workbook_content),
+                ),
+                BoqAnalysisArtifactEntry(
+                    filename=document_name,
+                    media_type=DOCX_MEDIA_TYPE,
+                    sha256=hashlib.sha256(document_content).hexdigest(),
+                    size_bytes=len(document_content),
+                ),
+            ),
+        )
+        resolved_output = output_dir.resolve()
+        if resolved_output == Path.cwd().resolve() or resolved_output.parent == resolved_output:
+            raise ValueError("Analysis output directory is too broad")
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        if resolved_output.exists():
+            raise FileExistsError(resolved_output)
+        staging = resolved_output.parent / f".{resolved_output.name}.staging-{uuid4().hex}"
+        staging.mkdir()
+        try:
+            _write_bytes_exclusive(staging / workbook_name, workbook_content)
+            _write_bytes_exclusive(staging / document_name, document_content)
+            _write_text_exclusive(
+                staging / "manifest.json",
+                manifest.model_dump_json(indent=2),
+            )
+            staging.rename(resolved_output)
+        except Exception:
+            for filename in (workbook_name, document_name, "manifest.json"):
+                (staging / filename).unlink(missing_ok=True)
+            staging.rmdir()
+            raise
+    except FileExistsError:
+        _emit_boq_analysis_error("ANALYSIS_OUTPUT_ALREADY_EXISTS")
+        return 2
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, RuntimeError):
+        _emit_boq_analysis_error("ANALYSIS_EXPORT_BLOCKED")
+        return 2
+    print(manifest.model_dump_json(indent=2))
+    return 0
+
+
+def _emit_boq_analysis_error(code: str) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "artifacts_created": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def research_boq_free_sources(
+    *,
+    input_path: Path,
+    profile_path: Path,
+    output_dir: Path,
+) -> int:
+    from tenderguard.application.free_source_research import (
+        BoqFreeSourceResearchProfile,
+        run_boq_free_source_research,
+    )
+    from tenderguard.domain.boq_spreadsheet import BoqXlsxExtractionResult
+
+    try:
+        if (
+            not input_path.is_file()
+            or input_path.stat().st_size > 50_000_000
+            or not profile_path.is_file()
+            or profile_path.stat().st_size > 5_000_000
+        ):
+            raise ValueError("Free-source research input is missing or too large")
+        extraction_payload = json.loads(input_path.read_text(encoding="utf-8"))
+        profile_payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        if not isinstance(extraction_payload, dict) or not isinstance(profile_payload, dict):
+            raise ValueError("Free-source research inputs must be JSON objects")
+        extraction = BoqXlsxExtractionResult.model_validate(extraction_payload)
+        profile = BoqFreeSourceResearchProfile.model_validate(profile_payload)
+        api = FgisCsPublicApi()
+        prepared = run_boq_free_source_research(
+            extraction=extraction,
+            profile=profile,
+            acquire_ksr_search=api.acquire_ksr_search,
+        )
+
+        resolved_output = output_dir.resolve()
+        if resolved_output == Path.cwd().resolve() or resolved_output.parent == resolved_output:
+            raise ValueError("Free-source research output directory is too broad")
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        if resolved_output.exists():
+            raise FileExistsError(resolved_output)
+        staging = resolved_output.parent / f".{resolved_output.name}.staging-{uuid4().hex}"
+        staging.mkdir()
+        raw_dir = staging / "raw"
+        try:
+            raw_dir.mkdir()
+            for object_hash, content in prepared.raw_responses:
+                _write_bytes_exclusive(raw_dir / f"{object_hash}.json", content)
+            _write_bytes_exclusive(
+                staging / "manifest.json",
+                canonical_json(prepared.result) + b"\n",
+            )
+            staging.rename(resolved_output)
+        except Exception:
+            for object_hash, _ in prepared.raw_responses:
+                (raw_dir / f"{object_hash}.json").unlink(missing_ok=True)
+            if raw_dir.exists():
+                raw_dir.rmdir()
+            (staging / "manifest.json").unlink(missing_ok=True)
+            staging.rmdir()
+            raise
+    except FileExistsError:
+        _emit_free_source_research_error("FREE_SOURCE_RESEARCH_OUTPUT_ALREADY_EXISTS")
+        return 2
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, RuntimeError):
+        _emit_free_source_research_error("FREE_SOURCE_RESEARCH_BLOCKED")
+        return 2
+    print(prepared.result.model_dump_json(indent=2))
+    return 0 if prepared.result.status == "UNVERIFIED" else 2
+
+
+def _emit_free_source_research_error(code: str) -> None:
+    print(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "code": code,
+                "package_published": False,
+                "ready_for_pricing": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 def import_governed_boq_xlsx(
@@ -832,6 +1119,9 @@ def _emit_qualification_result(
 
 
 def main() -> None:
+    stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if os.name == "nt" and callable(stdout_reconfigure):
+        stdout_reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(prog="tenderguard")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("doctor", help="Check runtime dependencies without changing data")
@@ -863,6 +1153,7 @@ def main() -> None:
     material_parser.add_argument("--price-zone-name")
     material_parser.add_argument("--period-name", required=True)
     material_parser.add_argument("--resource-code", required=True)
+    material_parser.add_argument("--output-dir", type=Path)
     boq_probe_parser = subcommands.add_parser(
         "probe-boq-xlsx",
         help="Extract provenance-rich UNVERIFIED BoQ row candidates by an exact profile",
@@ -881,6 +1172,27 @@ def main() -> None:
     boq_import_parser.add_argument("--document-revision-id", required=True)
     boq_import_parser.add_argument("--request-id", required=True)
     boq_import_parser.add_argument("--reason", required=True)
+    boq_analysis_parser = subcommands.add_parser(
+        "export-boq-analysis",
+        help="Create fail-closed XLSX and DOCX reports from a governed matrix or XLSX probe",
+    )
+    boq_analysis_parser.add_argument("--input", required=True, type=Path)
+    boq_analysis_parser.add_argument(
+        "--input-kind",
+        required=True,
+        choices=("price-matrix", "xlsx-extraction"),
+    )
+    boq_analysis_parser.add_argument("--project-id", required=True)
+    boq_analysis_parser.add_argument("--project-code", required=True)
+    boq_analysis_parser.add_argument("--release-state", default="BLOCKED")
+    boq_analysis_parser.add_argument("--output-dir", required=True, type=Path)
+    free_source_parser = subcommands.add_parser(
+        "research-boq-free-sources",
+        help=("Collect raw UNVERIFIED FGIS KSR candidates and a source plan for every BoQ row"),
+    )
+    free_source_parser.add_argument("--input", required=True, type=Path)
+    free_source_parser.add_argument("--profile", required=True, type=Path)
+    free_source_parser.add_argument("--output-dir", required=True, type=Path)
     fgiscs_import_parser = subcommands.add_parser(
         "import-governed-fgiscs-material",
         help="Retain and replay one policy-bound UNVERIFIED FGIS CS material response",
@@ -927,6 +1239,7 @@ def main() -> None:
                 price_zone_name=arguments.price_zone_name,
                 period_name=arguments.period_name,
                 resource_code=arguments.resource_code,
+                output_dir=arguments.output_dir,
             )
         )
     if arguments.command == "probe-boq-xlsx":
@@ -945,6 +1258,25 @@ def main() -> None:
                 document_revision_id=arguments.document_revision_id,
                 request_id=arguments.request_id,
                 reason=arguments.reason,
+            )
+        )
+    if arguments.command == "export-boq-analysis":
+        raise SystemExit(
+            export_boq_analysis(
+                input_path=arguments.input,
+                input_kind=arguments.input_kind,
+                project_id=arguments.project_id,
+                project_code=arguments.project_code,
+                release_state=arguments.release_state,
+                output_dir=arguments.output_dir,
+            )
+        )
+    if arguments.command == "research-boq-free-sources":
+        raise SystemExit(
+            research_boq_free_sources(
+                input_path=arguments.input,
+                profile_path=arguments.profile,
+                output_dir=arguments.output_dir,
             )
         )
     if arguments.command == "import-governed-fgiscs-material":

@@ -61,6 +61,21 @@ class FgisCsMaterialAcquisition:
             raise ValueError("FGIS CS material acquisition must retain exactly four responses")
 
 
+@dataclass(frozen=True)
+class FgisCsKsrSearchAcquisition:
+    query: str
+    result: FgisCsKsrSearchResult
+    exchange: FgisCsRawHttpExchange
+
+    def __post_init__(self) -> None:
+        if self.result.query != self.query:
+            raise ValueError("FGIS CS KSR acquisition query does not match its result")
+        if self.result.api_request_uri != self.exchange.request_uri:
+            raise ValueError("FGIS CS KSR acquisition URI does not match its retained response")
+        if self.result.response_sha256 != self.exchange.response_sha256:
+            raise ValueError("FGIS CS KSR acquisition hash does not match its retained response")
+
+
 class FgisCsPublicApiError(RuntimeError):
     def __init__(self, *, code: str, retryable: bool = False) -> None:
         self.code = code
@@ -418,6 +433,50 @@ class FgisCsPublicApi:
         *,
         retrieved_at: datetime | None = None,
     ) -> FgisCsKsrSearchResult:
+        return self.acquire_ksr_search(query, retrieved_at=retrieved_at).result
+
+    def acquire_ksr_search(
+        self,
+        query: str,
+        *,
+        retrieved_at: datetime | None = None,
+    ) -> FgisCsKsrSearchAcquisition:
+        exchange: FgisCsRawHttpExchange | None = None
+
+        def captured_fetch(
+            path: str,
+            parameters: dict[str, str | int],
+        ) -> tuple[Any, bytes, str]:
+            nonlocal exchange
+            if exchange is not None:
+                raise RuntimeError("FGIS CS KSR search made more than one request")
+            raw, payload, request_uri = self._get_json(path, parameters)
+            exchange = FgisCsRawHttpExchange(
+                request_uri=request_uri,
+                response_body=payload,
+            )
+            return raw, payload, request_uri
+
+        result = self._search_ksr_with_fetch(
+            query,
+            fetch=captured_fetch,
+            retrieved_at=retrieved_at or utc_now(),
+        )
+        if exchange is None:
+            raise RuntimeError("FGIS CS KSR search retained no response")
+        return FgisCsKsrSearchAcquisition(
+            query=query,
+            result=result,
+            exchange=exchange,
+        )
+
+    def _search_ksr_with_fetch(
+        self,
+        query: str,
+        *,
+        fetch: FgisCsFetch,
+        retrieved_at: datetime,
+    ) -> FgisCsKsrSearchResult:
         if (
             not query
             or query != query.strip()
@@ -425,7 +484,7 @@ class FgisCsPublicApi:
             or any(character in query for character in "\r\n\x00")
         ):
             raise ValueError("FGIS CS KSR query must be an exact single-line literal")
-        raw, payload, request_uri = self._get_json(
+        raw, payload, request_uri = fetch(
             _KSR_TIP_SEARCH_PATH,
             {"value": query},
         )
@@ -617,4 +676,40 @@ def replay_fgiscs_material_acquisition(
         raise ValueError("FGIS CS acquisition response journal has unexpected entries")
     if replayed != acquisition.result:
         raise ValueError("FGIS CS retained result does not reproduce from raw responses")
+    return replayed
+
+
+def replay_fgiscs_ksr_search_acquisition(
+    acquisition: FgisCsKsrSearchAcquisition,
+) -> FgisCsKsrSearchResult:
+    used = False
+
+    def replay_fetch(
+        path: str,
+        parameters: dict[str, str | int],
+    ) -> tuple[Any, bytes, str]:
+        nonlocal used
+        if used:
+            raise ValueError("FGIS CS KSR acquisition contains an unexpected extra request")
+        used = True
+        query = urlencode(parameters)
+        request_path = f"{path}?{query}" if query else path
+        expected_uri = f"{FGIS_CS_ORIGIN}{request_path}"
+        if acquisition.exchange.request_uri != expected_uri:
+            raise ValueError("FGIS CS KSR acquisition request journal does not reproduce")
+        try:
+            raw = json.loads(acquisition.exchange.response_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("FGIS CS KSR acquisition contains invalid retained JSON") from error
+        return raw, acquisition.exchange.response_body, acquisition.exchange.request_uri
+
+    replayed = FgisCsPublicApi()._search_ksr_with_fetch(
+        acquisition.query,
+        fetch=replay_fetch,
+        retrieved_at=acquisition.result.retrieved_at,
+    )
+    if not used:
+        raise ValueError("FGIS CS KSR acquisition response journal is incomplete")
+    if replayed != acquisition.result:
+        raise ValueError("FGIS CS KSR retained result does not reproduce from raw response")
     return replayed

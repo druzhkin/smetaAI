@@ -186,11 +186,25 @@ The repository currently connects and integration-tests:
   replayed before use; the operator UI shows the BoQ and official source names
   side by side, while the result remains `UNVERIFIED` and `BLOCKED` and never
   creates a price quote automatically;
+- hash-bound diagnostic research for an entire extracted XLSX BoQ: every row
+  is explicitly classified, material rows issue bounded FGIS CS KSR searches,
+  and the atomic output package retains every raw JSON response by SHA-256 plus
+  the source and official names side by side. Retrieval remains `UNVERIFIED`;
+  it neither approves a mapping nor supplies a price;
 - a fail-closed post-row BoQ pricing matrix that places the exact BoQ/TZ,
   catalog, won-tender, FGIS CS and market source names side by side, preserves
   direct source/document locators and commercial bases, and withholds the
   proposed amount unless source passports, all three required source groups,
   nomenclature, policy, deterministic decision replay and approvals pass;
+- a fail-closed analysis-package worker that writes a new XLSX matrix, a short
+  DOCX business report and a hash manifest from the governed matrix or a
+  diagnostic extraction. Blocked rows expose no proposed price or line total,
+  the project total remains blank without a fixed released snapshot, and the
+  XLSX contains no formulas, hidden sheets or external links. Complete packages
+  are staged before publication and deterministic OOXML bytes are covered by
+  the manifest. Transactional
+  outbox consumption, governed artifact storage and production qualification
+  remain outstanding;
 - governed calculation and release surfaces: the browser displays a
   server-generated candidate and submits only its hash, project version and
   reason; the server rebuilds all atomic inputs and policy before fixing the

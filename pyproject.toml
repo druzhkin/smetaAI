@@ -30,6 +30,7 @@ document-worker = [
   "openpyxl>=3.1,<4",
   "pillow>=11,<13",
   "pypdf>=5,<7",
+  "python-docx>=1.1,<2",
 ]
 dev = [
   "boto3-stubs[s3]>=1.35,<2",
@@ -38,6 +39,7 @@ dev = [
   "pillow>=11,<13",
   "pip-audit>=2.7,<3",
   "pypdf>=5,<7",
+  "python-docx>=1.1,<2",
   "pytest>=8.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.9,<1",

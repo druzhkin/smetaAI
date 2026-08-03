@@ -21,7 +21,10 @@ def _workbook_with_cached_formula_error(*, formula: str, cached_error: str) -> b
     workbook.save(output)
 
     formula_xml = formula.removeprefix("=")
-    original = f'<c r="A2"><f>{formula_xml}</f><v /></c>'.encode()
+    originals = (
+        f'<c r="A2"><f>{formula_xml}</f><v /></c>'.encode(),
+        f'<c r="A2"><f>{formula_xml}</f><v></v></c>'.encode(),
+    )
     replacement = (f'<c r="A2" t="e"><f>{formula_xml}</f><v>{cached_error}</v></c>').encode()
     patched = BytesIO()
     output.seek(0)
@@ -32,7 +35,8 @@ def _workbook_with_cached_formula_error(*, formula: str, cached_error: str) -> b
         for info in source.infolist():
             payload = source.read(info.filename)
             if info.filename == "xl/worksheets/sheet1.xml":
-                assert original in payload
+                original = next((item for item in originals if item in payload), None)
+                assert original is not None
                 payload = payload.replace(original, replacement)
             target.writestr(info, payload)
     return patched.getvalue()

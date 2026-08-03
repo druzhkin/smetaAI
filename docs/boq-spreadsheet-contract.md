@@ -2,7 +2,7 @@
 
 ## Current status
 
-Five bounded stages are implemented:
+Six bounded stages are implemented:
 
 - `probe-boq-xlsx` performs profile-pinned diagnostic extraction and writes
   provenance-rich row candidates without changing governed project data.
@@ -22,6 +22,10 @@ Five bounded stages are implemented:
   policy. The browser cannot alter the value, unit, rounding or waste factor.
   A critical line remains `BLOCKED` because one reviewed spreadsheet row is
   not independent quantity evidence.
+- `export-boq-analysis` creates a new XLSX price matrix, a short DOCX business
+  report and a hash manifest from a governed price-matrix view or a diagnostic
+  extraction. It preserves source-side names and locators, exposes blockers and
+  leaves blocked financial cells and the project total blank.
 
 These stages do not verify nomenclature, calculate a price, prove scope
 completeness or release a bid. A blocked workbook creates no observations. The
@@ -29,7 +33,10 @@ production environment remains `BLOCKED` until a real parser qualification,
 approved profile binding, service-account configuration, independent
 validation and operational approval exist.
 
-Enriched XLSX generation is not implemented.
+This export is an analysis-package worker, not the production release worker.
+It does not consume the transactional outbox, store artifacts in the governed
+object store, prove a fixed calculation snapshot or authorize a bid. The CLI
+therefore cannot create an `APPROVED_FOR_BID` package from user-supplied flags.
 
 ## Governed import boundary
 
@@ -178,11 +185,12 @@ of every catalog-declared critical attribute. Missing evidence produces
 `INSUFFICIENT_DATA`; a material difference produces
 `TECHNICALLY_UNACCEPTABLE`.
 
-## Required enriched workbook
+## Enriched analysis workbook
 
-Future generation must create a new content-addressed workbook and never
-overwrite the upload. Original sheets and source values remain unchanged.
-Visible output sheets must include:
+The implemented worker creates new exclusive files and never overwrites the
+upload or an existing output directory. It stages the complete package before
+publication and canonicalizes OOXML metadata so repeated builds from the same
+report are byte-for-byte reproducible. Visible output sheets are:
 
 1. `ВОР_с_оценкой` — source row and controlled calculation columns.
 2. `Источники` — exact sources and normalized prices.
@@ -197,9 +205,11 @@ system, exact locators/URIs, commercial basis, dates, normalized prices,
 matching rationale, blockers and reviewer/approver identities.
 
 An analysis workbook may contain blocked rows, but blocked proposed prices and
-totals must remain blank. A release workbook may be generated only from an
+totals remain blank. It contains no formulas, hidden sheets or external links.
+A release workbook may be generated only by a future governed consumer from an
 approved, fixed snapshot that has passed independent recalculation. Workbook
-formulas are not authoritative; signed server values and provenance are.
+values are not authoritative by themselves; signed server values and
+provenance are.
 
 ## Verification gate
 
@@ -213,7 +223,8 @@ drift, missing units, stale evidence, cross-item attributes, formula errors,
 tampered output, tampered manual-review decisions, critical single-source
 quantity rejection and blocked-price withholding.
 
-The supplied Alabuga workbook currently fails the diagnostic import gate.
-Its candidates cannot enter the governed calculation until the source is
-repaired or an independently approved profile and document correction
-resolves every blocker.
+The supplied colleague calculation workbook for Alabuga fails the strict OOXML
+intake gate and cannot be treated as evidence. The original VOR inside the
+supplied archive can be extracted diagnostically with a hash-pinned profile,
+but its 23 candidates remain `BLOCKED`: they have not entered the governed
+calculation and have no verified nomenclature or prices.
