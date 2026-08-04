@@ -43,7 +43,5 @@ RUN uv sync --frozen --no-editable
 
 ENV PATH="/app/.venv/bin:${PATH}"
 
-USER tenderguard
-
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn tenderguard.api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "chown tenderguard:tenderguard /app/var && exec setpriv --reuid=tenderguard --regid=tenderguard --init-groups sh -c 'alembic upgrade head && exec uvicorn tenderguard.api.main:app --host 0.0.0.0 --port 8000'"]
