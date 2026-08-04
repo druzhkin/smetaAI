@@ -560,6 +560,39 @@ def _build_fgis_candidates(
                         },
                     )
                 )
+        selected_codes = set(line_result.resource_codes)
+        if free_line.fgis_search_result is not None:
+            for ksr_candidate in free_line.fgis_search_result.candidates:
+                if ksr_candidate.resource_code in selected_codes:
+                    continue
+                assert free_line.raw_response_sha256 is not None
+                candidates.append(
+                    _fgis_candidate(
+                        bundle=bundle,
+                        line=free_line,
+                        line_blockers=line_result.pricing_blockers,
+                        source_item_name=ksr_candidate.source_item_name,
+                        source_unit=ksr_candidate.unit,
+                        source_record_id=ksr_candidate.source_record_id,
+                        resource_code=ksr_candidate.resource_code,
+                        source_locator=free_line.fgis_search_result.api_request_uri,
+                        evidence_sha256=free_line.raw_response_sha256,
+                        observed_at=free_line.fgis_search_result.retrieved_at,
+                        period_name=None,
+                        candidate_content_hash=content_hash(ksr_candidate),
+                        observed_amounts=(),
+                        attributes={
+                            "Код КСР": ksr_candidate.resource_code,
+                            "Роль": "Вариант поиска; код не выбран",
+                            "Субъект": bundle.fgis_history.history.subject.name,
+                            "Ценовая зона": bundle.fgis_history.history.price_zone.name,
+                        },
+                        extra_blockers=(
+                            "FGIS_KSR_SEARCH_CANDIDATE_NOT_SELECTED",
+                            "TECHNICAL_EQUIVALENCE_NOT_ESTABLISHED",
+                        ),
+                    )
+                )
         result[line_result.candidate_id] = tuple(candidates)
     return result
 

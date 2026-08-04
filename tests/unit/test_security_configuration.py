@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -533,6 +534,7 @@ def test_runtime_config_exposes_only_public_browser_authentication_settings(
             "application_version": "0.1.0",
             "application_build_reference": "git:" + "b" * 40,
             "max_upload_bytes": 524288000,
+            "showcase_operator_upload_enabled": False,
         }
         assert "private-test-value" not in response.text
         csp_directives = {
@@ -582,6 +584,119 @@ def test_public_demo_changes_only_the_browser_mode_and_keeps_api_protected(
     engine.dispose()
 
 
+def test_public_demo_operator_key_can_create_a_project_without_exposing_the_key(
+    tmp_path: Path,
+) -> None:
+    access_key = "test-showcase-operator-key-that-is-at-least-32-bytes"
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite+pysqlite://",
+        public_demo_enabled=True,
+        showcase_operator_access_key=access_key,
+        showcase_operator_actor_id="showcase-operator",
+        showcase_operator_organization_id="showcase-org",
+        audit_signing_key="private-test-value-that-must-not-be-exposed",
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+        quarantine_store=LocalObjectStore(tmp_path / "quarantine"),
+    )
+    with TestClient(app) as client:
+        runtime = client.get("/v1/runtime-config")
+        assert runtime.status_code == 200
+        assert runtime.json()["showcase_operator_upload_enabled"] is True
+        assert access_key not in runtime.text
+
+        invalid = client.post(
+            "/v1/projects",
+            headers={
+                "Authorization": "Bearer wrong-showcase-key",
+                "Idempotency-Key": "showcase-project-invalid-1",
+            },
+            json={
+                "code": "SHOWCASE-BLOCKED",
+                "name": "Must not be created",
+                "reason": "Invalid operator access must fail closed",
+            },
+        )
+        assert invalid.status_code == 401
+
+        created = client.post(
+            "/v1/projects",
+            headers={
+                "Authorization": f"Bearer {access_key}",
+                "Idempotency-Key": "showcase-project-create-1",
+            },
+            json={
+                "code": "SHOWCASE-001",
+                "name": "Showcase upload project",
+                "reason": "Create an isolated operator-owned draft",
+            },
+        )
+        assert created.status_code == 201
+        assert created.json()["code"] == "SHOWCASE-001"
+        assert created.json()["state"] == "DRAFT"
+
+        source_bytes = b"showcase workbook bytes"
+        uploaded = client.post(
+            f"/v1/projects/{created.json()['id']}/documents",
+            headers={
+                "Authorization": f"Bearer {access_key}",
+                "Idempotency-Key": "showcase-document-upload-1",
+            },
+            data={
+                "logical_key": "source-file-001",
+                "title": "scope.xlsx",
+                "document_type": "PROJECT_SOURCE_FILE",
+                "revision_label": "R1",
+                "reason": "Retain the operator-provided source without trusting it",
+                "critical": "true",
+                "make_candidate_current": "true",
+            },
+            files={
+                "upload": (
+                    "scope.xlsx",
+                    source_bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert uploaded.status_code == 202
+        assert uploaded.json()["status"] == "QUARANTINED"
+        assert uploaded.json()["object_hash"] == hashlib.sha256(source_bytes).hexdigest()
+        assert uploaded.json()["uploaded_by"] == "showcase-operator"
+        assert uploaded.json()["processed_document_id"] is None
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"showcase_operator_access_key": "x" * 32},
+        {
+            "public_demo_enabled": True,
+            "showcase_operator_access_key": "too-short",
+            "showcase_operator_actor_id": "operator",
+            "showcase_operator_organization_id": "org",
+        },
+        {
+            "showcase_operator_access_key": "x" * 32,
+            "showcase_operator_actor_id": "operator",
+            "showcase_operator_organization_id": "org",
+        },
+    ],
+)
+def test_showcase_operator_access_rejects_incomplete_or_unsafe_configuration(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(app_env="test", **overrides)
+
+
 def test_public_demo_cannot_enable_insecure_development_authentication() -> None:
     with pytest.raises(
         ValidationError,
@@ -618,6 +733,7 @@ def test_operator_ui_serves_only_declared_spa_routes_and_assets(tmp_path: Path) 
     )
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
+        assert client.get("/import").status_code == 200
         assert client.get("/tasks").status_code == 200
         assert client.get("/tasks/approval-task-1").status_code == 200
         assert client.get("/projects/project-1/BOQ_SCOPE").status_code == 200

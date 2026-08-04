@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     operator_ui_enabled: bool = True
     operator_ui_dist_path: Path | None = None
     public_demo_enabled: bool = False
+    showcase_operator_access_key: SecretStr | None = None
+    showcase_operator_actor_id: str | None = None
+    showcase_operator_organization_id: str | None = None
     diagnostic_project_manifest_path: Path | None = None
     allow_insecure_dev_auth: bool = False
     audit_signing_key: SecretStr = SecretStr(DEVELOPMENT_AUDIT_SIGNING_KEY)
@@ -179,6 +182,12 @@ class Settings(BaseSettings):
             ),
             ("integration receiver ID", self.integration_receiver_id, 200),
             ("OIDC web client ID", self.oidc_web_client_id, 200),
+            ("showcase operator actor ID", self.showcase_operator_actor_id, 128),
+            (
+                "showcase operator organization ID",
+                self.showcase_operator_organization_id,
+                64,
+            ),
             ("rate-limit identity key ID", self.rate_limit_identity_key_id, 200),
             ("BoQ XLSX adapter", self.boq_xlsx_adapter, 200),
             (
@@ -233,6 +242,24 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Public demo cannot be combined with insecure development authentication"
             )
+        showcase_operator_binding = (
+            self.showcase_operator_access_key,
+            self.showcase_operator_actor_id,
+            self.showcase_operator_organization_id,
+        )
+        if any(showcase_operator_binding) and not all(showcase_operator_binding):
+            raise ValueError(
+                "Showcase operator access requires key, actor ID, and organization ID"
+            )
+        if self.showcase_operator_access_key is not None:
+            if len(self.showcase_operator_access_key.get_secret_value().encode("utf-8")) < 32:
+                raise ValueError("Showcase operator access key is shorter than 32 bytes")
+            if not self.public_demo_enabled:
+                raise ValueError("Showcase operator access requires the public demo")
+            if self.app_env in {"staging", "production"}:
+                raise ValueError(
+                    "Shared showcase operator access is forbidden in staging and production"
+                )
         if self.app_env in {"staging", "production"}:
             problems: list[str] = []
             if self.diagnostic_project_manifest_path is not None:
@@ -458,6 +485,14 @@ class Settings(BaseSettings):
             and self.rate_limit_organization_mutation_requests
             and self.rate_limit_actor_upload_requests
             and self.rate_limit_organization_upload_requests
+        )
+
+    @property
+    def showcase_operator_access_configured(self) -> bool:
+        return bool(
+            self.showcase_operator_access_key
+            and self.showcase_operator_actor_id
+            and self.showcase_operator_organization_id
         )
 
 

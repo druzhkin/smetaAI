@@ -14,6 +14,18 @@ export interface PublicDiagnosticSnapshot {
     blocked_rows: number;
     won_tender_candidates: number;
     fgis_candidates: number;
+    work_rows: number;
+    material_rows: number;
+    logistics_rows: number;
+    fgis_catalog_candidates: number;
+    fgis_selected_codes: number;
+    fgis_queried_periods: number;
+    fgis_raw_responses: number;
+    fgis_rows_with_published_prices: number;
+    fgis_published_observations: number;
+    fgis_codes_with_published_prices: number;
+    fgis_exact_literal_published_observations: number;
+    fgis_alternative_published_observations: number;
     market_candidates: number;
     observed_amounts: number;
   };
@@ -64,6 +76,18 @@ export function parsePublicDiagnosticSnapshot(
     "blocked_rows",
     "won_tender_candidates",
     "fgis_candidates",
+    "work_rows",
+    "material_rows",
+    "logistics_rows",
+    "fgis_catalog_candidates",
+    "fgis_selected_codes",
+    "fgis_queried_periods",
+    "fgis_raw_responses",
+    "fgis_rows_with_published_prices",
+    "fgis_published_observations",
+    "fgis_codes_with_published_prices",
+    "fgis_exact_literal_published_observations",
+    "fgis_alternative_published_observations",
     "market_candidates",
     "observed_amounts",
   ] as const;

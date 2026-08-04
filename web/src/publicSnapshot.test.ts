@@ -12,9 +12,21 @@ describe("public diagnostic snapshot", () => {
       boq_rows: 23,
       blocked_rows: 23,
       won_tender_candidates: 0,
-      fgis_candidates: 12,
+      fgis_candidates: 73,
+      work_rows: 15,
+      material_rows: 7,
+      logistics_rows: 1,
+      fgis_catalog_candidates: 60,
+      fgis_selected_codes: 60,
+      fgis_queried_periods: 13,
+      fgis_raw_responses: 783,
+      fgis_rows_with_published_prices: 2,
+      fgis_published_observations: 16,
+      fgis_codes_with_published_prices: 3,
+      fgis_exact_literal_published_observations: 4,
+      fgis_alternative_published_observations: 12,
       market_candidates: 22,
-      observed_amounts: 34,
+      observed_amounts: 70,
     });
     expect(alabugaPublicSnapshot.matrix.rows).toHaveLength(23);
     expect(

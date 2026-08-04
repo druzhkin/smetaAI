@@ -42,6 +42,8 @@ const blockerLabels: Record<string, string> = {
     "точное буквальное совпадение КСР неоднозначно",
   FGIS_KSR_EXACT_LITERAL_CANDIDATE_NOT_FOUND:
     "точное буквальное совпадение КСР не найдено",
+  FGIS_KSR_SEARCH_CANDIDATE_NOT_SELECTED:
+    "вариант найден поиском КСР, но не выбран для истории цен",
   FGIS_KSR_SUITABLE_CANDIDATE_NOT_SELECTED: "подходящий код КСР не выбран",
   FGIS_PRICE_ACQUISITION_REQUIRED: "цену ФГИС ЦС ещё нужно получить",
   FGIS_PRICE_NOT_PUBLISHED_FOR_RETRIEVED_PERIODS:
@@ -191,6 +193,7 @@ function CandidateCard({
   sourceKind: "ФГИС ЦС" | "Рынок";
 }) {
   const safeUrl = safeExternalHttpsUrl(candidate.source_uri);
+  const safeLocatorUrl = safeExternalHttpsUrl(candidate.source_locator);
   return (
     <article className="public-candidate">
       <header className="public-candidate__header">
@@ -199,7 +202,15 @@ function CandidateCard({
           <strong>{candidate.source_item_name}</strong>
           <small>{candidate.source_display_name}</small>
         </div>
-        <em>Кандидат</em>
+        <em>
+          {sourceKind === "ФГИС ЦС"
+            ? candidate.observed_amounts.length > 0
+              ? candidate.comparison_method === "EXACT_LITERAL_NAME_AND_UNIT"
+                ? "Точное имя и единица"
+                : "Альтернативная запись"
+              : "Вариант КСР"
+            : "Рыночная находка"}
+        </em>
       </header>
 
       {candidate.observed_amounts.length > 0 ? (
@@ -223,7 +234,9 @@ function CandidateCard({
         </div>
       ) : (
         <p className="public-candidate__no-amount">
-          Наименование найдено, но опубликованная сумма не получена.
+          {sourceKind === "ФГИС ЦС"
+            ? "Наименование найдено в каталоге КСР, но для этой карточки опубликованная сумма не получена."
+            : "Наименование найдено, но опубликованная сумма не получена."}
         </p>
       )}
 
@@ -289,21 +302,38 @@ function CandidateCard({
         </div>
       </details>
 
-      {safeUrl === null ? (
-        <span className="public-candidate__link is-invalid">
-          Ссылка источника недоступна
-        </span>
-      ) : (
-        <a
-          className="public-candidate__link"
-          href={safeUrl}
-          target="_blank"
-          rel="noreferrer noopener"
-        >
-          Открыть первоисточник
-          <Icon name="arrow" size={15} />
-        </a>
-      )}
+      <div className="public-candidate__links">
+        {safeUrl === null && safeLocatorUrl === null ? (
+          <span className="public-candidate__link is-invalid">
+            Ссылка источника недоступна
+          </span>
+        ) : (
+          <>
+            {safeUrl !== null && (
+              <a
+                className="public-candidate__link"
+                href={safeUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Открыть портал
+                <Icon name="arrow" size={15} />
+              </a>
+            )}
+            {safeLocatorUrl !== null && safeLocatorUrl !== safeUrl && (
+              <a
+                className="public-candidate__link"
+                href={safeLocatorUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Открыть точный запрос
+                <Icon name="arrow" size={15} />
+              </a>
+            )}
+          </>
+        )}
+      </div>
     </article>
   );
 }
@@ -519,6 +549,9 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           <a href="#overview">Сводка</a>
           <a href="#positions">Позиции ВОР</a>
           <a href="#method">Как работает</a>
+          {config.showcase_operator_upload_enabled && (
+            <a href="/import">Новый проект</a>
+          )}
         </nav>
         <div className="public-demo__mode">
           <Icon name="trace" size={16} />
@@ -542,6 +575,12 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
             расчёт.
           </p>
           <div className="public-hero__actions">
+            {config.showcase_operator_upload_enabled && (
+              <a className="button button--public" href="/import">
+                Загрузить свой проект
+                <Icon name="arrow" />
+              </a>
+            )}
             <a className="button button--public" href="#positions">
               Открыть позиции
               <Icon name="arrow" />
@@ -583,8 +622,12 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
         </article>
         <article>
           <span>02 / ФГИС ЦС</span>
-          <strong>{snapshot.summary.fgis_candidates}</strong>
-          <p>найденных записей с наименованием, периодом и первоисточником</p>
+          <strong>{snapshot.summary.fgis_catalog_candidates}</strong>
+          <p>
+            вариантов КСР найдено;{" "}
+            {snapshot.summary.fgis_published_observations} наблюдений имеют
+            опубликованные суммы
+          </p>
         </article>
         <article>
           <span>03 / Рынок</span>
@@ -596,6 +639,70 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           <strong>0</strong>
           <p>не скрыта — отсутствует до завершения обязательных проверок</p>
         </article>
+      </section>
+
+      <section className="public-fgis-coverage" aria-label="Охват ФГИС ЦС">
+        <header>
+          <p className="eyebrow">Что именно проверено в ФГИС ЦС</p>
+          <h2>
+            Не 12 карточек: полный журнал содержит{" "}
+            {snapshot.summary.fgis_raw_responses} ответов
+          </h2>
+          <p>
+            Работы и логистика не ищутся в каталоге материалов. Для них нужны
+            нормативный и логистический расчёты. ФГИС-маршрут выполнен по всем{" "}
+            {snapshot.summary.material_rows} строкам, классифицированным как
+            материалы.
+          </p>
+        </header>
+        <div>
+          <article>
+            <span>Состав ВОР</span>
+            <strong>{snapshot.summary.material_rows} материалов</strong>
+            <p>
+              {snapshot.summary.work_rows} работ ·{" "}
+              {snapshot.summary.logistics_rows} строка логистики
+            </p>
+          </article>
+          <article>
+            <span>Поиск КСР</span>
+            <strong>
+              {snapshot.summary.fgis_catalog_candidates} вариантов
+            </strong>
+            <p>
+              {snapshot.summary.fgis_selected_codes} кодов проверено по истории
+            </p>
+          </article>
+          <article>
+            <span>История цен</span>
+            <strong>{snapshot.summary.fgis_queried_periods} кварталов</strong>
+            <p>
+              {snapshot.summary.fgis_raw_responses} сохранённых HTTP-ответов
+            </p>
+          </article>
+          <article>
+            <span>Опубликованные цены</span>
+            <strong>
+              {snapshot.summary.fgis_published_observations} наблюдений
+            </strong>
+            <p>
+              по {snapshot.summary.fgis_codes_with_published_prices} кодам и{" "}
+              {snapshot.summary.fgis_rows_with_published_prices} строкам ВОР
+            </p>
+          </article>
+          <article>
+            <span>Буквально совпало</span>
+            <strong>
+              {snapshot.summary.fgis_exact_literal_published_observations} из{" "}
+              {snapshot.summary.fgis_published_observations}
+            </strong>
+            <p>
+              остальные{" "}
+              {snapshot.summary.fgis_alternative_published_observations} записей
+              — близкие, но технически отличающиеся варианты
+            </p>
+          </article>
+        </div>
       </section>
 
       <section className="public-workbench" id="positions">

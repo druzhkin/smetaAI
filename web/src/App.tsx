@@ -16,6 +16,7 @@ import { PriceItemPage } from "./pages/PriceItemPage";
 import { ProjectCreatePage } from "./pages/ProjectCreatePage";
 import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
 import { PublicDemoPage } from "./pages/PublicDemoPage";
+import { PublicProjectImportPage } from "./pages/PublicProjectImportPage";
 import { QuantityChangeProposePage } from "./pages/QuantityChangeProposePage";
 import { QuantityManualChangePage } from "./pages/QuantityManualChangePage";
 import { RecordsPage } from "./pages/RecordsPage";
@@ -113,7 +114,11 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
   const { pathname } = useNavigation();
 
   if (config.authentication_mode === "PUBLIC_DEMO") {
-    return <PublicDemoPage config={config} />;
+    return pathname === "/import" ? (
+      <PublicProjectImportPage config={config} />
+    ) : (
+      <PublicDemoPage config={config} />
+    );
   }
 
   if (pathname === "/auth/callback") {

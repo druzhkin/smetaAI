@@ -704,6 +704,9 @@ def create_app(
             application_version=__version__,
             application_build_reference=resolved_settings.application_build_reference,
             max_upload_bytes=resolved_settings.max_upload_bytes,
+            showcase_operator_upload_enabled=(
+                resolved_settings.showcase_operator_access_configured
+            ),
         )
 
     @application.get("/health/ready", response_model=ReadinessResponse)
@@ -3688,6 +3691,7 @@ def create_app(
             response_class=FileResponse,
         )
         for route in (
+            "/import",
             "/auth/callback",
             "/auth/signout-callback",
             "/tasks",

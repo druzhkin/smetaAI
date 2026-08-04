@@ -11,6 +11,7 @@ export interface RuntimeConfig {
   application_version: string;
   application_build_reference: string | null;
   max_upload_bytes: number;
+  showcase_operator_upload_enabled: boolean;
 }
 
 export type ApprovalState =
@@ -1519,10 +1520,7 @@ export interface BoqSourcePrice {
 
 export interface BoqDiagnosticObservedAmount {
   amount_kind:
-    | "FGIS_AGGREGATED"
-    | "FGIS_ESTIMATED"
-    | "FGIS_DISTANCE"
-    | "MARKET_OFFER";
+    "FGIS_AGGREGATED" | "FGIS_ESTIMATED" | "FGIS_DISTANCE" | "MARKET_OFFER";
   amount: string;
   amount_literal: string;
   currency: string | null;

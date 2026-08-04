@@ -84,6 +84,20 @@ def build_snapshot(manifest_path: Path) -> dict[str, object]:
     fgis_candidates = sum(
         len(row["fgis_cs_research_candidates"]) for row in rows if isinstance(row, dict)
     )
+    fgis_published_candidates = [
+        candidate
+        for row in rows
+        if isinstance(row, dict)
+        for candidate in row["fgis_cs_research_candidates"]
+        if isinstance(candidate, dict) and candidate["observed_amounts"]
+    ]
+    fgis_exact_literal_published_observations = sum(
+        candidate["comparison_method"] == "EXACT_LITERAL_NAME_AND_UNIT"
+        for candidate in fgis_published_candidates
+    )
+    fgis_alternative_published_observations = (
+        len(fgis_published_candidates) - fgis_exact_literal_published_observations
+    )
     market_candidates = sum(
         len(row["market_research_candidates"]) for row in rows if isinstance(row, dict)
     )
@@ -103,6 +117,38 @@ def build_snapshot(manifest_path: Path) -> dict[str, object]:
         if isinstance(candidate, dict)
     )
     research = project.manifest.research
+    research_bundle = project.research
+    cost_nature_counts = {"WORK": 0, "MATERIAL": 0, "LOGISTICS": 0}
+    fgis_catalog_candidates = 0
+    fgis_selected_codes = 0
+    fgis_queried_periods = 0
+    fgis_raw_responses = 0
+    fgis_rows_with_published_prices = 0
+    fgis_published_observations = 0
+    fgis_codes_with_published_prices = 0
+    if research_bundle is not None:
+        for line in research_bundle.free_source.lines:
+            cost_nature_counts[line.cost_nature] += 1
+            if line.fgis_search_result is not None:
+                fgis_catalog_candidates += len(line.fgis_search_result.candidates)
+        if research_bundle.fgis_history is not None:
+            history = research_bundle.fgis_history
+            fgis_selected_codes = len(history.history.resource_codes)
+            fgis_queried_periods = len(history.history.periods)
+            fgis_raw_responses = len(history.raw_responses)
+            fgis_rows_with_published_prices = sum(
+                line.published_observation_count > 0 for line in history.line_results
+            )
+            fgis_published_observations = sum(
+                line.published_observation_count for line in history.line_results
+            )
+            fgis_codes_with_published_prices = len(
+                {
+                    observation.requested_resource_code
+                    for observation in history.history.observations
+                    if observation.price is not None
+                }
+            )
     source_hashes = {
         "extraction": project.manifest.extraction_sha256,
         "free_source_research": (
@@ -125,6 +171,22 @@ def build_snapshot(manifest_path: Path) -> dict[str, object]:
             "blocked_rows": matrix["blocked_row_count"],
             "won_tender_candidates": tender_candidates,
             "fgis_candidates": fgis_candidates,
+            "work_rows": cost_nature_counts["WORK"],
+            "material_rows": cost_nature_counts["MATERIAL"],
+            "logistics_rows": cost_nature_counts["LOGISTICS"],
+            "fgis_catalog_candidates": fgis_catalog_candidates,
+            "fgis_selected_codes": fgis_selected_codes,
+            "fgis_queried_periods": fgis_queried_periods,
+            "fgis_raw_responses": fgis_raw_responses,
+            "fgis_rows_with_published_prices": fgis_rows_with_published_prices,
+            "fgis_published_observations": fgis_published_observations,
+            "fgis_codes_with_published_prices": fgis_codes_with_published_prices,
+            "fgis_exact_literal_published_observations": (
+                fgis_exact_literal_published_observations
+            ),
+            "fgis_alternative_published_observations": (
+                fgis_alternative_published_observations
+            ),
             "market_candidates": market_candidates,
             "observed_amounts": observed_amounts,
         },

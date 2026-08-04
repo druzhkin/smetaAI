@@ -4751,6 +4751,12 @@ a.workflow-rail__link:hover {
   line-height: 1.45;
 }
 
+.public-candidate__links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border-top: 1px solid #c5d9cf;
+}
+
 .public-candidate__link {
   display: flex;
   gap: 10px;
@@ -4762,7 +4768,11 @@ a.workflow-rail__link:hover {
   font-weight: 800;
   text-decoration: none;
   background: #e8f1ec;
-  border-top: 1px solid #c5d9cf;
+  border-right: 1px solid #c5d9cf;
+}
+
+.public-candidate__link:last-child {
+  border-right: 0;
 }
 
 .public-candidate__link:hover {
@@ -6267,6 +6277,85 @@ a.workflow-rail__link:hover {
   line-height: 1.5;
 }
 
+.public-fgis-coverage {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.7fr) minmax(0, 1.3fr);
+  gap: 54px;
+  max-width: 1500px;
+  padding: 54px 48px;
+  margin: 30px auto 0;
+  color: #e8eeea;
+  background: #20312d;
+  border: 1px solid #3b4d47;
+}
+
+.public-fgis-coverage > header h2 {
+  max-width: 610px;
+  margin: 8px 0 16px;
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: clamp(2rem, 3.5vw, 3.7rem);
+  font-weight: 520;
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
+.public-fgis-coverage > header > p:last-child {
+  max-width: 590px;
+  margin: 0;
+  color: #aab7b2;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.public-fgis-coverage > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  background: #4b5d57;
+  border: 1px solid #4b5d57;
+}
+
+.public-fgis-coverage article {
+  min-height: 142px;
+  padding: 20px;
+  background: #172722;
+  border-right: 1px solid #4b5d57;
+  border-bottom: 1px solid #4b5d57;
+}
+
+.public-fgis-coverage article:nth-child(2n) {
+  border-right: 0;
+}
+
+.public-fgis-coverage article:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  min-height: 112px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.public-fgis-coverage article span {
+  color: #70a998;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.public-fgis-coverage article strong {
+  display: block;
+  margin: 18px 0 7px;
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: 25px;
+  font-weight: 540;
+}
+
+.public-fgis-coverage article p {
+  margin: 0;
+  color: #99a8a2;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .public-section {
   max-width: 1500px;
   padding: 104px 0;
@@ -6645,6 +6734,340 @@ a.workflow-rail__link:hover {
   text-align: right;
 }
 
+.public-import__hero,
+.public-import__body {
+  max-width: 1220px;
+  margin: 0 auto;
+}
+
+.public-import__hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+  gap: 70px;
+  padding: 82px 30px 46px;
+  border-bottom: 1px solid #bfc4be;
+}
+
+.public-import__hero h1 {
+  max-width: 810px;
+  margin: 8px 0 22px;
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: clamp(3rem, 7vw, 6.5rem);
+  font-weight: 520;
+  line-height: 0.9;
+  letter-spacing: -0.065em;
+}
+
+.public-import__hero > div > p:last-child,
+.public-import__hero > aside p {
+  color: var(--ink-muted);
+  line-height: 1.65;
+}
+
+.public-import__hero > aside {
+  align-self: end;
+  padding: 24px;
+  background: #fff7f5;
+  border: 1px solid #d9beb9;
+  border-left: 4px solid var(--danger);
+}
+
+.public-import__hero > aside strong {
+  color: var(--danger);
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: 21px;
+}
+
+.public-import__hero > aside p {
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+
+.public-import__body {
+  padding: 42px 30px 96px;
+}
+
+.public-import__form,
+.public-import__result,
+.public-import__disabled {
+  background: #fafaf6;
+  border: 1px solid #bdc4be;
+  box-shadow: 0 18px 46px rgb(29 47 41 / 8%);
+}
+
+.public-import__form {
+  padding: 30px;
+}
+
+.public-import__form > header,
+.public-import__result > header {
+  display: flex;
+  gap: 30px;
+  align-items: end;
+  justify-content: space-between;
+  padding-bottom: 22px;
+  border-bottom: 1px solid #ccd1cb;
+}
+
+.public-import__form h2,
+.public-import__result h2 {
+  margin: 4px 0 0;
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: clamp(1.8rem, 3vw, 3rem);
+  font-weight: 530;
+  letter-spacing: -0.045em;
+}
+
+.public-import__form > header > span {
+  max-width: 320px;
+  color: var(--ink-muted);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.public-import__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 26px;
+}
+
+.public-import__grid label,
+.public-import__reason {
+  display: grid;
+  gap: 8px;
+}
+
+.public-import__grid label > span,
+.public-import__reason > span {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.public-import__grid input,
+.public-import__reason textarea {
+  width: 100%;
+  min-height: 46px;
+  padding: 11px 13px;
+  color: #17201e;
+  background: #fff;
+  border: 1px solid #aeb7b1;
+  border-radius: 0;
+  font: inherit;
+}
+
+.public-import__grid small,
+.public-import__reason small {
+  color: var(--ink-muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.public-import__wide {
+  grid-column: 1 / -1;
+}
+
+.public-import__drop {
+  position: relative;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 17px;
+  align-items: center;
+  min-height: 132px;
+  padding: 22px;
+  margin-top: 26px;
+  cursor: pointer;
+  background: #eef2ed;
+  border: 1px dashed #799087;
+}
+
+.public-import__drop:hover {
+  background: #e8eeea;
+  border-color: #3f7568;
+}
+
+.public-import__drop input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.public-import__drop-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  color: #fff;
+  background: #315f53;
+}
+
+.public-import__drop strong,
+.public-import__drop small {
+  display: block;
+}
+
+.public-import__drop strong {
+  margin-bottom: 7px;
+  font-size: 15px;
+}
+
+.public-import__drop small {
+  max-width: 750px;
+  color: var(--ink-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.public-import__selection,
+.public-import__files {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.public-import__selection > span,
+.public-import__files > article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #d5dad4;
+}
+
+.public-import__selection strong,
+.public-import__files strong {
+  overflow-wrap: anywhere;
+  font-size: 10px;
+}
+
+.public-import__selection small,
+.public-import__files small {
+  color: var(--ink-muted);
+  font-size: 9px;
+}
+
+.public-import__reason {
+  margin-top: 24px;
+}
+
+.public-import__reason textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.public-import__reason > small {
+  text-align: right;
+}
+
+.public-import__ack {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  margin-top: 18px;
+  color: #554333;
+  background: #fff9ee;
+  border: 1px solid #dbc8a6;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.public-import__ack input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.public-import__error,
+.public-import__disabled {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 18px;
+  margin-top: 18px;
+  color: #782d27;
+  background: #fff2ef;
+  border-color: #dfbbb6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.public-import__disabled {
+  margin-top: 0;
+}
+
+.public-import__form > footer,
+.public-import__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-top: 24px;
+  margin-top: 24px;
+  border-top: 1px solid #ccd1cb;
+}
+
+.public-import__form button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.public-import__result {
+  padding: 30px;
+}
+
+.public-import__blocked {
+  padding: 7px 9px;
+  color: #fff;
+  background: var(--danger);
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.public-import__truth {
+  padding: 18px;
+  margin-top: 22px;
+  color: #63332e;
+  background: #f5e9e6;
+  border-left: 4px solid var(--danger);
+}
+
+.public-import__truth strong,
+.public-import__truth p {
+  display: block;
+}
+
+.public-import__truth p {
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.public-import__files > article {
+  grid-template-columns: 42px minmax(0, 1fr) minmax(170px, 0.4fr);
+}
+
+.public-import__file-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: #315f53;
+  background: #e3ebe7;
+}
+
+.public-import__files code {
+  overflow-wrap: anywhere;
+  color: #53635e;
+  font-size: 8px;
+}
+
 @media (max-width: 1100px) {
   .public-demo__topbar {
     grid-template-columns: 1fr auto;
@@ -6677,6 +7100,11 @@ a.workflow-rail__link:hover {
 
   .public-module-flow {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .public-fgis-coverage,
+  .public-import__hero {
+    grid-template-columns: 1fr;
   }
 
   .public-module-flow article:nth-child(3) {
@@ -6722,8 +7150,64 @@ a.workflow-rail__link:hover {
   .public-stage-grid,
   .public-section__heading,
   .public-blockers,
-  .public-demo__footer {
+  .public-demo__footer,
+  .public-fgis-coverage > div,
+  .public-import__grid {
     grid-template-columns: 1fr;
+  }
+
+  .public-fgis-coverage {
+    gap: 30px;
+    padding: 36px 22px;
+    margin: 18px;
+  }
+
+  .public-fgis-coverage article,
+  .public-fgis-coverage article:nth-child(2n),
+  .public-fgis-coverage article:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid #4b5d57;
+  }
+
+  .public-fgis-coverage article:last-child {
+    grid-column: auto;
+    border-bottom: 0;
+  }
+
+  .public-import__hero,
+  .public-import__body {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .public-import__hero {
+    gap: 28px;
+    padding-top: 56px;
+  }
+
+  .public-import__form,
+  .public-import__result {
+    padding: 20px;
+  }
+
+  .public-import__form > header,
+  .public-import__result > header,
+  .public-import__form > footer,
+  .public-import__actions {
+    display: grid;
+    align-items: start;
+  }
+
+  .public-import__form > header > span {
+    text-align: left;
+  }
+
+  .public-import__files > article {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .public-import__files > article > div:last-child {
+    grid-column: 1 / -1;
   }
 
   .public-stats article,

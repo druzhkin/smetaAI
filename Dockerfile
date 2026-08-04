@@ -46,4 +46,4 @@ ENV PATH="/app/.venv/bin:${PATH}"
 USER tenderguard
 
 EXPOSE 8000
-CMD ["uvicorn", "tenderguard.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn tenderguard.api.main:app --host 0.0.0.0 --port 8000"]

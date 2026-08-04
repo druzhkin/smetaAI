@@ -322,17 +322,26 @@ startup rejects it.
 `PUBLIC_DEMO_ENABLED=true` opens the checked-in Alabuga diagnostic workbench
 without a login. The workbench publishes all 23 extracted BoQ names,
 quantities, FGIS CS and market research candidates, raw observed amounts,
-source links and blocker explanations. The snapshot is generated from the
-hash-pinned diagnostic packages with
+source links and blocker explanations. The current FGIS research preserves 60
+catalog candidates, a complete 60-code by 13-period lookup grid with 783 raw
+HTTP responses, and 16 published observations. Only four of those observations
+match the BoQ name and unit literally; alternative variants remain visible but
+blocked. The snapshot is generated from the hash-pinned diagnostic packages with
 `python scripts/build_public_diagnostic_snapshot.py`; the generator refuses to
 publish an unreleased proposed price or a non-HTTPS research source.
 
-The setting does not grant an API identity: protected reads, uploads, edits,
-approvals, and releases remain authenticated and fail closed. Original source
-archives and project mutation controls are not shipped in the public bundle.
-Public demo and insecure development authentication cannot be enabled
-together. Raw observed values are research data, not evidence that a bid price
-is safe to release.
+The setting alone does not grant an API identity: protected reads, uploads,
+edits, approvals, and releases remain authenticated and fail closed. In a
+development/test showcase only, configuring `SHOWCASE_OPERATOR_ACCESS_KEY`,
+`SHOWCASE_OPERATOR_ACTOR_ID`, and `SHOWCASE_OPERATOR_ORGANIZATION_ID` enables
+`/import`. The page creates a real draft, streams each selected file to the
+quarantine store, and displays the server receipt and SHA-256. The access key is
+kept only in page memory. This shared-code mode is rejected in staging and
+production and grants no approval or release role. Without a qualified scanner
+and isolated worker, an accepted upload correctly remains `QUARANTINED` and is
+not calculation input. Public demo and insecure development authentication
+cannot be enabled together. Raw observed values are research data, not evidence
+that a bid price is safe to release.
 
 ## Production status
 

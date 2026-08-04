@@ -16,6 +16,7 @@ const config: RuntimeConfig = {
   application_version: "0.1.0",
   application_build_reference: null,
   max_upload_bytes: 524_288_000,
+  showcase_operator_upload_enabled: true,
 };
 
 afterEach(cleanup);
@@ -38,7 +39,14 @@ describe("public project workbench", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("890,24").length).toBeGreaterThan(0);
     expect(
-      screen.getAllByRole("link", { name: /Открыть первоисточник/ }).length,
+      screen.getByRole("heading", {
+        name: "Не 12 карточек: полный журнал содержит 783 ответов",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("60 вариантов")).toBeInTheDocument();
+    expect(screen.getByText("4 из 16")).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("link", { name: /Открыть точный запрос/ }).length,
     ).toBeGreaterThan(0);
     expect(screen.queryByText("Наименование скрыто")).not.toBeInTheDocument();
     expect(

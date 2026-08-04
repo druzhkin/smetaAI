@@ -219,16 +219,30 @@ and production reject that setting during startup.
 workbench built from a controlled, checked-in snapshot. It exposes the complete
 23-row Alabuga BoQ extraction, quantities, research candidates from FGIS CS and
 the open market, raw observed amounts, literal name differences, source links,
-evidence hashes and blocker explanations. Users can search, filter, select a
-row, expand its evidence and download the matrix as CSV.
+evidence hashes and blocker explanations. The FGIS coverage panel separates 60
+catalog candidates from 783 exact code/period responses, 16 published
+observations, and the four observations whose name and unit match literally.
+Users can search, filter, select a row, expand its evidence and download the
+matrix as CSV.
 
-The public workbench sends no project API requests and ships no original source
-archives or mutation controls. The snapshot generator validates the fail-closed
-state, refuses an unreleased proposed price, restricts source links to HTTPS and
+The public workbench itself sends no project API requests and ships no original
+source archives. The snapshot generator validates the fail-closed state,
+refuses an unreleased proposed price, restricts source links to HTTPS and
 excludes local paths and organisation metadata. The setting does not relax API
-authentication; anonymous reads and mutations still return `401`. It cannot be
-combined with `ALLOW_INSECURE_DEV_AUTH` and requires the operator UI to be
-enabled. Raw research values are not a released estimate.
+authentication; anonymous reads and mutations still return `401`.
+
+For a development/test showcase, all three `SHOWCASE_OPERATOR_*` settings may
+enable the separate `/import` route. Its shared access code maps to a fixed
+estimator/technical-expert identity, never appears in runtime config, remains
+only in component memory, and cannot approve or release a price. The route
+creates a real draft and uploads original bytes into quarantine with stable
+idempotency keys. Every receipt exposes the real status and SHA-256. The
+configuration is invalid in staging/production; a qualified scanner and
+isolated worker are still required before an upload can leave quarantine.
+
+Public demo cannot be combined with `ALLOW_INSECURE_DEV_AUTH` and requires the
+operator UI to be enabled. Raw research values and accepted files are not a
+released estimate.
 
 The identity provider must register exact HTTPS redirect URIs. Wildcard
 redirects, implicit flow, browser-held client secrets, and password grant are

@@ -185,6 +185,7 @@ class RuntimeConfigResponse(ApiModel):
     application_version: str
     application_build_reference: str | None
     max_upload_bytes: int = Field(gt=0)
+    showcase_operator_upload_enabled: bool
 
 
 class CreateAuditCheckpointRequest(ApiModel):

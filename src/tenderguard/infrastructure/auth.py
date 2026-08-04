@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 
 import jwt
@@ -52,12 +53,35 @@ class Authenticator:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Bearer token is required",
             )
+        token = authorization.removeprefix("Bearer ").strip()
+        if self.settings.showcase_operator_access_configured:
+            expected = self.settings.showcase_operator_access_key
+            actor_id = self.settings.showcase_operator_actor_id
+            organization_id = self.settings.showcase_operator_organization_id
+            assert expected is not None
+            assert actor_id is not None
+            assert organization_id is not None
+            if secrets.compare_digest(token, expected.get_secret_value()):
+                return Actor(
+                    actor_id=actor_id,
+                    organization_id=organization_id,
+                    roles=frozenset(
+                        {
+                            ActorRole.ESTIMATOR,
+                            ActorRole.TECHNICAL_EXPERT,
+                        }
+                    ),
+                )
+            if not (self._jwks and self.settings.oidc_audience and self.settings.oidc_issuer):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Operator access key is invalid",
+                )
         if not (self._jwks and self.settings.oidc_audience and self.settings.oidc_issuer):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="OIDC authentication is not configured",
             )
-        token = authorization.removeprefix("Bearer ").strip()
         try:
             signing_key = self._jwks.get_signing_key_from_jwt(token)
             claims = jwt.decode(
