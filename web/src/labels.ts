@@ -5,10 +5,10 @@ export const stateLabels: Record<ApprovalState, string> = {
   DOCUMENTS_INCOMPLETE: "Документы неполны",
   EXTRACTION_IN_PROGRESS: "Извлечение",
   EXTRACTION_REVIEW: "Проверка извлечения",
-  BOQ_IN_PROGRESS: "Формирование BoQ",
-  BOQ_REVIEW: "Проверка BoQ",
+  BOQ_IN_PROGRESS: "Формирование ВОР",
+  BOQ_REVIEW: "Проверка ВОР",
   PRICING_IN_PROGRESS: "Сбор цен",
-  RFQ_REQUIRED: "Требуется RFQ",
+  RFQ_REQUIRED: "Нужны цены поставщиков",
   CALCULATION_IN_PROGRESS: "Расчёт",
   INDEPENDENT_VALIDATION: "Независимая проверка",
   EXPERT_REVIEW: "Экспертное согласование",
@@ -50,23 +50,23 @@ export const sections: SectionDefinition[] = [
   },
   {
     code: "EVIDENCE",
-    label: "Доказательства и паспорт",
-    shortLabel: "Доказательства",
-    description: "Наблюдения, конфликты и подтверждённые факты",
+    label: "Извлечённые данные",
+    shortLabel: "Данные",
+    description: "Что система прочитала в документах и чем это подтверждено",
     index: "02",
   },
   {
     code: "BOQ_SCOPE",
-    label: "BoQ и полнота работ",
-    shortLabel: "BoQ / Scope",
-    description: "Объёмы, номенклатура и сопутствующие работы",
+    label: "ВОР и состав работ",
+    shortLabel: "ВОР",
+    description: "Позиции, объёмы, единицы и сопутствующие работы",
     index: "03",
   },
   {
     code: "PRICING",
-    label: "Цены и RFQ",
+    label: "Источники цен",
     shortLabel: "Цены",
-    description: "Источники, коммерческая база и triangulation",
+    description: "ФГИС ЦС, тендеры, рынок и сопоставление наименований",
     index: "04",
   },
   {
@@ -80,7 +80,8 @@ export const sections: SectionDefinition[] = [
     code: "CALCULATION",
     label: "Расчёт и сценарии",
     shortLabel: "Расчёт",
-    description: "Атомарные входы, пересчёт и снимки",
+    description:
+      "Исходные значения, формулы, пересчёт и зафиксированные версии",
     index: "06",
   },
   {
@@ -108,7 +109,7 @@ export const sections: SectionDefinition[] = [
     code: "AUDIT",
     label: "Журнал аудита",
     shortLabel: "Аудит",
-    description: "Переходы, авторы и криптографическая цепочка",
+    description: "Кто, когда и на каком основании изменил данные",
     index: "10",
   },
 ];
@@ -140,6 +141,15 @@ export const findingLabels: Record<string, string> = {
   COST_WITHOUT_BASIS: "Часть стоимости не имеет источника или допущения",
   TECHNICAL_ANALOGUE_UNVERIFIED: "Технический аналог не проверен",
   PRICE_NORMALIZATION_FAILED: "Нарушена нормализация коммерческой базы цены",
+  FGIS_CS_PRICE_MISSING:
+    "Нет подтверждённой цены ФГИС ЦС с проверяемым сопоставлением",
+  WON_TENDER_PRICE_MISSING:
+    "Нет подтверждённой сопоставимой цены выигранного тендера",
+  MARKET_PRICE_MISSING:
+    "Нет независимой рыночной цены с проверяемым первоисточником",
+  NOMENCLATURE_MATCH_MISSING: "Не выполнено сопоставление позиции ВОР",
+  NOMENCLATURE_MATCH_NOT_VERIFIED:
+    "Сопоставление позиции ВОР не подтверждено критическими характеристиками",
   REQUIRED_APPROVAL_MISSING:
     "Не завершены обязательные экспертные согласования",
   CONTRACT_RISK_UNRESOLVED:

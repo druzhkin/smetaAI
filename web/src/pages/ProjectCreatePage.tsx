@@ -142,7 +142,7 @@ export function ProjectCreatePage({ config }: { config: RuntimeConfig }) {
                 spellCheck={false}
                 required
                 onChange={(event) => change({ code: event.target.value })}
-                placeholder="TG-2026-041"
+                placeholder="СМ-2026-041"
               />
               <small>Без пробелов; уникален в организации.</small>
             </label>

@@ -404,6 +404,41 @@ export function BoqPriceMatrixPage({
         </div>
       </header>
 
+      <section className="matrix-guide" aria-labelledby="matrix-guide-title">
+        <div className="matrix-guide__intro">
+          <p className="eyebrow">Как читать таблицу</p>
+          <h2 id="matrix-guide-title">
+            Одна строка — одна проверяемая позиция
+          </h2>
+        </div>
+        <ol>
+          <li>
+            <span>01</span>
+            <div>
+              <strong>Сверьте наименования</strong>
+              <p>ВОР и источник показаны рядом вместе с характеристиками.</p>
+            </div>
+          </li>
+          <li>
+            <span>02</span>
+            <div>
+              <strong>Откройте источник</strong>
+              <p>
+                Цена должна иметь дату, единицу, условия и проверяемую ссылку
+                или исходный документ.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span>03</span>
+            <div>
+              <strong>Проверьте предложение</strong>
+              <p>Система покажет цену только после обязательных проверок.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
       <section className="matrix-summary" aria-label="Сводка матрицы">
         <div>
           <span>Позиций</span>

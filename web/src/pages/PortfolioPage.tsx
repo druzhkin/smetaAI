@@ -7,6 +7,7 @@ import { EmptyState, ErrorBlock, LoadingBlock } from "../components/Feedback";
 import { Icon } from "../components/Icon";
 import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
+import { WorkflowRail } from "../components/WorkflowRail";
 import { formatDateTime, formatMoney } from "../format";
 import { roleLabels, stateLabels } from "../labels";
 import { Link } from "../navigation";
@@ -52,13 +53,29 @@ export function PortfolioPage({ config }: { config: RuntimeConfig }) {
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   });
   const projects = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const portfolioSummary = useMemo(
+    () => ({
+      shown: projects.length,
+      blocked: projects.filter(
+        (item) =>
+          item.project.state === "BLOCKED" || item.unresolved_blocker_count > 0,
+      ).length,
+      expertReview: projects.filter(
+        (item) => item.project.state === "EXPERT_REVIEW",
+      ).length,
+      approved: projects.filter(
+        (item) => item.project.state === "APPROVED_FOR_BID",
+      ).length,
+    }),
+    [projects],
+  );
 
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Портфель конкурсных проектов"
-        title="Контроль выпуска цены"
-        description="Каждый проект показан в фактическом состоянии. BLOCKED — это запрет выпуска, а не рекомендация."
+        eyebrow="Рабочий стол"
+        title="Проекты и расчёты"
+        description="Загрузите документы — система соберёт ВОР, сопоставит позиции, найдёт доступные цены и подготовит расчёт. Эксперт подключается к итоговому результату."
         actions={
           <>
             {auth.roles.includes("ESTIMATOR") && (
@@ -69,11 +86,53 @@ export function PortfolioPage({ config }: { config: RuntimeConfig }) {
             )}
             <Link className="button button--secondary" to="/tasks">
               <Icon name="tasks" size={16} />
-              Мои проверки
+              Контроль и решения
             </Link>
           </>
         }
       />
+
+      <section className="portfolio-intro" aria-labelledby="workflow-title">
+        <header className="section-heading">
+          <div>
+            <p className="eyebrow">Как получается результат</p>
+            <h2 id="workflow-title">Пять этапов от документов до цены</h2>
+          </div>
+          <p>
+            После загрузки файлов первые четыре этапа ведёт автоматический
+            контур. Если данных или квалифицированного расчёта не хватает,
+            проект останавливается. Эксперт принимает только итог.
+          </p>
+        </header>
+        <WorkflowRail />
+      </section>
+
+      {!query.isPending && !query.isError && projects.length > 0 && (
+        <section
+          className="portfolio-summary"
+          aria-label="Сводка по показанным проектам"
+        >
+          <article>
+            <span>Показано проектов</span>
+            <strong>{portfolioSummary.shown}</strong>
+          </article>
+          <article
+            className={portfolioSummary.blocked > 0 ? "is-negative" : ""}
+          >
+            <span>Требуют исправления</span>
+            <strong>{portfolioSummary.blocked}</strong>
+          </article>
+          <article>
+            <span>На итоговом контроле</span>
+            <strong>{portfolioSummary.expertReview}</strong>
+          </article>
+          <article className="is-positive">
+            <span>Допущены к конкурсу</span>
+            <strong>{portfolioSummary.approved}</strong>
+          </article>
+          <small>Сводка относится только к загруженным ниже строкам.</small>
+        </section>
+      )}
 
       <section className="toolbar" aria-label="Фильтры проектов">
         <label className="search-field">
@@ -124,8 +183,8 @@ export function PortfolioPage({ config }: { config: RuntimeConfig }) {
           <div className="portfolio-table__head" role="row">
             <span>Проект</span>
             <span>Состояние</span>
-            <span>Контроль</span>
-            <span>Текущая сумма</span>
+            <span>Что требует внимания</span>
+            <span>Последний расчёт</span>
             <span>Обновлён</span>
             <span />
           </div>
@@ -169,7 +228,7 @@ export function PortfolioPage({ config }: { config: RuntimeConfig }) {
                   {formatMoney(item.latest_total, item.latest_currency)}
                 </strong>
                 {item.latest_total === null && (
-                  <small>нет доступа или расчёта</small>
+                  <small>итог ещё не рассчитан</small>
                 )}
               </div>
               <time role="cell" dateTime={item.updated_at}>

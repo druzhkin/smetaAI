@@ -504,7 +504,7 @@ function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
       <section className="error-block" role="alert">
         <div>
           <h1>Маршрут не найден</h1>
-          <p>Запрошенный экран не относится к рабочему контуру TenderGuard.</p>
+          <p>Запрошенный экран не относится к рабочему контуру СметаИИ.</p>
         </div>
         <Link className="button button--secondary" to="/">
           К проектам

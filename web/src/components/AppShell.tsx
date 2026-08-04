@@ -19,16 +19,17 @@ export function AppShell({
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand__mark">TG</span>
+          <span className="brand__mark">СИ</span>
           <span>
-            <strong>TenderGuard</strong>
-            <small>контур конкурсной цены</small>
+            <strong>СметаИИ</strong>
+            <small>проверяемая цена тендера</small>
           </span>
         </div>
         <nav className="primary-nav" aria-label="Основная навигация">
           <NavLink
             to="/"
             end
+            aria-label="Проекты"
             className={({ isActive }) =>
               `primary-nav__item ${isActive ? "is-active" : ""}`
             }
@@ -39,20 +40,21 @@ export function AppShell({
           </NavLink>
           <NavLink
             to="/tasks"
+            aria-label="Контроль и решения"
             className={({ isActive }) =>
               `primary-nav__item ${isActive ? "is-active" : ""}`
             }
           >
             <Icon name="tasks" />
-            <span>Мои проверки</span>
+            <span>Контроль и решения</span>
             <kbd>02</kbd>
           </NavLink>
         </nav>
         <div className="sidebar__safety">
           <Icon name="shield" />
           <div>
-            <strong>Fail closed</strong>
-            <span>Нет доказательств — нет выпуска цены</span>
+            <strong>Защита от ошибки</strong>
+            <span>Цена скрыта, пока источники и проверки не подтверждены</span>
           </div>
         </div>
         <div className="sidebar__identity">

@@ -27,7 +27,7 @@ void loadRuntimeConfig()
     root.render(
       <main className="fatal-screen" role="alert">
         <div>
-          <p>TenderGuard</p>
+          <p>СметаИИ</p>
           <h1>Запуск заблокирован</h1>
           <span>{message}</span>
         </div>

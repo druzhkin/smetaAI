@@ -7,10 +7,12 @@ import { EmptyState, ErrorBlock, LoadingBlock } from "../components/Feedback";
 import { Icon } from "../components/Icon";
 import { RecordList } from "../components/RecordList";
 import { StatusPill } from "../components/StatusPill";
+import { WorkflowRail } from "../components/WorkflowRail";
 import { formatDateTime, formatMoney } from "../format";
 import { findingLabels, metricLabels, roleLabels, sections } from "../labels";
 import { Link } from "../navigation";
 import type { RuntimeConfig } from "../types";
+import { blockedWithoutFindingAction, nextActionForFinding } from "../workflow";
 
 export function ProjectWorkbenchPage({
   config,
@@ -50,6 +52,16 @@ export function ProjectWorkbenchPage({
 
   const workbench = query.data;
   const release = workbench.release_decision;
+  const firstFinding = release.findings[0];
+  const nextAction =
+    firstFinding === undefined
+      ? release.allowed
+        ? null
+        : blockedWithoutFindingAction()
+      : nextActionForFinding(
+          firstFinding,
+          findingLabels[firstFinding.code] ?? firstFinding.message,
+        );
 
   return (
     <div className="page project-page">
@@ -79,7 +91,11 @@ export function ProjectWorkbenchPage({
           <strong>
             {formatMoney(workbench.latest_total, workbench.latest_currency)}
           </strong>
-          <small>Не является конкурсной ценой без допуска</small>
+          <small>
+            {workbench.latest_total === null
+              ? "Расчёт ещё не сформирован"
+              : "Не является конкурсной ценой без итогового допуска"}
+          </small>
         </div>
       </header>
 
@@ -94,16 +110,16 @@ export function ProjectWorkbenchPage({
           <Icon name={release.allowed ? "check" : "warning"} size={28} />
         </div>
         <div>
-          <p className="eyebrow">Решение контрольного контура</p>
+          <p className="eyebrow">Готовность результата</p>
           <h2>
             {release.allowed
-              ? "Выпуск разрешён текущими проверками"
-              : "Выпуск конкурсной цены заблокирован"}
+              ? "Результат прошёл обязательные проверки"
+              : "Итоговую цену пока нельзя использовать"}
           </h2>
           <p>
             {release.allowed
-              ? "Все обязательные hard stops пройдены для текущего зафиксированного снимка."
-              : `${release.findings.length} причин требуют доказательства, исправления или независимого согласования.`}
+              ? "Все обязательные проверки пройдены для текущей зафиксированной версии расчёта."
+              : `Система нашла ${release.findings.length} блокирующих причин. Пока они не устранены, цена скрыта от выпуска.`}
           </p>
         </div>
         <div className="release-banner__actions">
@@ -112,17 +128,51 @@ export function ProjectWorkbenchPage({
             className="button button--secondary"
             to={`/projects/${encodeURIComponent(projectId)}/release`}
           >
-            Полная оценка <Icon name="arrow" size={15} />
+            Итоговый контроль <Icon name="arrow" size={15} />
           </Link>
         </div>
       </section>
+
+      <section className="project-route" aria-labelledby="project-route-title">
+        <header className="section-heading">
+          <div>
+            <p className="eyebrow">Ход работы</p>
+            <h2 id="project-route-title">Путь расчёта</h2>
+          </div>
+          <p>
+            Откройте любой этап, чтобы увидеть исходные данные, результат и
+            причины остановки.
+          </p>
+        </header>
+        <WorkflowRail state={workbench.project.state} projectId={projectId} />
+      </section>
+
+      {nextAction !== null && (
+        <section className="next-action" aria-labelledby="next-action-title">
+          <div className="next-action__marker">
+            <Icon name="warning" size={24} />
+          </div>
+          <div>
+            <p className="eyebrow">Что делать сейчас</p>
+            <h2 id="next-action-title">{nextAction.title}</h2>
+            <p>{nextAction.description}</p>
+          </div>
+          <Link
+            className="button button--primary"
+            to={`/projects/${encodeURIComponent(projectId)}/${nextAction.path}`}
+          >
+            {nextAction.label}
+            <Icon name="arrow" size={15} />
+          </Link>
+        </section>
+      )}
 
       {release.findings.length > 0 && (
         <section className="finding-register">
           <header className="section-heading">
             <div>
-              <p className="eyebrow">Hard stops</p>
-              <h2>Причины блокировки</h2>
+              <p className="eyebrow">Остановка расчёта</p>
+              <h2>Все причины блокировки</h2>
             </div>
             <span>{release.findings.length}</span>
           </header>
@@ -162,31 +212,42 @@ export function ProjectWorkbenchPage({
         ))}
       </section>
 
-      <section className="section-directory">
-        <header className="section-heading">
-          <div>
-            <p className="eyebrow">Доказательная цепочка</p>
-            <h2>Контуры проекта</h2>
+      <details className="professional-panel">
+        <summary>
+          <span>
+            <strong>Профессиональные разделы проекта</strong>
+            <small>
+              Все исходные записи, риски, версии, согласования и журнал аудита
+            </small>
+          </span>
+          <span>10 разделов</span>
+        </summary>
+        <section className="section-directory">
+          <header className="section-heading">
+            <div>
+              <p className="eyebrow">Полная доказательная цепочка</p>
+              <h2>Детальные разделы</h2>
+            </div>
+            <p>От исходного документа до зафиксированного результата</p>
+          </header>
+          <div className="section-grid">
+            {sections.map((section) => (
+              <Link
+                key={section.code}
+                to={`/projects/${encodeURIComponent(projectId)}/${section.code}`}
+                className="section-card"
+              >
+                <span className="section-card__index">{section.index}</span>
+                <div>
+                  <h3>{section.label}</h3>
+                  <p>{section.description}</p>
+                </div>
+                <Icon name="arrow" size={17} />
+              </Link>
+            ))}
           </div>
-          <p>От исходного документа до согласованного результата</p>
-        </header>
-        <div className="section-grid">
-          {sections.map((section) => (
-            <Link
-              key={section.code}
-              to={`/projects/${encodeURIComponent(projectId)}/${section.code}`}
-              className="section-card"
-            >
-              <span className="section-card__index">{section.index}</span>
-              <div>
-                <h3>{section.label}</h3>
-                <p>{section.description}</p>
-              </div>
-              <Icon name="arrow" size={17} />
-            </Link>
-          ))}
-        </div>
-      </section>
+        </section>
+      </details>
 
       <div className="workbench-columns">
         <section>
@@ -201,14 +262,14 @@ export function ProjectWorkbenchPage({
           ) : (
             <EmptyState
               title="Открытых записей нет"
-              description="Окончательный допуск всё равно определяется всеми hard stops, а не только этой выборкой."
+              description="Итоговый допуск определяется всеми обязательными проверками, а не только этой выборкой."
             />
           )}
         </section>
         <section>
           <header className="section-heading">
             <div>
-              <p className="eyebrow">Audit trail</p>
+              <p className="eyebrow">История проекта</p>
               <h2>Последние действия</h2>
             </div>
             <Link
