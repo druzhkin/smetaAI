@@ -4050,6 +4050,76 @@ a.workflow-rail__link:hover {
   line-height: 1.65;
 }
 
+.public-evidence-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 18px;
+  margin-top: 26px;
+  color: #edf4f0;
+  background:
+    linear-gradient(112deg, rgb(96 158 138 / 20%), transparent 48%), #1b342d;
+  border: 1px solid #33574c;
+  box-shadow: 0 16px 36px rgb(27 43 38 / 12%);
+}
+
+.public-evidence-guide__number {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  color: #172b25;
+  background: #b9ddcf;
+  font-family: Bahnschrift, "Arial Narrow", sans-serif;
+  font-size: 34px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.public-evidence-guide__copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.public-evidence-guide__copy > span {
+  color: #82b5a5;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.public-evidence-guide__copy > strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.public-evidence-guide__copy > p {
+  margin: 0;
+  color: #abbab4;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.public-evidence-guide > button {
+  min-height: 42px;
+  padding: 0 15px;
+  color: #f9efeb;
+  background: transparent;
+  border: 1px solid #d87569;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.public-evidence-guide > button:hover {
+  color: #172b25;
+  background: #df796d;
+}
+
 .public-workbench__toolbar {
   position: sticky;
   top: 70px;
@@ -4254,6 +4324,18 @@ a.workflow-rail__link:hover {
   border-color: #a9cbbb;
 }
 
+.public-position-item__sources em.has-amount.is-primary {
+  color: #fff;
+  background: #2f725f;
+  border-color: #2f725f;
+}
+
+.public-position-item__sources em.is-route {
+  color: #4d625b;
+  background: #eef1ed;
+  border-color: #c6cec8;
+}
+
 .public-position-item.is-selected .public-position-item__sources em {
   color: #cfdbd5;
   background: #304840;
@@ -4265,13 +4347,35 @@ a.workflow-rail__link:hover {
   border-color: #668c7f;
 }
 
+.public-position-item.is-selected
+  .public-position-item__sources
+  em.has-amount.is-primary {
+  color: #fff;
+  background: #397d69;
+  border-color: #65a18e;
+}
+
 .public-position-item__count {
+  display: grid;
+  gap: 1px;
   align-self: start;
   padding-top: 18px;
   color: #8a948f;
   font-family: Bahnschrift, "Arial Narrow", sans-serif;
   font-size: 10px;
   text-align: center;
+}
+
+.public-position-item__count b {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.public-position-item__count small {
+  font-size: 7px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .public-position-item.is-selected .public-position-item__count {
@@ -4443,6 +4547,41 @@ a.workflow-rail__link:hover {
 .public-tender-strip p {
   margin: 0;
   color: #65706b;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.public-pricing-route {
+  display: grid;
+  grid-template-columns: minmax(175px, 0.32fr) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  padding: 18px 22px;
+  background: #fff8ed;
+  border-bottom: 1px solid #d8c8aa;
+}
+
+.public-pricing-route > span {
+  color: #946421;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.public-pricing-route > div {
+  display: grid;
+  gap: 5px;
+}
+
+.public-pricing-route strong {
+  color: #332b1f;
+  font-size: 12px;
+}
+
+.public-pricing-route p {
+  margin: 0;
+  color: #77694f;
   font-size: 10px;
   line-height: 1.55;
 }
@@ -5006,6 +5145,14 @@ a.workflow-rail__link:hover {
     gap: 22px;
   }
 
+  .public-evidence-guide {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .public-evidence-guide > button {
+    grid-column: 1 / -1;
+  }
+
   .public-method > header .eyebrow,
   .public-method > header h2,
   .public-method > header > p:last-child {
@@ -5031,6 +5178,11 @@ a.workflow-rail__link:hover {
 
   .public-position-detail__header {
     grid-template-columns: 1fr;
+  }
+
+  .public-pricing-route {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .public-position-detail__status {
@@ -5077,6 +5229,16 @@ a.workflow-rail__link:hover {
 
   .public-position-item {
     grid-template-columns: 34px minmax(0, 1fr) 24px;
+  }
+
+  .public-evidence-guide {
+    grid-template-columns: 1fr;
+  }
+
+  .public-evidence-guide__number {
+    width: 52px;
+    height: 52px;
+    font-size: 28px;
   }
 
   .public-source-column {

@@ -110,6 +110,21 @@ function rowHasObservedAmount(row: BoqPriceMatrixRow): boolean {
   );
 }
 
+function observedCandidateCount(
+  candidates: BoqDiagnosticSourceCandidate[],
+): number {
+  return candidates.filter((candidate) => candidate.observed_amounts.length > 0)
+    .length;
+}
+
+function rowHasFgisObservedAmount(row: BoqPriceMatrixRow): boolean {
+  return observedCandidateCount(row.fgis_cs_research_candidates) > 0;
+}
+
+function rowHasMarketObservedAmount(row: BoqPriceMatrixRow): boolean {
+  return observedCandidateCount(row.market_research_candidates) > 0;
+}
+
 function sourceHost(value: string): string {
   const safeUrl = safeExternalHttpsUrl(value);
   return safeUrl === null ? "некорректная ссылка" : new URL(safeUrl).hostname;
@@ -343,11 +358,15 @@ function SourceColumn({
   description,
   candidates,
   sourceKind,
+  emptyTitle = "Данных нет",
+  emptyDescription = "Сопоставимый проверяемый источник пока не найден.",
 }: {
   title: string;
   description: string;
   candidates: BoqDiagnosticSourceCandidate[];
   sourceKind: "ФГИС ЦС" | "Рынок";
+  emptyTitle?: string;
+  emptyDescription?: string;
 }) {
   return (
     <section className="public-source-column">
@@ -361,8 +380,8 @@ function SourceColumn({
       {candidates.length === 0 ? (
         <div className="public-source-empty">
           <Icon name="search" size={20} />
-          <strong>Данных нет</strong>
-          <span>Сопоставимый проверяемый источник пока не найден.</span>
+          <strong>{emptyTitle}</strong>
+          <span>{emptyDescription}</span>
         </div>
       ) : (
         <div className="public-source-column__cards">
@@ -380,6 +399,29 @@ function SourceColumn({
 }
 
 function PositionDetail({ row }: { row: BoqPriceMatrixRow }) {
+  const costNature = row.research_route?.cost_nature;
+  const route =
+    costNature === "WORK"
+      ? {
+          label: "Работа · нормативный маршрут",
+          title: "Цена ресурса ФГИС ЦС здесь не применяется",
+          description:
+            "Эта строка описывает работу. Её стоимость должна рассчитываться по ГЭСН утверждённым сметным движком, а не искаться как товар в КСР.",
+        }
+      : costNature === "LOGISTICS"
+        ? {
+            label: "Логистика · отдельный маршрут",
+            title: "Нужен расчёт перевозки",
+            description:
+              "Стоимость зависит от расстояния, класса груза, транспорта и условий маршрута. Прямая цена материала ФГИС ЦС для этой строки неприменима.",
+          }
+        : {
+            label: "Материал · ФГИС ЦС и рынок",
+            title: "Проверяются КСР, опубликованные цены и рынок",
+            description:
+              "Найденные суммы показаны ниже, но остаются исходными наблюдениями до проверки технического соответствия и нормализации.",
+          };
+
   return (
     <article className="public-position-detail">
       <header className="public-position-detail__header">
@@ -433,12 +475,32 @@ function PositionDetail({ row }: { row: BoqPriceMatrixRow }) {
         </p>
       </section>
 
+      <section className="public-pricing-route" aria-label="Маршрут расчёта">
+        <span>{route.label}</span>
+        <div>
+          <strong>{route.title}</strong>
+          <p>{route.description}</p>
+        </div>
+      </section>
+
       <div className="public-source-grid">
         <SourceColumn
           title="ФГИС ЦС"
-          description="Официальные записи и история периодов"
+          description={
+            costNature === "MATERIAL"
+              ? "Официальные записи и история периодов"
+              : "Для этой строки ресурсный каталог не является расчётным маршрутом"
+          }
           candidates={row.fgis_cs_research_candidates}
           sourceKind="ФГИС ЦС"
+          emptyTitle={
+            costNature === "WORK"
+              ? "Нужен расчёт по ГЭСН"
+              : costNature === "LOGISTICS"
+                ? "Нужна модель перевозки"
+                : "Данных ФГИС ЦС нет"
+          }
+          emptyDescription={route.description}
         />
         <SourceColumn
           title="Открытый рынок"
@@ -481,10 +543,20 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
   const snapshot = alabugaPublicSnapshot;
   const rows = snapshot.matrix.rows;
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<RowFilter>("ALL");
+  const [filter, setFilter] = useState<RowFilter>("WITH_AMOUNT");
   const initialRow = rows.find(rowHasObservedAmount) ?? rows[0];
   const [selectedRowId, setSelectedRowId] = useState(initialRow?.row_id ?? "");
   const positionListRef = useRef<HTMLElement>(null);
+  const amountRowCount = rows.filter(rowHasObservedAmount).length;
+  const fgisPriceRowCount = rows.filter(rowHasFgisObservedAmount).length;
+  const marketPriceRowCount = rows.filter(rowHasMarketObservedAmount).length;
+  const sourceFreeRowCount = rows.filter(
+    (row) => rowCandidates(row).length === 0,
+  ).length;
+  const rowOrdinalById = useMemo(
+    () => new Map(rows.map((row, index) => [row.row_id, index + 1])),
+    [rows],
+  );
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("ru-RU");
@@ -506,9 +578,9 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
         case "WITH_AMOUNT":
           return rowHasObservedAmount(row);
         case "FGIS":
-          return row.fgis_cs_research_candidates.length > 0;
+          return rowHasFgisObservedAmount(row);
         case "MARKET":
-          return row.market_research_candidates.length > 0;
+          return rowHasMarketObservedAmount(row);
         case "WITHOUT_SOURCES":
           return candidates.length === 0;
         case "ALL":
@@ -717,6 +789,30 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           </p>
         </header>
 
+        <div className="public-evidence-guide" role="status">
+          <div className="public-evidence-guide__number">{amountRowCount}</div>
+          <div className="public-evidence-guide__copy">
+            <span>Позиции с реально найденными суммами</span>
+            <strong>Они показаны сразу — без прокрутки через работы</strong>
+            <p>
+              Цена ФГИС ЦС есть у {fgisPriceRowCount} строк · рыночная сумма у{" "}
+              {marketPriceRowCount}. Остальные строки не скрыты: переключитесь
+              на «Все {rows.length}».
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setQuery("");
+              setFilter(filter === "ALL" ? "WITH_AMOUNT" : "ALL");
+            }}
+          >
+            {filter === "ALL"
+              ? `Вернуть ${amountRowCount} строк с суммами`
+              : `Показать все ${rows.length} позиции`}
+          </button>
+        </div>
+
         <div className="public-workbench__toolbar">
           <label className="public-search">
             <Icon name="search" size={18} />
@@ -731,11 +827,11 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           <div className="public-filters" aria-label="Фильтр позиций">
             {(
               [
-                ["ALL", "Все"],
-                ["WITH_AMOUNT", "Есть сумма"],
-                ["FGIS", "ФГИС ЦС"],
-                ["MARKET", "Рынок"],
-                ["WITHOUT_SOURCES", "Без источников"],
+                ["ALL", `Все ${rows.length}`],
+                ["WITH_AMOUNT", `С суммами ${amountRowCount}`],
+                ["FGIS", `Цена ФГИС ${fgisPriceRowCount}`],
+                ["MARKET", `Цена рынка ${marketPriceRowCount}`],
+                ["WITHOUT_SOURCES", `Без источников ${sourceFreeRowCount}`],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -769,6 +865,13 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
             ) : (
               filteredRows.map((row, index) => {
                 const candidateCount = rowCandidates(row).length;
+                const fgisAmountCount = observedCandidateCount(
+                  row.fgis_cs_research_candidates,
+                );
+                const marketAmountCount = observedCandidateCount(
+                  row.market_research_candidates,
+                );
+                const costNature = row.research_route?.cost_nature;
                 const isSelected = selectedRow?.row_id === row.row_id;
                 return (
                   <button
@@ -779,7 +882,9 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
                     onClick={() => setSelectedRowId(row.row_id)}
                   >
                     <span className="public-position-item__index">
-                      {String(index + 1).padStart(2, "0")}
+                      {String(
+                        rowOrdinalById.get(row.row_id) ?? index + 1,
+                      ).padStart(2, "0")}
                     </span>
                     <span className="public-position-item__body">
                       <code>{row.line_key}</code>
@@ -791,31 +896,57 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
                         {row.boq_unit}
                       </small>
                       <span className="public-position-item__sources">
-                        <em
-                          className={
-                            row.fgis_cs_research_candidates.length > 0
-                              ? "has-data"
-                              : ""
-                          }
-                        >
-                          ФГИС {row.fgis_cs_research_candidates.length}
-                        </em>
-                        <em
-                          className={
-                            row.market_research_candidates.length > 0
-                              ? "has-data"
-                              : ""
-                          }
-                        >
-                          Рынок {row.market_research_candidates.length}
-                        </em>
-                        {rowHasObservedAmount(row) && (
-                          <em className="has-amount">Есть сумма</em>
+                        {costNature === "WORK" ? (
+                          <em className="is-route">Работа · нужен ГЭСН</em>
+                        ) : costNature === "LOGISTICS" ? (
+                          <em className="is-route">
+                            Логистика · отдельный расчёт
+                          </em>
+                        ) : (
+                          <>
+                            <em
+                              className={
+                                row.fgis_cs_research_candidates.length > 0
+                                  ? "has-data"
+                                  : ""
+                              }
+                            >
+                              КСР {row.fgis_cs_research_candidates.length}
+                            </em>
+                            <em
+                              className={
+                                fgisAmountCount > 0 ? "has-amount" : ""
+                              }
+                            >
+                              {fgisAmountCount > 0
+                                ? `Публикации ФГИС ${fgisAmountCount}`
+                                : "Цены ФГИС нет"}
+                            </em>
+                            <em
+                              className={
+                                marketAmountCount > 0 ? "has-amount" : ""
+                              }
+                            >
+                              {marketAmountCount > 0
+                                ? `Рынок · цен ${marketAmountCount}`
+                                : "Цены рынка нет"}
+                            </em>
+                            {rowHasObservedAmount(row) && (
+                              <em className="has-amount is-primary">
+                                Суммы найдены
+                              </em>
+                            )}
+                          </>
                         )}
                       </span>
                     </span>
                     <span className="public-position-item__count">
-                      {candidateCount}
+                      {candidateCount > 0 && (
+                        <>
+                          <b>{candidateCount}</b>
+                          <small>ист.</small>
+                        </>
+                      )}
                     </span>
                   </button>
                 );

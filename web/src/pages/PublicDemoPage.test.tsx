@@ -52,14 +52,38 @@ describe("public project workbench", () => {
     expect(
       screen.queryByRole("heading", { name: "Корпоративная учётная запись" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByText("5 из 23")).toBeInTheDocument();
+    expect(
+      screen.getByText("Они показаны сразу — без прокрутки через работы"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Публикации ФГИС 13")).toBeInTheDocument();
+    expect(screen.getByText("Рынок · цен 16")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Показать все 23 позиции" }),
+    ).toBeInTheDocument();
   });
 
   it("filters the project to positions with observed amounts", () => {
     render(<App config={config} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Есть сумма" }));
-
     expect(screen.getByText("5 из 23")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Цена ФГИС 2" }));
+    expect(screen.getByText("2 из 23")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "С суммами 5" }));
+    expect(screen.getByText("5 из 23")).toBeInTheDocument();
+  });
+
+  it("explains that work rows require normative calculation instead of FGIS resource prices", () => {
+    render(<App config={config} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Все 23" }));
+
+    expect(screen.getAllByText("Работа · нужен ГЭСН").length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByText("ФГИС 0")).not.toBeInTheDocument();
   });
 
   it("exports all rows and source names to a semicolon-separated CSV", () => {
