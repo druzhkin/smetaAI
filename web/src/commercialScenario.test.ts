@@ -22,14 +22,6 @@ describe("Alabuga preliminary commercial scenario", () => {
       "-97.50",
       "11799102.05",
     ],
-    [
-      "NORMALIZED",
-      "5346432.23",
-      "6207207.82",
-      "-3230486.82",
-      "-84.11",
-      "10896105.81",
-    ],
   ] as const)(
     "recalculates the %s scenario deterministically",
     (scenario, direct, full, result, margin, required) => {
@@ -77,7 +69,7 @@ describe("Alabuga preliminary commercial scenario", () => {
       calculateCommercialScenario(
         alabugaCommercialLines,
         { ...alabugaCommercialAssumptions, marketWeightBps: 3999 },
-        "NORMALIZED",
+        "BOQ",
       ),
     ).toThrow("must total 10000 basis points");
   });
@@ -87,7 +79,7 @@ describe("Alabuga preliminary commercial scenario", () => {
       calculateCommercialScenario(
         alabugaCommercialLines,
         { ...alabugaCommercialAssumptions, tenderGrossPrice: "0" },
-        "NORMALIZED",
+        "BOQ",
       ),
     ).toThrow("Tender gross price must be positive");
   });
@@ -102,7 +94,7 @@ describe("Alabuga preliminary commercial scenario", () => {
           },
         ],
         alabugaCommercialAssumptions,
-        "NORMALIZED",
+        "BOQ",
       ),
     ).toThrow("Commercial source prices must be non-negative");
   });

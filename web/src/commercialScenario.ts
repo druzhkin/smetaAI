@@ -1,10 +1,9 @@
-export type QuantityScenario = "BOQ" | "PROJECT" | "NORMALIZED";
+export type QuantityScenario = "BOQ" | "PROJECT";
 
 export interface CommercialLineInput {
   lineKey: string;
   quantityBoq: string;
   quantityProject: string;
-  quantityNormalized: string;
   tenderUnitPrice: string;
   fgisUnitPrice: string;
   marketUnitPrice: string;
@@ -89,7 +88,6 @@ function quantityForScenario(
   scenario: QuantityScenario,
 ): string {
   if (scenario === "PROJECT") return line.quantityProject;
-  if (scenario === "NORMALIZED") return line.quantityNormalized;
   return line.quantityBoq;
 }
 

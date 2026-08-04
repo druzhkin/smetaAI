@@ -6972,7 +6972,7 @@ a.workflow-rail__link:hover {
 
 .public-commercial__scenario > div {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   border: 1px solid #52665f;
 }
 
@@ -7119,36 +7119,39 @@ a.workflow-rail__link:hover {
 
 .public-vor-table {
   width: 100%;
-  min-width: 1840px;
+  min-width: 1422px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
   font-variant-numeric: tabular-nums;
 }
 
-.public-vor-table tr > :nth-child(1) {
-  width: 44px;
+.public-vor-col--number {
+  width: 42px;
 }
-.public-vor-table tr > :nth-child(2) {
-  width: 98px;
+.public-vor-col--code {
+  width: 90px;
 }
-.public-vor-table tr > :nth-child(3) {
+.public-vor-col--name {
   width: 400px;
 }
-.public-vor-table tr > :nth-child(4) {
-  width: 84px;
+.public-vor-col--unit {
+  width: 75px;
 }
-.public-vor-table tr > :nth-child(5) {
+.public-vor-col--quantity {
+  width: 100px;
+}
+.public-vor-col--source {
   width: 110px;
 }
-.public-vor-table tr > :nth-child(n + 6):nth-child(-n + 9) {
-  width: 154px;
+.public-vor-col--system {
+  width: 140px;
 }
-.public-vor-table tr > :nth-child(10) {
-  width: 176px;
+.public-vor-col--total {
+  width: 155px;
 }
-.public-vor-table tr > :nth-child(11) {
-  width: 100px;
+.public-vor-col--control {
+  width: 90px;
 }
 
 .public-vor-table th,

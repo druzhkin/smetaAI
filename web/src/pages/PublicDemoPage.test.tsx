@@ -35,9 +35,15 @@ describe("public project workbench", () => {
     expect(
       screen.getByRole("heading", { name: "При текущей цене тендер убыточен" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/6.207.207,82/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/-3.230.486,82/).length).toBeGreaterThan(0);
-    expect(screen.getByText("маржа -84,11%")).toBeInTheDocument();
+    expect(screen.getAllByText(/5.368.605,77/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/-2.391.884,77/).length).toBeGreaterThan(0);
+    expect(screen.getByText("маржа -62,27%")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "По ВОР заказчика" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("button", { name: "Нормализовано" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("23 из 23")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
@@ -91,7 +97,9 @@ describe("public project workbench", () => {
   it("switches the quantities and recalculates the tender result", () => {
     render(<App config={config} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "По проекту" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "По проектной документации" }),
+    );
 
     expect(screen.getAllByText(/6.721.619,61/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/-3.744.898,61/).length).toBeGreaterThan(0);

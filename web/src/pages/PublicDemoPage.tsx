@@ -25,9 +25,8 @@ import type {
 type RowFilter = "ALL" | "WITH_AMOUNT" | "FGIS" | "MARKET" | "WITHOUT_SOURCES";
 
 const scenarioLabels: Record<QuantityScenario, string> = {
-  BOQ: "Как выдано в ВОР",
-  PROJECT: "По проекту",
-  NORMALIZED: "Нормализовано",
+  BOQ: "По ВОР заказчика",
+  PROJECT: "По проектной документации",
 };
 
 function formatKopecks(value: bigint): string {
@@ -115,7 +114,7 @@ const flow = [
   ["01", "ВОР", "23 позиции и объёма извлечены"],
   ["02", "Поиск", "ФГИС ЦС и открытый рынок"],
   ["03", "Сверка", "Наименования и характеристики рядом"],
-  ["04", "Нормализация", "Единица, НДС, доставка и период"],
+  ["04", "Приведение цен", "Единица, НДС, доставка и период"],
   ["05", "Решение", "Цена или точная причина остановки"],
 ] as const;
 
@@ -166,7 +165,7 @@ function csvCell(value: string): string {
 
 export function buildPublicMatrixCsv(
   rows: BoqPriceMatrixRow[],
-  scenario: QuantityScenario = "NORMALIZED",
+  scenario: QuantityScenario = "BOQ",
 ): string {
   const calculation = calculateCommercialScenario(
     alabugaCommercialLines,
@@ -619,7 +618,7 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<RowFilter>("ALL");
   const [quantityScenario, setQuantityScenario] =
-    useState<QuantityScenario>("NORMALIZED");
+    useState<QuantityScenario>("BOQ");
   const initialRow = rows.find(rowHasObservedAmount) ?? rows[0];
   const [selectedRowId, setSelectedRowId] = useState(initialRow?.row_id ?? "");
   const commercialCalculation = useMemo(
@@ -780,9 +779,9 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           </div>
           <div
             className="public-commercial__scenario"
-            aria-label="Сценарий объёма"
+            aria-label="Основание объёмов"
           >
-            <span>Сценарий количества</span>
+            <span>Основание объёмов</span>
             <div>
               {(Object.keys(scenarioLabels) as QuantityScenario[]).map(
                 (scenario) => (
@@ -1015,6 +1014,19 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
 
         <div className="public-vor-scroll">
           <table className="public-vor-table">
+            <colgroup>
+              <col className="public-vor-col--number" />
+              <col className="public-vor-col--code" />
+              <col className="public-vor-col--name" />
+              <col className="public-vor-col--unit" />
+              <col className="public-vor-col--quantity" />
+              <col className="public-vor-col--source" />
+              <col className="public-vor-col--source" />
+              <col className="public-vor-col--source" />
+              <col className="public-vor-col--system" />
+              <col className="public-vor-col--total" />
+              <col className="public-vor-col--control" />
+            </colgroup>
             <thead>
               <tr className="public-vor-table__groups">
                 <th rowSpan={2}>№</th>
