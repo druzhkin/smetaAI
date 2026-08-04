@@ -1516,6 +1516,50 @@ export interface BoqSourcePrice {
   technical_attributes: Record<string, string>;
 }
 
+export interface BoqDiagnosticObservedAmount {
+  amount_kind:
+    | "FGIS_AGGREGATED"
+    | "FGIS_ESTIMATED"
+    | "FGIS_DISTANCE"
+    | "MARKET_OFFER";
+  amount: string;
+  amount_literal: string;
+  currency: string | null;
+  unit: string | null;
+}
+
+export interface BoqDiagnosticSourceCandidate {
+  research_id: string;
+  source_group: "WON_TENDER" | "FGIS_CS" | "MARKET";
+  source_type: string;
+  source_display_name: string;
+  source_item_name: string;
+  source_record_id: string;
+  source_uri: string;
+  source_locator: string;
+  observed_at: string;
+  period_name: string | null;
+  evidence_sha256: string;
+  candidate_content_hash: string;
+  observed_amounts: BoqDiagnosticObservedAmount[];
+  attributes: Record<string, string>;
+  boq_only_literals: string[];
+  source_only_literals: string[];
+  comparison_method: string;
+  blockers: string[];
+  status: "BLOCKED";
+}
+
+export interface BoqDiagnosticResearchRoute {
+  cost_nature: "WORK" | "MATERIAL" | "LOGISTICS";
+  pricing_route: "NORMATIVE_ENGINE" | "FGIS_AND_MARKET" | "LOGISTICS_MODEL";
+  profile_version_id: string;
+  profile_content_hash: string;
+  rationale: string[];
+  blockers: string[];
+  status: "BLOCKED";
+}
+
 export interface BoqProposedPrice {
   status: "VERIFIED" | "BLOCKED";
   workflow_status: string;
@@ -1549,6 +1593,10 @@ export interface BoqPriceMatrixRow {
   fgis_cs_prices: BoqSourcePrice[];
   market_prices: BoqSourcePrice[];
   other_prices: BoqSourcePrice[];
+  research_route: BoqDiagnosticResearchRoute | null;
+  won_tender_research_candidates: BoqDiagnosticSourceCandidate[];
+  fgis_cs_research_candidates: BoqDiagnosticSourceCandidate[];
+  market_research_candidates: BoqDiagnosticSourceCandidate[];
   proposed_price: BoqProposedPrice;
 }
 

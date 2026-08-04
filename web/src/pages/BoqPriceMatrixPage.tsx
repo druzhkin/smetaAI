@@ -9,6 +9,9 @@ import { StatusPill } from "../components/StatusPill";
 import { formatDateTime, formatDecimal, formatMoney } from "../format";
 import { Link } from "../navigation";
 import type {
+  BoqDiagnosticObservedAmount,
+  BoqDiagnosticResearchRoute,
+  BoqDiagnosticSourceCandidate,
   BoqPriceMatrixRow,
   BoqSourcePrice,
   RuntimeConfig,
@@ -42,6 +45,19 @@ const blockerLabels: Record<string, string> = {
   POSITION_ID_FORMULA_NOT_ALLOWED: "номер позиции задан запрещённой формулой",
   CALCULATION_SNAPSHOT_MISSING: "нет зафиксированного расчёта",
   BID_RELEASE_NOT_APPROVED: "проект не допущен к подаче заявки",
+  APPROVED_NORMATIVE_ENGINE_REQUIRED:
+    "не подключён утверждённый нормативный движок",
+  APPROVED_LOGISTICS_METHOD_REQUIRED:
+    "не утверждена методика расчёта логистики",
+  APPROVED_FGIS_MAPPING_REQUIRED:
+    "сопоставление с кодом КСР не утверждено",
+  PROJECT_PRICE_PERIOD_NOT_SELECTED: "не выбран расчётный период ФГИС ЦС",
+  PRICE_NORMALIZATION_REQUIRED: "исходная сумма не нормализована",
+  TECHNICAL_EQUIVALENCE_NOT_ESTABLISHED:
+    "техническая эквивалентность не доказана",
+  COMMERCIAL_BASIS_INCOMPLETE: "коммерческая база неполна",
+  DIAGNOSTIC_SOURCE_CANDIDATE_NOT_PRICE_EVIDENCE:
+    "кандидат исследования не является ценовым основанием",
 };
 
 function blockerLabel(value: string): string {
@@ -200,16 +216,213 @@ export function SourcePriceCard({
   );
 }
 
+const amountKindLabels: Record<
+  BoqDiagnosticObservedAmount["amount_kind"],
+  string
+> = {
+  FGIS_AGGREGATED: "Агрегированная цена",
+  FGIS_ESTIMATED: "Сметная цена",
+  FGIS_DISTANCE: "Перевозка в составе записи",
+  MARKET_OFFER: "Цена на странице",
+};
+
+const routeLabels: Record<
+  BoqDiagnosticResearchRoute["pricing_route"],
+  string
+> = {
+  NORMATIVE_ENGINE: "Нормативный расчёт работ",
+  FGIS_AND_MARKET: "ФГИС ЦС + рыночные источники",
+  LOGISTICS_MODEL: "Расчёт логистики",
+};
+
+export function ResearchRouteCard({
+  route,
+}: {
+  route: BoqDiagnosticResearchRoute;
+}) {
+  return (
+    <aside className="research-route-card">
+      <div>
+        <span>Маршрут исследования</span>
+        <StatusPill value={route.status} compact />
+      </div>
+      <strong>{routeLabels[route.pricing_route]}</strong>
+      <small>
+        Кандидат типа: {route.cost_nature} · профиль {route.profile_version_id}
+      </small>
+      <ul>
+        {route.rationale.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
+
+export function DiagnosticSourceCandidateCard({
+  candidate,
+  boqName,
+}: {
+  candidate: BoqDiagnosticSourceCandidate;
+  boqName: string;
+}) {
+  return (
+    <article className="source-price-card source-price-card--diagnostic">
+      <div className="source-price-card__heading">
+        <div>
+          <strong>{candidate.source_display_name}</strong>
+          <span>{candidate.source_record_id}</span>
+        </div>
+        <span className="research-candidate-badge">Кандидат</span>
+      </div>
+
+      {candidate.observed_amounts.length > 0 ? (
+        <div className="diagnostic-amount-list">
+          {candidate.observed_amounts.map((amount) => (
+            <div key={`${amount.amount_kind}:${amount.amount_literal}`}>
+              <span>{amountKindLabels[amount.amount_kind]}</span>
+              <strong>
+                {amount.currency === null
+                  ? formatDecimal(amount.amount)
+                  : formatMoney(amount.amount, amount.currency)}
+              </strong>
+              <small>
+                {amount.unit === null
+                  ? "единица не указана источником"
+                  : `/ ${amount.unit}`}
+                {amount.currency === null && " · валюта не указана источником"}
+              </small>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="diagnostic-no-amount">
+          Найдено наименование, но опубликованная сумма не получена.
+        </div>
+      )}
+
+      <dl className="source-name-check">
+        <div>
+          <dt>В ВОР</dt>
+          <dd>{boqName}</dd>
+        </div>
+        <div>
+          <dt>У источника</dt>
+          <dd>{candidate.source_item_name}</dd>
+        </div>
+      </dl>
+
+      <details className="source-price-card__details">
+        <summary>Почему это ещё не цена расчёта</summary>
+        <dl>
+          <div>
+            <dt>Период</dt>
+            <dd>{candidate.period_name ?? "не относится к периоду"}</dd>
+          </div>
+          <div>
+            <dt>Получено</dt>
+            <dd>{formatDateTime(candidate.observed_at)}</dd>
+          </div>
+          <div>
+            <dt>Метод буквальной проверки</dt>
+            <dd>{candidate.comparison_method}</dd>
+          </div>
+          <div>
+            <dt>SHA-256 ответа</dt>
+            <dd className="hash-value">{candidate.evidence_sha256}</dd>
+          </div>
+        </dl>
+        {candidate.boq_only_literals.length > 0 && (
+          <div className="literal-difference">
+            <strong>Есть только в ВОР</strong>
+            <p>{candidate.boq_only_literals.join(" · ")}</p>
+          </div>
+        )}
+        {candidate.source_only_literals.length > 0 && (
+          <div className="literal-difference">
+            <strong>Есть только у источника</strong>
+            <p>{candidate.source_only_literals.join(" · ")}</p>
+          </div>
+        )}
+        <div className="attribute-chip-list">
+          {Object.entries(candidate.attributes).map(([key, value]) => (
+            <code key={key}>
+              {key}: {value}
+            </code>
+          ))}
+        </div>
+        <ul className="diagnostic-blocker-list">
+          {candidate.blockers.map((blocker) => (
+            <li key={blocker}>{blockerLabel(blocker)}</li>
+          ))}
+        </ul>
+      </details>
+
+      <a
+        className="source-price-card__link"
+        href={candidate.source_uri}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        Открыть первоисточник
+        <Icon name="arrow" size={14} />
+      </a>
+    </article>
+  );
+}
+
+export function DiagnosticCandidateStack({
+  candidates,
+  boqName,
+}: {
+  candidates: BoqDiagnosticSourceCandidate[];
+  boqName: string;
+}) {
+  const visible = candidates.slice(0, 3);
+  const remaining = candidates.slice(3);
+  return (
+    <section className="diagnostic-candidate-stack">
+      <header>
+        <strong>Собрано кандидатов: {candidates.length}</strong>
+        <span>Сырые данные · не нормализованы</span>
+      </header>
+      {visible.map((candidate) => (
+        <DiagnosticSourceCandidateCard
+          key={candidate.research_id}
+          candidate={candidate}
+          boqName={boqName}
+        />
+      ))}
+      {remaining.length > 0 && (
+        <details className="diagnostic-candidate-more">
+          <summary>Показать ещё {remaining.length}</summary>
+          <div>
+            {remaining.map((candidate) => (
+              <DiagnosticSourceCandidateCard
+                key={candidate.research_id}
+                candidate={candidate}
+                boqName={boqName}
+              />
+            ))}
+          </div>
+        </details>
+      )}
+    </section>
+  );
+}
+
 export function SourcePriceCell({
   prices,
+  researchCandidates = [],
   boqName,
   emptyLabel,
 }: {
   prices: BoqSourcePrice[];
+  researchCandidates?: BoqDiagnosticSourceCandidate[];
   boqName: string;
   emptyLabel: string;
 }) {
-  if (prices.length === 0) {
+  if (prices.length === 0 && researchCandidates.length === 0) {
     return (
       <div className="matrix-empty-source">
         <StatusPill value="BLOCKED" compact />
@@ -222,6 +435,12 @@ export function SourcePriceCell({
       {prices.map((price) => (
         <SourcePriceCard key={price.quote_id} price={price} boqName={boqName} />
       ))}
+      {researchCandidates.length > 0 && (
+        <DiagnosticCandidateStack
+          candidates={researchCandidates}
+          boqName={boqName}
+        />
+      )}
     </div>
   );
 }
@@ -302,7 +521,11 @@ export function ProposedPriceCell({
     <div className="matrix-proposal">
       <div className="matrix-proposal__heading">
         <StatusPill value={proposed.status} compact />
-        <span>{proposed.workflow_status}</span>
+        <span>
+          {proposed.workflow_status === "DIAGNOSTIC_ONLY"
+            ? "Только анализ"
+            : proposed.workflow_status}
+        </span>
       </div>
       {proposed.amount_per_unit !== null &&
       proposed.currency !== null &&
@@ -391,6 +614,17 @@ export function BoqPriceMatrixPage({
   const project = projectQuery.data;
   const matrix = matrixQuery.data;
   const verified = matrix.rows.length - matrix.blocked_row_count;
+  const researched = matrix.rows.filter(
+    (row) => row.research_route !== null,
+  ).length;
+  const researchCandidateCount = matrix.rows.reduce(
+    (total, row) =>
+      total +
+      row.won_tender_research_candidates.length +
+      row.fgis_cs_research_candidates.length +
+      row.market_research_candidates.length,
+    0,
+  );
   const diagnosticMode = matrix.rows.some(
     (row) => row.proposed_price.workflow_status === "DIAGNOSTIC_ONLY",
   );
@@ -483,6 +717,14 @@ export function BoqPriceMatrixPage({
           <span>Проверены</span>
           <strong>{verified}</strong>
         </div>
+        <div>
+          <span>Маршрут определён</span>
+          <strong>{researched}</strong>
+        </div>
+        <div>
+          <span>Кандидаты источников</span>
+          <strong>{researchCandidateCount}</strong>
+        </div>
         <div className={matrix.blocked_row_count > 0 ? "is-negative" : ""}>
           <span>Заблокированы</span>
           <strong>{matrix.blocked_row_count}</strong>
@@ -536,6 +778,9 @@ export function BoqPriceMatrixPage({
                         {row.cost_category ?? "категория не задана"} ·{" "}
                         {row.basis_kind ?? "база не задана"}
                       </small>
+                      {row.research_route !== null && (
+                        <ResearchRouteCard route={row.research_route} />
+                      )}
                       {row.blockers.length > 0 && (
                         <details className="matrix-blockers">
                           <summary>
@@ -556,6 +801,9 @@ export function BoqPriceMatrixPage({
                   <td>
                     <SourcePriceCell
                       prices={row.won_tender_prices}
+                      researchCandidates={
+                        row.won_tender_research_candidates
+                      }
                       boqName={row.boq_item_name}
                       emptyLabel="Нет подтверждённой сопоставимой цены из выигранного тендера."
                     />
@@ -563,6 +811,7 @@ export function BoqPriceMatrixPage({
                   <td>
                     <SourcePriceCell
                       prices={row.fgis_cs_prices}
+                      researchCandidates={row.fgis_cs_research_candidates}
                       boqName={row.boq_item_name}
                       emptyLabel="Нет записи ФГИС ЦС с проверяемым кодом и наименованием."
                     />
@@ -570,6 +819,7 @@ export function BoqPriceMatrixPage({
                   <td>
                     <SourcePriceCell
                       prices={row.market_prices}
+                      researchCandidates={row.market_research_candidates}
                       boqName={row.boq_item_name}
                       emptyLabel="Нет независимой цены с прямой ссылкой на сайт или портал."
                     />

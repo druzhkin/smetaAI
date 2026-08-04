@@ -18,12 +18,19 @@ from tenderguard.application.diagnostic_project import (
     DiagnosticProject,
     DiagnosticProjectLoadError,
 )
+from tenderguard.application.free_source_research import (
+    BoqFreeSourceLineRule,
+    BoqFreeSourceResearchProfile,
+    BoqResearchEvidenceReference,
+    run_boq_free_source_research,
+)
 from tenderguard.config import Settings
 from tenderguard.domain.boq_spreadsheet import (
     BoqCellEvidence,
     BoqRowCandidate,
     BoqXlsxExtractionResult,
 )
+from tenderguard.domain.common import canonical_json, content_hash
 from tenderguard.infrastructure.database import (
     create_database_engine,
     create_schema_for_tests,
@@ -86,6 +93,66 @@ def _write_diagnostic_project(tmp_path: Path) -> Path:
             },
             ensure_ascii=False,
         ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def _write_researched_diagnostic_project(tmp_path: Path) -> Path:
+    manifest_path = _write_diagnostic_project(tmp_path)
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    extraction_path = tmp_path / manifest_payload["extraction_path"]
+    extraction = BoqXlsxExtractionResult.model_validate_json(
+        extraction_path.read_text(encoding="utf-8")
+    )
+    candidate = extraction.candidates[0]
+    profile = BoqFreeSourceResearchProfile(
+        profile_version_id="diagnostic-research-v1",
+        project_code="ALABUGA-TEST",
+        subject_name="Республика Татарстан",
+        expected_extraction_content_hash=content_hash(extraction),
+        expected_workbook_sha256=extraction.workbook_object_sha256,
+        context_evidence=(
+            BoqResearchEvidenceReference(
+                label="Project title page",
+                object_sha256="e" * 64,
+                source_locator="project.pdf#page=1",
+            ),
+        ),
+        line_rules=(
+            BoqFreeSourceLineRule(
+                candidate_id=candidate.provisional_candidate_id,
+                cost_nature="WORK",
+            ),
+        ),
+    )
+
+    def unexpected_fgis_acquisition(_query: str):
+        raise AssertionError("Work-only diagnostic research must not call FGIS")
+
+    research = run_boq_free_source_research(
+        extraction=extraction,
+        profile=profile,
+        acquire_ksr_search=unexpected_fgis_acquisition,
+        completed_at=datetime(2026, 8, 4, 9, 0, tzinfo=UTC),
+    )
+    research_dir = tmp_path / "research"
+    research_dir.mkdir()
+    research_payload = canonical_json(research.result) + b"\n"
+    (research_dir / "manifest.json").write_bytes(research_payload)
+    manifest_payload.update(
+        {
+            "schema_version": "tenderguard.diagnostic-project/v2",
+            "research": {
+                "free_source_research": {
+                    "path": "research/manifest.json",
+                    "sha256": hashlib.sha256(research_payload).hexdigest(),
+                }
+            },
+        }
+    )
+    manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False),
         encoding="utf-8",
     )
     return manifest_path
@@ -166,6 +233,48 @@ def test_real_extraction_shape_is_visible_but_every_financial_value_is_blocked(
         assert row["proposed_price"]["amount_per_unit"] is None
         assert "CONTROLLED_IMPORT_WORKFLOW_REQUIRED" in row["blockers"]
         assert "PRICE_DECISION_MISSING" in row["blockers"]
+
+
+def test_hash_pinned_research_route_is_visible_but_cannot_become_a_price(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_researched_diagnostic_project(tmp_path)
+    settings = _settings(tmp_path, manifest_path)
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+
+    with TestClient(create_app(settings, engine=engine)) as client:
+        matrix = client.get(
+            "/v1/projects/diagnostic-alabuga-4527946/boq/pricing-matrix",
+            headers=_headers(),
+        )
+
+    assert matrix.status_code == 200, matrix.text
+    row = matrix.json()["rows"][0]
+    assert row["research_route"]["cost_nature"] == "WORK"
+    assert row["research_route"]["pricing_route"] == "NORMATIVE_ENGINE"
+    assert row["research_route"]["status"] == "BLOCKED"
+    assert row["won_tender_research_candidates"] == []
+    assert row["fgis_cs_research_candidates"] == []
+    assert row["market_research_candidates"] == []
+    assert row["won_tender_prices"] == []
+    assert row["fgis_cs_prices"] == []
+    assert row["market_prices"] == []
+    assert row["proposed_price"]["amount_per_unit"] is None
+
+
+def test_hash_pinned_research_manifest_drift_stops_application_startup(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_researched_diagnostic_project(tmp_path)
+    research_path = tmp_path / "research" / "manifest.json"
+    research_path.write_bytes(research_path.read_bytes() + b" ")
+
+    with pytest.raises(
+        DiagnosticProjectLoadError,
+        match="differs from the hash-pinned project manifest",
+    ):
+        DiagnosticProject.load(manifest_path, max_extraction_bytes=1024 * 1024)
 
 
 def test_diagnostic_project_is_organization_scoped_and_not_listed_to_outsiders(

@@ -2,8 +2,15 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
-from tenderguard.application.pricing import NormalizePriceCommand, PriceQuoteDraft
+from tenderguard.application.pricing import (
+    BoqDiagnosticObservedAmountView,
+    BoqDiagnosticResearchRouteView,
+    BoqDiagnosticSourceCandidateView,
+    NormalizePriceCommand,
+    PriceQuoteDraft,
+)
 from tenderguard.domain.enums import (
     PriceEvidenceClass,
     PriceSourceType,
@@ -74,6 +81,61 @@ def quote(identifier: str, evidence: PriceEvidenceClass) -> PriceQuote:
         source_reliability=Decimal("0.9"),
         status=PriceStatus.NORMALIZED,
     )
+
+
+def test_diagnostic_source_candidates_are_literal_replay_only_and_fail_closed() -> None:
+    amount = BoqDiagnosticObservedAmountView(
+        amount_kind="MARKET_OFFER",
+        amount=Decimal("721"),
+        amount_literal="721",
+        currency="RUB",
+    )
+    candidate = BoqDiagnosticSourceCandidateView(
+        research_id="diagnostic-market-1",
+        source_group="MARKET",
+        source_type="SUPPLIER_WEBSITE",
+        source_display_name="Supplier",
+        source_item_name="Cable route sign",
+        source_record_id="sku-1",
+        source_uri="https://supplier.example/items/sku-1",
+        source_locator="microdata:product[0]",
+        observed_at=datetime(2026, 8, 4, 9, 0, tzinfo=UTC),
+        evidence_sha256="a" * 64,
+        candidate_content_hash="b" * 64,
+        observed_amounts=(amount,),
+        comparison_method="technical-literal-extraction/v1",
+        blockers=("TECHNICAL_EQUIVALENCE_NOT_ESTABLISHED",),
+    )
+
+    assert candidate.status == "BLOCKED"
+    assert candidate.observed_amounts[0].amount == Decimal("721")
+    with pytest.raises(ValidationError, match="amount differs"):
+        BoqDiagnosticObservedAmountView(
+            amount_kind="MARKET_OFFER",
+            amount=Decimal("722"),
+            amount_literal="721",
+        )
+    with pytest.raises(ValidationError, match="direct HTTPS URI"):
+        BoqDiagnosticSourceCandidateView.model_validate(
+            candidate.model_dump(mode="python")
+            | {"source_uri": "http://supplier.example/items/sku-1"}
+        )
+    with pytest.raises(ValidationError):
+        BoqDiagnosticSourceCandidateView.model_validate(
+            candidate.model_dump(mode="python") | {"status": "VERIFIED"}
+        )
+
+
+def test_diagnostic_research_route_cannot_contradict_cost_nature() -> None:
+    with pytest.raises(ValidationError, match="contradicts its pricing route"):
+        BoqDiagnosticResearchRouteView(
+            cost_nature="WORK",
+            pricing_route="FGIS_AND_MARKET",
+            profile_version_id="research-v1",
+            profile_content_hash="a" * 64,
+            rationale=("Work must use an approved normative engine.",),
+            blockers=("APPROVED_NORMATIVE_ENGINE_REQUIRED",),
+        )
 
 
 def test_price_normalization_requires_explicit_region_adjustment() -> None:

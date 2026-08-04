@@ -47,6 +47,10 @@ const matrix = {
       fgis_cs_prices: [],
       market_prices: [],
       other_prices: [],
+      research_route: null,
+      won_tender_research_candidates: [],
+      fgis_cs_research_candidates: [],
+      market_research_candidates: [],
       proposed_price: {
         status: "BLOCKED",
         workflow_status: "MISSING",

@@ -3,12 +3,21 @@ from __future__ import annotations
 # ruff: noqa: RUF001 -- Russian operator-facing text is intentional.
 import hashlib
 import hmac
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException, status
 from pydantic import Field, model_validator
 
+from tenderguard.application.diagnostic_research import (
+    DiagnosticResearchBundle,
+    DiagnosticResearchLoadError,
+    DiagnosticResearchReferences,
+    DiagnosticRowResearch,
+    build_diagnostic_row_research,
+    load_diagnostic_research,
+)
 from tenderguard.application.pricing import (
     BoqPriceMatrixRowView,
     BoqPriceMatrixView,
@@ -40,7 +49,10 @@ MAX_DIAGNOSTIC_MANIFEST_BYTES = 64 * 1024
 
 
 class DiagnosticProjectManifest(DomainModel):
-    schema_version: Literal["tenderguard.diagnostic-project/v1"] = (
+    schema_version: Literal[
+        "tenderguard.diagnostic-project/v1",
+        "tenderguard.diagnostic-project/v2",
+    ] = (
         "tenderguard.diagnostic-project/v1"
     )
     project_id: str = Field(pattern=r"^diagnostic-[a-z0-9][a-z0-9-]{0,52}$")
@@ -49,6 +61,7 @@ class DiagnosticProjectManifest(DomainModel):
     name: str = Field(min_length=1, max_length=500)
     extraction_path: str = Field(min_length=1, max_length=4000)
     extraction_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    research: DiagnosticResearchReferences | None = None
 
     @model_validator(mode="after")
     def metadata_is_normalized(self) -> DiagnosticProjectManifest:
@@ -61,6 +74,11 @@ class DiagnosticProjectManifest(DomainModel):
         ):
             if value != value.strip():
                 raise ValueError("Diagnostic project metadata must be normalized")
+        if self.schema_version == "tenderguard.diagnostic-project/v1":
+            if self.research is not None:
+                raise ValueError("Diagnostic project v1 cannot contain research packages")
+        elif self.research is None:
+            raise ValueError("Diagnostic project v2 requires hash-pinned research packages")
         return self
 
 
@@ -81,9 +99,14 @@ class DiagnosticProject:
         *,
         manifest: DiagnosticProjectManifest,
         extraction: BoqXlsxExtractionResult,
+        research: DiagnosticResearchBundle | None = None,
     ) -> None:
         self.manifest = manifest
         self.extraction = extraction
+        self.research = research
+        self.row_research: dict[str, DiagnosticRowResearch] = (
+            build_diagnostic_row_research(research) if research is not None else {}
+        )
 
     @classmethod
     def load(
@@ -137,11 +160,30 @@ class DiagnosticProject:
             raise DiagnosticProjectLoadError(
                 "Diagnostic BoQ extraction contains no candidate rows"
             )
-        return cls(manifest=manifest, extraction=extraction)
+        research = None
+        if manifest.research is not None:
+            try:
+                research = load_diagnostic_research(
+                    references=manifest.research,
+                    base_directory=resolved_manifest.parent,
+                    extraction=extraction,
+                    maximum_file_bytes=max_extraction_bytes,
+                )
+            except DiagnosticResearchLoadError as error:
+                raise DiagnosticProjectLoadError(str(error)) from error
+        return cls(manifest=manifest, extraction=extraction, research=research)
 
     @property
     def project_id(self) -> str:
         return self.manifest.project_id
+
+    @property
+    def generated_at(self) -> datetime:
+        return (
+            self.research.generated_at
+            if self.research is not None
+            else self.extraction.extracted_at
+        )
 
     def is_project(self, project_id: str) -> bool:
         return hmac.compare_digest(project_id, self.manifest.project_id)
@@ -184,7 +226,7 @@ class DiagnosticProject:
             unresolved_blocker_count=len(self._release_findings()),
             latest_total=None,
             latest_currency=None,
-            updated_at=self.extraction.extracted_at,
+            updated_at=self.generated_at,
         )
 
     def workbench(self, *, actor: Actor) -> ProjectWorkbench:
@@ -205,7 +247,7 @@ class DiagnosticProject:
             status="BLOCKED",
             severity=Severity.BLOCKER.value,
             current=False,
-            occurred_at=self.extraction.extracted_at,
+            occurred_at=self.generated_at,
             attributes={
                 "archive_path": self.extraction.archive_path,
                 "workbook_object_sha256": self.extraction.workbook_object_sha256,
@@ -215,7 +257,19 @@ class DiagnosticProject:
                 "candidate_count": len(candidate_ids),
                 "global_blockers": list(self.extraction.global_blockers),
                 "workflow_blockers": list(self.extraction.workflow_blockers),
+                "research_package_hashes": (
+                    self.research.package_hashes if self.research is not None else {}
+                ),
+                "research_route_count": len(self.row_research),
+                "research_source_candidate_count": sum(
+                    len(item.fgis_candidates) + len(item.market_candidates)
+                    for item in self.row_research.values()
+                ),
             },
+        )
+        research_candidate_count = sum(
+            len(item.fgis_candidates) + len(item.market_candidates)
+            for item in self.row_research.values()
         )
         metrics = (
             WorkbenchMetric(
@@ -231,8 +285,20 @@ class DiagnosticProject:
                 blocking=len(candidate_ids),
             ),
             WorkbenchMetric(
+                code="RESEARCH_ROUTES",
+                label="Строки с маршрутом исследования",
+                value=len(self.row_research),
+                blocking=len(candidate_ids),
+            ),
+            WorkbenchMetric(
+                code="RESEARCH_CANDIDATES",
+                label="Сырые кандидаты источников",
+                value=research_candidate_count,
+                blocking=research_candidate_count,
+            ),
+            WorkbenchMetric(
                 code="MATCHED_ROWS",
-                label="Сопоставленные строки",
+                label="Подтверждённые сопоставления",
                 value=0,
                 blocking=len(candidate_ids),
             ),
@@ -263,7 +329,7 @@ class DiagnosticProject:
             recent_activity=(source_record,),
             latest_total=None,
             latest_currency=None,
-            generated_at=self.extraction.extracted_at,
+            generated_at=self.generated_at,
         )
 
     def price_matrix(self, *, actor: Actor) -> BoqPriceMatrixView:
@@ -283,12 +349,27 @@ class DiagnosticProject:
             "BID_RELEASE_NOT_APPROVED",
         )
         for candidate in self.extraction.candidates:
+            research = self.row_research.get(candidate.provisional_candidate_id)
             quantity_status = "UNVERIFIED" if candidate.quantity is not None else "MISSING"
             quantity_blocker = (
                 "QUANTITY_NOT_VERIFIED" if candidate.quantity is not None else "QUANTITY_MISSING"
             )
             blockers = tuple(
-                dict.fromkeys((*common_blockers, quantity_blocker, *candidate.blockers))
+                dict.fromkeys(
+                    (
+                        *common_blockers,
+                        quantity_blocker,
+                        *candidate.blockers,
+                        *(research.blockers if research is not None else ()),
+                    )
+                )
+            )
+            research_rationale = (
+                research.route.rationale
+                if research is not None
+                else (
+                    "Для строки ещё не сформирован зафиксированный маршрут исследования.",
+                )
             )
             rows.append(
                 BoqPriceMatrixRowView(
@@ -311,11 +392,20 @@ class DiagnosticProject:
                     fgis_cs_prices=(),
                     market_prices=(),
                     other_prices=(),
+                    research_route=(research.route if research is not None else None),
+                    won_tender_research_candidates=(),
+                    fgis_cs_research_candidates=(
+                        research.fgis_candidates if research is not None else ()
+                    ),
+                    market_research_candidates=(
+                        research.market_candidates if research is not None else ()
+                    ),
                     proposed_price=BoqProposedPriceView(
                         status="BLOCKED",
                         workflow_status="DIAGNOSTIC_ONLY",
                         rationale=(
                             "Строка извлечена из XLSX как непроверенное свидетельство.",
+                            *research_rationale,
                             "Цена скрыта до управляемого сопоставления номенклатуры, "
                             "сбора источников и воспроизводимого расчёта.",
                             *tuple(f"Blocker: {blocker}" for blocker in blockers),
@@ -325,12 +415,14 @@ class DiagnosticProject:
             )
         return BoqPriceMatrixView(
             project_id=self.project_id,
-            generated_at=self.extraction.extracted_at,
+            generated_at=self.generated_at,
             rows=tuple(rows),
             blocked_row_count=len(rows),
             release_warning=(
-                "Диагностический импорт: показаны только исходные строки и причины "
-                "блокировки. Цены, итоги и допуск к заявке отсутствуют."
+                "Диагностический импорт: исходные суммы ФГИС ЦС и рынка показаны "
+                "только как кандидаты, зафиксированные контрольными суммами. "
+                "Они не нормализованы, "
+                "не являются предлагаемой ценой; итоги и допуск к заявке отсутствуют."
             ),
         )
 
@@ -344,6 +436,9 @@ class DiagnosticProject:
             "profile_version_id": self.extraction.profile_version_id,
             "workbook_object_sha256": self.extraction.workbook_object_sha256,
             "extraction_sha256": self.manifest.extraction_sha256,
+            "research_package_hashes": (
+                self.research.package_hashes if self.research is not None else {}
+            ),
         }
         return (
             ValidationFinding(

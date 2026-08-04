@@ -1,8 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { BoqPriceMatrixRow, BoqSourcePrice } from "../types";
+import type {
+  BoqDiagnosticSourceCandidate,
+  BoqPriceMatrixRow,
+  BoqSourcePrice,
+} from "../types";
 import {
+  DiagnosticSourceCandidateCard,
   MatchCell,
   ProposedPriceCell,
   SourcePriceCard,
@@ -86,6 +91,10 @@ const matrixRow: BoqPriceMatrixRow = {
   fgis_cs_prices: [sourcePrice],
   market_prices: [],
   other_prices: [],
+  research_route: null,
+  won_tender_research_candidates: [],
+  fgis_cs_research_candidates: [],
+  market_research_candidates: [],
   proposed_price: {
     status: "BLOCKED",
     workflow_status: "RFQ_REQUIRED",
@@ -98,6 +107,39 @@ const matrixRow: BoqPriceMatrixRow = {
     normalized_price_ids: [],
     rationale: ["Цена скрыта до получения рыночного источника."],
   },
+};
+
+const diagnosticCandidate: BoqDiagnosticSourceCandidate = {
+  research_id: "diagnostic-market-1",
+  source_group: "MARKET",
+  source_type: "SUPPLIER_WEBSITE",
+  source_display_name: "Поставщик кабеля",
+  source_item_name: "Кабель АПвПг 1х240/70",
+  source_record_id: "sku:CABLE-1",
+  source_uri: "https://supplier.example/cable",
+  source_locator: "microdata:product[0]",
+  observed_at: "2026-08-03T11:00:00Z",
+  period_name: null,
+  evidence_sha256: "a".repeat(64),
+  candidate_content_hash: "b".repeat(64),
+  observed_amounts: [
+    {
+      amount_kind: "MARKET_OFFER",
+      amount: "533.28",
+      amount_literal: "533.28",
+      currency: "RUB",
+      unit: null,
+    },
+  ],
+  attributes: { "Метод извлечения": "MICRODATA" },
+  boq_only_literals: [],
+  source_only_literals: [],
+  comparison_method: "technical-literals/v1",
+  blockers: [
+    "STRUCTURED_SOURCE_UNIT_MISSING",
+    "DIAGNOSTIC_SOURCE_CANDIDATE_NOT_PRICE_EVIDENCE",
+  ],
+  status: "BLOCKED",
 };
 
 describe("BoqPriceMatrixPage evidence cells", () => {
@@ -140,6 +182,30 @@ describe("BoqPriceMatrixPage evidence cells", () => {
     expect(
       screen.getByText("Нет независимой цены с прямой ссылкой."),
     ).toBeVisible();
+  });
+
+  it("shows a raw research amount and both names without presenting a system price", () => {
+    render(
+      <DiagnosticSourceCandidateCard
+        candidate={diagnosticCandidate}
+        boqName="Кабель АПвПг 1х240/70"
+      />,
+    );
+
+    expect(screen.getByText("Поставщик кабеля")).toBeVisible();
+    expect(screen.getAllByText("Кабель АПвПг 1х240/70")).toHaveLength(2);
+    expect(screen.getByText("533,28 ₽")).toBeVisible();
+    expect(screen.getByText(/единица не указана/)).toBeVisible();
+    expect(screen.getByText("Кандидат")).toBeVisible();
+    expect(screen.queryByText("Цена системы")).not.toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("link", { name: "Открыть первоисточник" })
+        .some(
+          (link) =>
+            link.getAttribute("href") === "https://supplier.example/cable",
+        ),
+    ).toBe(true);
   });
 
   it("keeps diagnostic blockers collapsed and does not link to a missing calculation", () => {

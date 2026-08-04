@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -324,6 +324,93 @@ class BoqSourcePriceView(DomainModel):
     technical_attributes: dict[str, str]
 
 
+class BoqDiagnosticObservedAmountView(DomainModel):
+    amount_kind: Literal[
+        "FGIS_AGGREGATED",
+        "FGIS_ESTIMATED",
+        "FGIS_DISTANCE",
+        "MARKET_OFFER",
+    ]
+    amount: Decimal = Field(ge=0, max_digits=38, decimal_places=12)
+    amount_literal: str = Field(min_length=1, max_length=100)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    unit: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def amount_is_reproduced_from_the_source_literal(
+        self,
+    ) -> BoqDiagnosticObservedAmountView:
+        try:
+            reproduced = Decimal(self.amount_literal)
+        except InvalidOperation as error:
+            raise ValueError("Diagnostic amount literal is not decimal") from error
+        if not reproduced.is_finite() or reproduced != self.amount:
+            raise ValueError("Diagnostic amount differs from its source literal")
+        return self
+
+
+class BoqDiagnosticSourceCandidateView(DomainModel):
+    research_id: str = Field(min_length=1, max_length=200)
+    source_group: Literal["WON_TENDER", "FGIS_CS", "MARKET"]
+    source_type: str = Field(min_length=1, max_length=100)
+    source_display_name: str = Field(min_length=1, max_length=500)
+    source_item_name: str = Field(min_length=1, max_length=4000)
+    source_record_id: str = Field(min_length=1, max_length=1000)
+    source_uri: str = Field(min_length=1, max_length=4000)
+    source_locator: str = Field(min_length=1, max_length=4000)
+    observed_at: datetime
+    period_name: str | None = Field(default=None, min_length=1, max_length=500)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_amounts: tuple[BoqDiagnosticObservedAmountView, ...] = Field(max_length=10)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    boq_only_literals: tuple[str, ...] = Field(default=(), max_length=200)
+    source_only_literals: tuple[str, ...] = Field(default=(), max_length=200)
+    comparison_method: str = Field(min_length=1, max_length=200)
+    blockers: tuple[str, ...] = Field(min_length=1, max_length=500)
+    status: Literal["BLOCKED"] = "BLOCKED"
+
+    @field_validator("source_uri")
+    @classmethod
+    def source_uri_is_direct_https(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("Diagnostic source candidate requires a direct HTTPS URI")
+        return value
+
+    @model_validator(mode="after")
+    def candidate_cannot_become_price_evidence(self) -> BoqDiagnosticSourceCandidateView:
+        if len(self.blockers) != len(set(self.blockers)):
+            raise ValueError("Diagnostic source candidate contains duplicate blockers")
+        if len(self.boq_only_literals) != len(set(self.boq_only_literals)) or len(
+            self.source_only_literals
+        ) != len(set(self.source_only_literals)):
+            raise ValueError("Diagnostic source candidate contains duplicate literal facts")
+        return self
+
+
+class BoqDiagnosticResearchRouteView(DomainModel):
+    cost_nature: Literal["WORK", "MATERIAL", "LOGISTICS"]
+    pricing_route: Literal["NORMATIVE_ENGINE", "FGIS_AND_MARKET", "LOGISTICS_MODEL"]
+    profile_version_id: str = Field(min_length=1, max_length=64)
+    profile_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rationale: tuple[str, ...] = Field(min_length=1, max_length=20)
+    blockers: tuple[str, ...] = Field(min_length=1, max_length=100)
+    status: Literal["BLOCKED"] = "BLOCKED"
+
+    @model_validator(mode="after")
+    def route_is_consistent_and_fail_closed(self) -> BoqDiagnosticResearchRouteView:
+        expected = {
+            "WORK": "NORMATIVE_ENGINE",
+            "MATERIAL": "FGIS_AND_MARKET",
+            "LOGISTICS": "LOGISTICS_MODEL",
+        }[self.cost_nature]
+        if self.pricing_route != expected:
+            raise ValueError("Diagnostic cost nature contradicts its pricing route")
+        if len(self.blockers) != len(set(self.blockers)):
+            raise ValueError("Diagnostic research route contains duplicate blockers")
+        return self
+
+
 class BoqProposedPriceView(DomainModel):
     status: str
     workflow_status: str
@@ -357,6 +444,10 @@ class BoqPriceMatrixRowView(DomainModel):
     fgis_cs_prices: tuple[BoqSourcePriceView, ...]
     market_prices: tuple[BoqSourcePriceView, ...]
     other_prices: tuple[BoqSourcePriceView, ...]
+    research_route: BoqDiagnosticResearchRouteView | None = None
+    won_tender_research_candidates: tuple[BoqDiagnosticSourceCandidateView, ...] = ()
+    fgis_cs_research_candidates: tuple[BoqDiagnosticSourceCandidateView, ...] = ()
+    market_research_candidates: tuple[BoqDiagnosticSourceCandidateView, ...] = ()
     proposed_price: BoqProposedPriceView
 
 
