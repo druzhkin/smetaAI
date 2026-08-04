@@ -319,11 +319,20 @@ Development authentication is disabled by default. Set
 `ALLOW_INSECURE_DEV_AUTH=true` only on an isolated workstation; production
 startup rejects it.
 
-`PUBLIC_DEMO_ENABLED=true` opens a redacted read-only interface review without
-a login. It does not grant an API identity: protected reads, uploads, edits,
-approvals, and releases remain authenticated and fail closed. Public demo and
-insecure development authentication cannot be enabled together. This is a
-presentation mode, not evidence that a price is safe to release.
+`PUBLIC_DEMO_ENABLED=true` opens the checked-in Alabuga diagnostic workbench
+without a login. The workbench publishes all 23 extracted BoQ names,
+quantities, FGIS CS and market research candidates, raw observed amounts,
+source links and blocker explanations. The snapshot is generated from the
+hash-pinned diagnostic packages with
+`python scripts/build_public_diagnostic_snapshot.py`; the generator refuses to
+publish an unreleased proposed price or a non-HTTPS research source.
+
+The setting does not grant an API identity: protected reads, uploads, edits,
+approvals, and releases remain authenticated and fail closed. Original source
+archives and project mutation controls are not shipped in the public bundle.
+Public demo and insecure development authentication cannot be enabled
+together. Raw observed values are research data, not evidence that a bid price
+is safe to release.
 
 ## Production status
 

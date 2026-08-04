@@ -215,13 +215,20 @@ Development header authentication is visible only when
 `ALLOW_INSECURE_DEV_AUTH=true` in a development or test environment. Staging
 and production reject that setting during startup.
 
-`PUBLIC_DEMO_ENABLED=true` replaces the login screen with a deliberately
-non-interactive public overview. The overview is a redacted, build-time
-diagnostic presentation: it sends no project API requests and exposes no
-documents, names, quantities, prices, or authenticated controls. The setting
-does not relax API authentication; anonymous reads and mutations still return
-`401`. It cannot be combined with `ALLOW_INSECURE_DEV_AUTH` and requires the
-operator UI to be enabled.
+`PUBLIC_DEMO_ENABLED=true` replaces the login screen with a public diagnostic
+workbench built from a controlled, checked-in snapshot. It exposes the complete
+23-row Alabuga BoQ extraction, quantities, research candidates from FGIS CS and
+the open market, raw observed amounts, literal name differences, source links,
+evidence hashes and blocker explanations. Users can search, filter, select a
+row, expand its evidence and download the matrix as CSV.
+
+The public workbench sends no project API requests and ships no original source
+archives or mutation controls. The snapshot generator validates the fail-closed
+state, refuses an unreleased proposed price, restricts source links to HTTPS and
+excludes local paths and organisation metadata. The setting does not relax API
+authentication; anonymous reads and mutations still return `401`. It cannot be
+combined with `ALLOW_INSECURE_DEV_AUTH` and requires the operator UI to be
+enabled. Raw research values are not a released estimate.
 
 The identity provider must register exact HTTPS redirect URIs. Wildcard
 redirects, implicit flow, browser-held client secrets, and password grant are
