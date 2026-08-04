@@ -22,7 +22,7 @@ const config: RuntimeConfig = {
 afterEach(cleanup);
 
 describe("public project workbench", () => {
-  it("shows actual Alabuga rows and source evidence without a login", () => {
+  it("shows the Alabuga VOR, preliminary economics and source evidence without a login", () => {
     render(<App config={config} />);
 
     expect(
@@ -30,8 +30,15 @@ describe("public project workbench", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Рабочий срез")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Все позиции и источники" }),
+      screen.getByRole("heading", { name: "ВОР · себестоимость проекта" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "При текущей цене тендер убыточен" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/6.207.207,82/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/-3.230.486,82/).length).toBeGreaterThan(0);
+    expect(screen.getByText("маржа -84,11%")).toBeInTheDocument();
+    expect(screen.getByText("23 из 23")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
         name: "Песок природный для строительных работ I класс, средний",
@@ -52,21 +59,18 @@ describe("public project workbench", () => {
     expect(
       screen.queryByRole("heading", { name: "Корпоративная учётная запись" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("5 из 23")).toBeInTheDocument();
     expect(
-      screen.getByText("Они показаны сразу — без прокрутки через работы"),
+      screen.getByText("Формула книги исправлена, данные не утверждены"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Публикации ФГИС 13")).toBeInTheDocument();
-    expect(screen.getByText("Рынок · цен 16")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Показать все 23 позиции" }),
+      screen.getByRole("columnheader", { name: "Цена системы, руб./ед." }),
     ).toBeInTheDocument();
   });
 
   it("filters the project to positions with observed amounts", () => {
     render(<App config={config} />);
 
-    expect(screen.getByText("5 из 23")).toBeInTheDocument();
+    expect(screen.getByText("23 из 23")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Цена ФГИС 2" }));
     expect(screen.getByText("2 из 23")).toBeInTheDocument();
@@ -78,12 +82,20 @@ describe("public project workbench", () => {
   it("explains that work rows require normative calculation instead of FGIS resource prices", () => {
     render(<App config={config} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Все 23" }));
-
-    expect(screen.getAllByText("Работа · нужен ГЭСН").length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      screen.getAllByText("Работа · требуется ГЭСН").length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText("ФГИС 0")).not.toBeInTheDocument();
+  });
+
+  it("switches the quantities and recalculates the tender result", () => {
+    render(<App config={config} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "По проекту" }));
+
+    expect(screen.getAllByText(/6.721.619,61/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/-3.744.898,61/).length).toBeGreaterThan(0);
+    expect(screen.getByText("маржа -97,5%")).toBeInTheDocument();
   });
 
   it("exports all rows and source names to a semicolon-separated CSV", () => {
@@ -95,6 +107,8 @@ describe("public project workbench", () => {
     );
     expect(csv).toContain("https://fgiscs.minstroyrf.ru/");
     expect(csv).toContain("Кабель  АПвПг 1х240/70");
-    expect(csv).toContain("не сформирована");
+    expect(csv).toContain('"Предварительная цена системы, руб./ед. без НДС"');
+    expect(csv).toContain('"6149";"73788.00"');
+    expect(csv).toContain('"BLOCKED"');
   });
 });

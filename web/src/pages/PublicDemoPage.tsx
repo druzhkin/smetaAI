@@ -1,6 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Icon } from "../components/Icon";
+import {
+  basisPointsToPercent,
+  calculateCommercialScenario,
+  kopecksToDecimal,
+  type CommercialLineResult,
+  type QuantityScenario,
+} from "../commercialScenario";
+import {
+  alabugaCommercialAssumptions,
+  alabugaCommercialLines,
+  alabugaCommercialProvenance,
+} from "../data/alabuga-commercial-scenario";
 import { formatDateTime, formatDecimal, formatMoney } from "../format";
 import { alabugaPublicSnapshot, safeExternalHttpsUrl } from "../publicSnapshot";
 import type {
@@ -11,6 +23,24 @@ import type {
 } from "../types";
 
 type RowFilter = "ALL" | "WITH_AMOUNT" | "FGIS" | "MARKET" | "WITHOUT_SOURCES";
+
+const scenarioLabels: Record<QuantityScenario, string> = {
+  BOQ: "Как выдано в ВОР",
+  PROJECT: "По проекту",
+  NORMALIZED: "Нормализовано",
+};
+
+function formatKopecks(value: bigint): string {
+  return formatMoney(kopecksToDecimal(value), "RUB");
+}
+
+function formatRubles(value: bigint | string): string {
+  return formatMoney(String(value), "RUB");
+}
+
+function formatPercent(value: bigint): string {
+  return `${formatDecimal(basisPointsToPercent(value))}%`;
+}
 
 const amountKindLabels: Record<
   BoqDiagnosticObservedAmount["amount_kind"],
@@ -134,12 +164,29 @@ function csvCell(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
-export function buildPublicMatrixCsv(rows: BoqPriceMatrixRow[]): string {
+export function buildPublicMatrixCsv(
+  rows: BoqPriceMatrixRow[],
+  scenario: QuantityScenario = "NORMALIZED",
+): string {
+  const calculation = calculateCommercialScenario(
+    alabugaCommercialLines,
+    alabugaCommercialAssumptions,
+    scenario,
+  );
+  const commercialByLineKey = new Map(
+    calculation.lines.map((line) => [line.lineKey, line]),
+  );
   const header = [
+    "№",
     "Позиция ВОР",
     "Наименование ВОР",
     "Количество",
     "Единица",
+    "Тендерный/сметный ориентир, руб./ед. без НДС",
+    "ФГИС ЦС/РИМ, руб./ед. без НДС",
+    "Рынок, руб./ед. без НДС",
+    "Предварительная цена системы, руб./ед. без НДС",
+    "Предварительная себестоимость строки, руб. без НДС",
     "Наименования ФГИС ЦС",
     "Сырые значения ФГИС ЦС",
     "Ссылки ФГИС ЦС",
@@ -149,8 +196,11 @@ export function buildPublicMatrixCsv(rows: BoqPriceMatrixRow[]): string {
     "Цена системы",
     "Статус",
     "Причины остановки",
+    "Источник предварительного сценария",
+    "SHA256 источника",
   ];
-  const lines = rows.map((row) => {
+  const lines = rows.map((row, index) => {
+    const commercial = commercialByLineKey.get(row.line_key);
     const describeAmounts = (candidates: BoqDiagnosticSourceCandidate[]) =>
       candidates
         .flatMap((candidate) =>
@@ -161,10 +211,18 @@ export function buildPublicMatrixCsv(rows: BoqPriceMatrixRow[]): string {
         )
         .join(" | ");
     return [
+      String(index + 1),
       row.line_key,
       row.boq_item_name,
-      row.quantity ?? "",
+      commercial?.quantity ?? row.quantity ?? "",
       row.boq_unit,
+      commercial?.tenderUnitPrice ?? "",
+      commercial?.fgisUnitPrice ?? "",
+      commercial?.marketUnitPrice ?? "",
+      commercial?.preliminaryUnitPriceRubles.toString() ?? "",
+      commercial === undefined
+        ? ""
+        : kopecksToDecimal(commercial.directCostKopecks),
       row.fgis_cs_research_candidates
         .map((item) => item.source_item_name)
         .join(" | "),
@@ -177,9 +235,11 @@ export function buildPublicMatrixCsv(rows: BoqPriceMatrixRow[]): string {
         .join(" | "),
       describeAmounts(row.market_research_candidates),
       row.market_research_candidates.map((item) => item.source_uri).join(" | "),
-      "не сформирована",
+      commercial?.preliminaryUnitPriceRubles.toString() ?? "не сформирована",
       row.row_status,
       row.blockers.map(blockerLabel).join(" | "),
+      alabugaCommercialProvenance.workbook,
+      alabugaCommercialProvenance.workbookSha256,
     ].map(csvCell);
   });
   return [
@@ -188,14 +248,14 @@ export function buildPublicMatrixCsv(rows: BoqPriceMatrixRow[]): string {
   ].join("\r\n");
 }
 
-function downloadCsv(rows: BoqPriceMatrixRow[]) {
-  const blob = new Blob(["\uFEFF", buildPublicMatrixCsv(rows)], {
+function downloadCsv(rows: BoqPriceMatrixRow[], scenario: QuantityScenario) {
+  const blob = new Blob(["\uFEFF", buildPublicMatrixCsv(rows, scenario)], {
     type: "text/csv;charset=utf-8",
   });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "Алабуга_4527946_проверяемая_матрица.csv";
+  anchor.download = `Алабуга_4527946_ВОР_${scenario.toLocaleLowerCase()}.csv`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -398,7 +458,13 @@ function SourceColumn({
   );
 }
 
-function PositionDetail({ row }: { row: BoqPriceMatrixRow }) {
+function PositionDetail({
+  row,
+  commercialLine,
+}: {
+  row: BoqPriceMatrixRow;
+  commercialLine: CommercialLineResult | undefined;
+}) {
   const costNature = row.research_route?.cost_nature;
   const route =
     costNature === "WORK"
@@ -442,7 +508,7 @@ function PositionDetail({ row }: { row: BoqPriceMatrixRow }) {
         </div>
         <div className="public-position-detail__status">
           <span>BLOCKED</span>
-          <small>итоговая цена отсутствует</small>
+          <small>предварительные данные показаны</small>
         </div>
       </header>
 
@@ -514,12 +580,20 @@ function PositionDetail({ row }: { row: BoqPriceMatrixRow }) {
         <div className="public-system-decision__verdict">
           <Icon name="warning" size={24} />
           <div>
-            <span>Предложение системы</span>
-            <strong>Итоговая цена не сформирована</strong>
+            <span>Предварительный расчёт системы</span>
+            <strong>
+              {commercialLine === undefined
+                ? "Нет расчётного значения"
+                : `${formatRubles(commercialLine.preliminaryUnitPriceRubles)} / ${row.boq_unit}`}
+            </strong>
             <p>
-              Это не скрытая сумма: расчёт остановлен до доказанного
-              сопоставления и приведения исходных значений к одной коммерческой
-              базе.
+              {commercialLine === undefined
+                ? "Для строки не найдено связанное коммерческое допущение."
+                : `Количество ${formatDecimal(commercialLine.quantity)} ${row.boq_unit}; предварительная себестоимость строки ${formatKopecks(commercialLine.directCostKopecks)}.`}
+            </p>
+            <p>
+              Значение показано для анализа маржи, но не является безопасной
+              ценой заявки: источники и сопоставления ещё не подтверждены.
             </p>
           </div>
         </div>
@@ -543,10 +617,25 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
   const snapshot = alabugaPublicSnapshot;
   const rows = snapshot.matrix.rows;
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<RowFilter>("WITH_AMOUNT");
+  const [filter, setFilter] = useState<RowFilter>("ALL");
+  const [quantityScenario, setQuantityScenario] =
+    useState<QuantityScenario>("NORMALIZED");
   const initialRow = rows.find(rowHasObservedAmount) ?? rows[0];
   const [selectedRowId, setSelectedRowId] = useState(initialRow?.row_id ?? "");
-  const positionListRef = useRef<HTMLElement>(null);
+  const commercialCalculation = useMemo(
+    () =>
+      calculateCommercialScenario(
+        alabugaCommercialLines,
+        alabugaCommercialAssumptions,
+        quantityScenario,
+      ),
+    [quantityScenario],
+  );
+  const commercialByLineKey = useMemo(
+    () =>
+      new Map(commercialCalculation.lines.map((line) => [line.lineKey, line])),
+    [commercialCalculation.lines],
+  );
   const amountRowCount = rows.filter(rowHasObservedAmount).length;
   const fgisPriceRowCount = rows.filter(rowHasFgisObservedAmount).length;
   const marketPriceRowCount = rows.filter(rowHasMarketObservedAmount).length;
@@ -593,18 +682,6 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
     filteredRows.find((row) => row.row_id === selectedRowId) ??
     filteredRows[0] ??
     null;
-
-  useEffect(() => {
-    const list = positionListRef.current;
-    const selected = list?.querySelector<HTMLElement>(
-      ".public-position-item.is-selected",
-    );
-    if (list === null || selected === null || selected === undefined) return;
-    const target =
-      selected.offsetTop -
-      Math.max(0, (list.clientHeight - selected.offsetHeight) / 2);
-    list.scrollTop = Math.max(0, target);
-  }, [selectedRow?.row_id]);
 
   return (
     <main className="public-demo">
@@ -660,9 +737,9 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
             <button
               className="public-download"
               type="button"
-              onClick={() => downloadCsv(rows)}
+              onClick={() => downloadCsv(rows, quantityScenario)}
             >
-              Скачать CSV
+              Скачать ВОР CSV
             </button>
           </div>
         </div>
@@ -671,19 +748,120 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
             <span>Текущий результат</span>
             <Icon name="warning" size={20} />
           </div>
-          <strong>BLOCKED</strong>
-          <p>Итоговая сметная оценка пока не сформирована</p>
+          <strong>УБЫТОК</strong>
+          <p>
+            {formatKopecks(commercialCalculation.operatingResultKopecks)} ·
+            предварительный сценарий
+          </p>
           <dl>
             <div>
-              <dt>Сырых сумм найдено</dt>
-              <dd>{snapshot.summary.observed_amounts}</dd>
+              <dt>Цена тендера</dt>
+              <dd>{formatKopecks(commercialCalculation.tenderGrossKopecks)}</dd>
             </div>
             <div>
-              <dt>Цен выпущено</dt>
-              <dd>0</dd>
+              <dt>Полная себестоимость</dt>
+              <dd>{formatKopecks(commercialCalculation.fullCostKopecks)}</dd>
             </div>
           </dl>
+          <small>BLOCKED · не является решением о подаче заявки</small>
         </aside>
+      </section>
+
+      <section className="public-commercial" aria-label="Экономика участия">
+        <header className="public-commercial__header">
+          <div>
+            <p className="eyebrow">Экономика участия</p>
+            <h2>При текущей цене тендер убыточен</h2>
+            <p>
+              Показаны все расчётные данные, даже несмотря на блокировку.
+              Источник — файл коллеги; ошибочные ссылки в формуле исправлены, но
+              исходные цены и методика ещё не подтверждены.
+            </p>
+          </div>
+          <div
+            className="public-commercial__scenario"
+            aria-label="Сценарий объёма"
+          >
+            <span>Сценарий количества</span>
+            <div>
+              {(Object.keys(scenarioLabels) as QuantityScenario[]).map(
+                (scenario) => (
+                  <button
+                    type="button"
+                    key={scenario}
+                    className={quantityScenario === scenario ? "is-active" : ""}
+                    aria-pressed={quantityScenario === scenario}
+                    onClick={() => setQuantityScenario(scenario)}
+                  >
+                    {scenarioLabels[scenario]}
+                  </button>
+                ),
+              )}
+            </div>
+          </div>
+        </header>
+
+        <div className="public-commercial__metrics">
+          <article>
+            <span>Цена тендера, с НДС</span>
+            <strong>
+              {formatKopecks(commercialCalculation.tenderGrossKopecks)}
+            </strong>
+            <small>из книги · не подтверждена извне</small>
+          </article>
+          <article>
+            <span>Прямые затраты</span>
+            <strong>
+              {formatKopecks(commercialCalculation.directCostKopecks)}
+            </strong>
+            <small>23 позиции выбранного сценария</small>
+          </article>
+          <article>
+            <span>Полная себестоимость</span>
+            <strong>
+              {formatKopecks(commercialCalculation.fullCostKopecks)}
+            </strong>
+            <small>с накладными и резервом из книги</small>
+          </article>
+          <article className="is-loss">
+            <span>Финансовый результат</span>
+            <strong>
+              {formatKopecks(commercialCalculation.operatingResultKopecks)}
+            </strong>
+            <small>
+              маржа {formatPercent(commercialCalculation.marginBps)}
+            </small>
+          </article>
+          <article className="is-required">
+            <span>Требуемая цена, с НДС</span>
+            <strong>
+              {formatKopecks(commercialCalculation.requiredGrossKopecks)}
+            </strong>
+            <small>
+              выше НМЦ на {formatKopecks(commercialCalculation.priceGapKopecks)}
+            </small>
+          </article>
+        </div>
+
+        <div className="public-commercial__basis">
+          <strong>Предварительный сценарий · BLOCKED</strong>
+          <span>
+            Доступно на исполнение после НДС и удержаний:{" "}
+            {formatKopecks(commercialCalculation.availableAfterTermsKopecks)}
+          </span>
+          <span>
+            Допущения книги: НДС 22% · услуги заказчика/ГК 21% · накладные 8% ·
+            резерв 7,5% · финансирование 1,5% · целевая маржа 8%
+          </span>
+          <span>
+            Цена строки: 25% тендерный ориентир + 35% ФГИС/РИМ + 40% рынок,
+            затем риск строки.
+          </span>
+          <span>
+            Источник: {alabugaCommercialProvenance.workbook} · SHA256{" "}
+            {alabugaCommercialProvenance.workbookSha256.slice(0, 12)}…
+          </span>
+        </div>
       </section>
 
       <section className="public-stats" aria-label="Сводка обработки">
@@ -780,37 +958,22 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
       <section className="public-workbench" id="positions">
         <header className="public-workbench__heading">
           <div>
-            <p className="eyebrow">Проверяемая ценовая матрица</p>
-            <h2>Все позиции и источники</h2>
+            <p className="eyebrow">Расчётная ведомость объёмов работ</p>
+            <h2>ВОР · себестоимость проекта</h2>
           </div>
           <p>
-            Выберите строку слева. Справа откроются исходное наименование,
-            найденные совпадения, суммы, технические различия и прямые ссылки.
+            Одна позиция — одна строка. Нажмите на наименование, чтобы открыть
+            сопоставления ФГИС ЦС, рыночные источники и причины блокировки.
           </p>
         </header>
 
-        <div className="public-evidence-guide" role="status">
-          <div className="public-evidence-guide__number">{amountRowCount}</div>
-          <div className="public-evidence-guide__copy">
-            <span>Позиции с реально найденными суммами</span>
-            <strong>Они показаны сразу — без прокрутки через работы</strong>
-            <p>
-              Цена ФГИС ЦС есть у {fgisPriceRowCount} строк · рыночная сумма у{" "}
-              {marketPriceRowCount}. Остальные строки не скрыты: переключитесь
-              на «Все {rows.length}».
-            </p>
+        <div className="public-vor-warning" role="status">
+          <Icon name="warning" size={20} />
+          <div>
+            <strong>Формула книги исправлена, данные не утверждены</strong>
+            <p>{alabugaCommercialProvenance.correction}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setQuery("");
-              setFilter(filter === "ALL" ? "WITH_AMOUNT" : "ALL");
-            }}
-          >
-            {filter === "ALL"
-              ? `Вернуть ${amountRowCount} строк с суммами`
-              : `Показать все ${rows.length} позиции`}
-          </button>
+          <span>Источник: {alabugaCommercialProvenance.workbookDate}</span>
         </div>
 
         <div className="public-workbench__toolbar">
@@ -850,116 +1013,145 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           </span>
         </div>
 
-        <div className="public-workbench__layout">
-          <aside
-            ref={positionListRef}
-            className="public-position-list"
-            aria-label="Позиции ВОР"
-          >
-            {filteredRows.length === 0 ? (
-              <div className="public-position-list__empty">
-                <Icon name="search" size={24} />
-                <strong>Ничего не найдено</strong>
-                <span>Измените запрос или фильтр.</span>
-              </div>
-            ) : (
-              filteredRows.map((row, index) => {
-                const candidateCount = rowCandidates(row).length;
-                const fgisAmountCount = observedCandidateCount(
-                  row.fgis_cs_research_candidates,
-                );
-                const marketAmountCount = observedCandidateCount(
-                  row.market_research_candidates,
-                );
-                const costNature = row.research_route?.cost_nature;
-                const isSelected = selectedRow?.row_id === row.row_id;
-                return (
-                  <button
-                    type="button"
-                    key={row.row_id}
-                    className={`public-position-item${isSelected ? " is-selected" : ""}`}
-                    aria-pressed={isSelected}
-                    onClick={() => setSelectedRowId(row.row_id)}
-                  >
-                    <span className="public-position-item__index">
-                      {String(
-                        rowOrdinalById.get(row.row_id) ?? index + 1,
-                      ).padStart(2, "0")}
-                    </span>
-                    <span className="public-position-item__body">
-                      <code>{row.line_key}</code>
-                      <strong>{row.boq_item_name}</strong>
-                      <small>
-                        {row.quantity === null
+        <div className="public-vor-scroll">
+          <table className="public-vor-table">
+            <thead>
+              <tr className="public-vor-table__groups">
+                <th rowSpan={2}>№</th>
+                <th colSpan={2}>Позиция ВОР</th>
+                <th colSpan={2}>Объём</th>
+                <th colSpan={3}>Исходные цены, руб./ед. без НДС</th>
+                <th colSpan={2}>Предварительный расчёт</th>
+                <th rowSpan={2}>Контроль</th>
+              </tr>
+              <tr>
+                <th>Код</th>
+                <th>Наименование</th>
+                <th>Ед.</th>
+                <th>{scenarioLabels[quantityScenario]}</th>
+                <th>Тендер / смета</th>
+                <th>ФГИС / РИМ</th>
+                <th>Рынок</th>
+                <th>Цена системы, руб./ед.</th>
+                <th>Себестоимость строки</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td className="public-vor-table__empty" colSpan={11}>
+                    Ничего не найдено. Измените запрос или фильтр.
+                  </td>
+                </tr>
+              ) : (
+                filteredRows.map((row, index) => {
+                  const commercial = commercialByLineKey.get(row.line_key);
+                  const candidateCount = rowCandidates(row).length;
+                  const isSelected = selectedRow?.row_id === row.row_id;
+                  const costNature = row.research_route?.cost_nature;
+                  return (
+                    <tr
+                      key={row.row_id}
+                      className={isSelected ? "is-selected" : ""}
+                    >
+                      <td>{rowOrdinalById.get(row.row_id) ?? index + 1}</td>
+                      <td>
+                        <code>{row.line_key}</code>
+                      </td>
+                      <th scope="row">
+                        <button
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => setSelectedRowId(row.row_id)}
+                        >
+                          <strong>{row.boq_item_name}</strong>
+                          <span>
+                            {costNature === "WORK"
+                              ? "Работа · требуется ГЭСН"
+                              : costNature === "LOGISTICS"
+                                ? "Логистика · отдельный расчёт"
+                                : "Материал · ФГИС ЦС и рынок"}
+                          </span>
+                        </button>
+                      </th>
+                      <td>{row.boq_unit}</td>
+                      <td className="is-number">
+                        {commercial === undefined
                           ? "—"
-                          : formatDecimal(row.quantity)}{" "}
-                        {row.boq_unit}
-                      </small>
-                      <span className="public-position-item__sources">
-                        {costNature === "WORK" ? (
-                          <em className="is-route">Работа · нужен ГЭСН</em>
-                        ) : costNature === "LOGISTICS" ? (
-                          <em className="is-route">
-                            Логистика · отдельный расчёт
-                          </em>
-                        ) : (
-                          <>
-                            <em
-                              className={
-                                row.fgis_cs_research_candidates.length > 0
-                                  ? "has-data"
-                                  : ""
-                              }
-                            >
-                              КСР {row.fgis_cs_research_candidates.length}
-                            </em>
-                            <em
-                              className={
-                                fgisAmountCount > 0 ? "has-amount" : ""
-                              }
-                            >
-                              {fgisAmountCount > 0
-                                ? `Публикации ФГИС ${fgisAmountCount}`
-                                : "Цены ФГИС нет"}
-                            </em>
-                            <em
-                              className={
-                                marketAmountCount > 0 ? "has-amount" : ""
-                              }
-                            >
-                              {marketAmountCount > 0
-                                ? `Рынок · цен ${marketAmountCount}`
-                                : "Цены рынка нет"}
-                            </em>
-                            {rowHasObservedAmount(row) && (
-                              <em className="has-amount is-primary">
-                                Суммы найдены
-                              </em>
-                            )}
-                          </>
-                        )}
-                      </span>
-                    </span>
-                    <span className="public-position-item__count">
-                      {candidateCount > 0 && (
-                        <>
-                          <b>{candidateCount}</b>
-                          <small>ист.</small>
-                        </>
-                      )}
-                    </span>
-                  </button>
-                );
-              })
-            )}
-          </aside>
-          <div className="public-workbench__detail">
+                          : formatDecimal(commercial.quantity)}
+                      </td>
+                      <td className="is-number">
+                        {commercial === undefined
+                          ? "—"
+                          : formatRubles(commercial.tenderUnitPrice)}
+                        <small>из книги</small>
+                      </td>
+                      <td className="is-number">
+                        {commercial === undefined
+                          ? "—"
+                          : formatRubles(commercial.fgisUnitPrice)}
+                        <small>
+                          {row.fgis_cs_research_candidates.length} канд. КСР
+                        </small>
+                      </td>
+                      <td className="is-number">
+                        {commercial === undefined
+                          ? "—"
+                          : formatRubles(commercial.marketUnitPrice)}
+                        <small>
+                          {row.market_research_candidates.length} ист.
+                        </small>
+                      </td>
+                      <td className="is-number is-system">
+                        {commercial === undefined
+                          ? "—"
+                          : formatRubles(commercial.preliminaryUnitPriceRubles)}
+                        <small>не выпущена</small>
+                      </td>
+                      <td className="is-number is-total">
+                        {commercial === undefined
+                          ? "—"
+                          : formatKopecks(commercial.directCostKopecks)}
+                      </td>
+                      <td className="public-vor-table__status">
+                        <strong>BLOCKED</strong>
+                        <span>{candidateCount} ист.</span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+            <tfoot>
+              <tr>
+                <th colSpan={9}>
+                  Итого прямые затраты · {scenarioLabels[quantityScenario]}
+                </th>
+                <td className="is-number">
+                  {formatKopecks(commercialCalculation.directCostKopecks)}
+                </td>
+                <td>BLOCKED</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div className="public-vor-detail">
+          <header>
+            <span>Проверка выбранной строки</span>
+            <small>наименование, источники и причины остановки</small>
+          </header>
+          <div>
             {selectedRow === null ? (
               <div className="public-position-list__empty">
                 <strong>Позиция не выбрана</strong>
               </div>
             ) : (
-              <PositionDetail key={selectedRow.row_id} row={selectedRow} />
+              <PositionDetail
+                key={`${selectedRow.row_id}:${quantityScenario}`}
+                row={selectedRow}
+                commercialLine={commercialByLineKey.get(selectedRow.line_key)}
+              />
             )}
           </div>
         </div>
