@@ -673,8 +673,15 @@ def create_app(
 
     @application.get("/v1/runtime-config", response_model=RuntimeConfigResponse)
     def runtime_config() -> RuntimeConfigResponse:
-        authentication_mode: Literal["OIDC", "DEVELOPMENT", "UNAVAILABLE"]
-        if resolved_settings.allow_insecure_dev_auth:
+        authentication_mode: Literal[
+            "OIDC",
+            "DEVELOPMENT",
+            "PUBLIC_DEMO",
+            "UNAVAILABLE",
+        ]
+        if resolved_settings.public_demo_enabled:
+            authentication_mode = "PUBLIC_DEMO"
+        elif resolved_settings.allow_insecure_dev_auth:
             authentication_mode = "DEVELOPMENT"
         elif all(
             (

@@ -544,6 +544,56 @@ def test_runtime_config_exposes_only_public_browser_authentication_settings(
     engine.dispose()
 
 
+def test_public_demo_changes_only_the_browser_mode_and_keeps_api_protected(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        app_env="test",
+        application_build_reference="git:" + "c" * 40,
+        database_url="sqlite+pysqlite://",
+        public_demo_enabled=True,
+        audit_signing_key="private-test-value-that-must-not-be-exposed",
+    )
+    engine = create_database_engine(settings)
+    create_schema_for_tests(engine)
+    app = create_app(
+        settings,
+        engine=engine,
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    )
+    with TestClient(app) as client:
+        runtime = client.get("/v1/runtime-config")
+        assert runtime.status_code == 200
+        assert runtime.json()["authentication_mode"] == "PUBLIC_DEMO"
+
+        anonymous_read = client.get("/v1/projects")
+        anonymous_write = client.post(
+            "/v1/projects",
+            json={
+                "code": "PUBLIC",
+                "name": "Must not be created",
+                "reason": "Anonymous public mode must remain read-only",
+            },
+        )
+        assert anonymous_read.status_code == 401
+        assert anonymous_read.json()["detail"] == "Bearer token is required"
+        assert anonymous_write.status_code == 401
+        assert anonymous_write.json()["detail"] == "Bearer token is required"
+    engine.dispose()
+
+
+def test_public_demo_cannot_enable_insecure_development_authentication() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="cannot be combined with insecure development authentication",
+    ):
+        Settings(
+            app_env="test",
+            public_demo_enabled=True,
+            allow_insecure_dev_auth=True,
+        )
+
+
 def test_operator_ui_serves_only_declared_spa_routes_and_assets(tmp_path: Path) -> None:
     ui_dist = tmp_path / "operator-ui"
     assets = ui_dist / "assets"

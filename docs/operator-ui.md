@@ -215,6 +215,14 @@ Development header authentication is visible only when
 `ALLOW_INSECURE_DEV_AUTH=true` in a development or test environment. Staging
 and production reject that setting during startup.
 
+`PUBLIC_DEMO_ENABLED=true` replaces the login screen with a deliberately
+non-interactive public overview. The overview is a redacted, build-time
+diagnostic presentation: it sends no project API requests and exposes no
+documents, names, quantities, prices, or authenticated controls. The setting
+does not relax API authentication; anonymous reads and mutations still return
+`401`. It cannot be combined with `ALLOW_INSECURE_DEV_AUTH` and requires the
+operator UI to be enabled.
+
 The identity provider must register exact HTTPS redirect URIs. Wildcard
 redirects, implicit flow, browser-held client secrets, and password grant are
 not supported.

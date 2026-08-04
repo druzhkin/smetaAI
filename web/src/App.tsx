@@ -15,6 +15,7 @@ import { PortfolioPage } from "./pages/PortfolioPage";
 import { PriceItemPage } from "./pages/PriceItemPage";
 import { ProjectCreatePage } from "./pages/ProjectCreatePage";
 import { ProjectWorkbenchPage } from "./pages/ProjectWorkbenchPage";
+import { PublicDemoPage } from "./pages/PublicDemoPage";
 import { QuantityChangeProposePage } from "./pages/QuantityChangeProposePage";
 import { QuantityManualChangePage } from "./pages/QuantityManualChangePage";
 import { RecordsPage } from "./pages/RecordsPage";
@@ -110,6 +111,10 @@ const queryClient = new QueryClient({
 function AuthenticatedRoutes({ config }: { config: RuntimeConfig }) {
   const auth = useAuth();
   const { pathname } = useNavigation();
+
+  if (config.authentication_mode === "PUBLIC_DEMO") {
+    return <PublicDemoPage config={config} />;
+  }
 
   if (pathname === "/auth/callback") {
     return <AuthCallbackPage />;

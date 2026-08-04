@@ -1,4 +1,5 @@
-export type AuthenticationMode = "OIDC" | "DEVELOPMENT" | "UNAVAILABLE";
+export type AuthenticationMode =
+  "OIDC" | "DEVELOPMENT" | "PUBLIC_DEMO" | "UNAVAILABLE";
 
 export interface RuntimeConfig {
   environment: string;

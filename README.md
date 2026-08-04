@@ -319,6 +319,12 @@ Development authentication is disabled by default. Set
 `ALLOW_INSECURE_DEV_AUTH=true` only on an isolated workstation; production
 startup rejects it.
 
+`PUBLIC_DEMO_ENABLED=true` opens a redacted read-only interface review without
+a login. It does not grant an API identity: protected reads, uploads, edits,
+approvals, and releases remain authenticated and fail closed. Public demo and
+insecure development authentication cannot be enabled together. This is a
+presentation mode, not evidence that a price is safe to release.
+
 ## Production status
 
 This repository contains a substantial fail-closed application core, but it is

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     oidc_web_scope: str = "openid profile email"
     operator_ui_enabled: bool = True
     operator_ui_dist_path: Path | None = None
+    public_demo_enabled: bool = False
     diagnostic_project_manifest_path: Path | None = None
     allow_insecure_dev_auth: bool = False
     audit_signing_key: SecretStr = SecretStr(DEVELOPMENT_AUDIT_SIGNING_KEY)
@@ -226,6 +227,12 @@ class Settings(BaseSettings):
             raise ValueError("Current audit verification key differs from the signing key")
         if self.audit_anchor_public_key_b64 is not None:
             validate_anchor_public_key(self.audit_anchor_public_key_b64)
+        if self.public_demo_enabled and not self.operator_ui_enabled:
+            raise ValueError("Public demo requires the operator UI")
+        if self.public_demo_enabled and self.allow_insecure_dev_auth:
+            raise ValueError(
+                "Public demo cannot be combined with insecure development authentication"
+            )
         if self.app_env in {"staging", "production"}:
             problems: list[str] = []
             if self.diagnostic_project_manifest_path is not None:

@@ -172,7 +172,12 @@ class ApiModel(BaseModel):
 
 class RuntimeConfigResponse(ApiModel):
     environment: str
-    authentication_mode: Literal["OIDC", "DEVELOPMENT", "UNAVAILABLE"]
+    authentication_mode: Literal[
+        "OIDC",
+        "DEVELOPMENT",
+        "PUBLIC_DEMO",
+        "UNAVAILABLE",
+    ]
     oidc_authority: str | None
     oidc_client_id: str | None
     oidc_scope: str
