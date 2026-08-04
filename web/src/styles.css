@@ -4606,6 +4606,16 @@ a.workflow-rail__link:hover {
   font-size: 1.35rem;
 }
 
+.matrix-proposal__blocker-summary {
+  padding: 8px 10px;
+  margin: 0;
+  color: var(--danger-dark);
+  background: var(--danger-soft);
+  border-left: 3px solid var(--danger);
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+
 @media (max-width: 860px) {
   .matrix-hero,
   .matrix-summary,

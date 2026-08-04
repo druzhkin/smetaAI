@@ -52,6 +52,7 @@ export function ProjectWorkbenchPage({
 
   const workbench = query.data;
   const release = workbench.release_decision;
+  const diagnosticMode = workbench.project.id.startsWith("diagnostic-");
   const firstFinding = release.findings[0];
   const nextAction =
     firstFinding === undefined
@@ -126,9 +127,16 @@ export function ProjectWorkbenchPage({
           <StatusPill value={release.resulting_state} />
           <Link
             className="button button--secondary"
-            to={`/projects/${encodeURIComponent(projectId)}/release`}
+            to={
+              diagnosticMode
+                ? `/projects/${encodeURIComponent(projectId)}/boq/pricing-matrix`
+                : `/projects/${encodeURIComponent(projectId)}/release`
+            }
           >
-            Итоговый контроль <Icon name="arrow" size={15} />
+            {diagnosticMode
+              ? "Открыть извлечённые строки"
+              : "Итоговый контроль"}{" "}
+            <Icon name="arrow" size={15} />
           </Link>
         </div>
       </section>
@@ -140,11 +148,16 @@ export function ProjectWorkbenchPage({
             <h2 id="project-route-title">Путь расчёта</h2>
           </div>
           <p>
-            Откройте любой этап, чтобы увидеть исходные данные, результат и
-            причины остановки.
+            {diagnosticMode
+              ? "Для диагностического импорта доступна ценовая матрица: в ней показаны исходные строки и точные причины, по которым расчёт ещё не создан."
+              : "Откройте любой этап, чтобы увидеть исходные данные, результат и причины остановки."}
           </p>
         </header>
-        <WorkflowRail state={workbench.project.state} projectId={projectId} />
+        {diagnosticMode ? (
+          <WorkflowRail state={workbench.project.state} />
+        ) : (
+          <WorkflowRail state={workbench.project.state} projectId={projectId} />
+        )}
       </section>
 
       {nextAction !== null && (
@@ -212,42 +225,44 @@ export function ProjectWorkbenchPage({
         ))}
       </section>
 
-      <details className="professional-panel">
-        <summary>
-          <span>
-            <strong>Профессиональные разделы проекта</strong>
-            <small>
-              Все исходные записи, риски, версии, согласования и журнал аудита
-            </small>
-          </span>
-          <span>10 разделов</span>
-        </summary>
-        <section className="section-directory">
-          <header className="section-heading">
-            <div>
-              <p className="eyebrow">Полная доказательная цепочка</p>
-              <h2>Детальные разделы</h2>
+      {!diagnosticMode && (
+        <details className="professional-panel">
+          <summary>
+            <span>
+              <strong>Профессиональные разделы проекта</strong>
+              <small>
+                Все исходные записи, риски, версии, согласования и журнал аудита
+              </small>
+            </span>
+            <span>10 разделов</span>
+          </summary>
+          <section className="section-directory">
+            <header className="section-heading">
+              <div>
+                <p className="eyebrow">Полная доказательная цепочка</p>
+                <h2>Детальные разделы</h2>
+              </div>
+              <p>От исходного документа до зафиксированного результата</p>
+            </header>
+            <div className="section-grid">
+              {sections.map((section) => (
+                <Link
+                  key={section.code}
+                  to={`/projects/${encodeURIComponent(projectId)}/${section.code}`}
+                  className="section-card"
+                >
+                  <span className="section-card__index">{section.index}</span>
+                  <div>
+                    <h3>{section.label}</h3>
+                    <p>{section.description}</p>
+                  </div>
+                  <Icon name="arrow" size={17} />
+                </Link>
+              ))}
             </div>
-            <p>От исходного документа до зафиксированного результата</p>
-          </header>
-          <div className="section-grid">
-            {sections.map((section) => (
-              <Link
-                key={section.code}
-                to={`/projects/${encodeURIComponent(projectId)}/${section.code}`}
-                className="section-card"
-              >
-                <span className="section-card__index">{section.index}</span>
-                <div>
-                  <h3>{section.label}</h3>
-                  <p>{section.description}</p>
-                </div>
-                <Icon name="arrow" size={17} />
-              </Link>
-            ))}
-          </div>
-        </section>
-      </details>
+          </section>
+        </details>
+      )}
 
       <div className="workbench-columns">
         <section>
@@ -273,10 +288,15 @@ export function ProjectWorkbenchPage({
               <h2>Последние действия</h2>
             </div>
             <Link
-              to={`/projects/${encodeURIComponent(projectId)}/AUDIT`}
+              to={
+                diagnosticMode
+                  ? `/projects/${encodeURIComponent(projectId)}/boq/pricing-matrix`
+                  : `/projects/${encodeURIComponent(projectId)}/AUDIT`
+              }
               className="text-link"
             >
-              Весь журнал <Icon name="arrow" size={14} />
+              {diagnosticMode ? "Открыть строки" : "Весь журнал"}{" "}
+              <Icon name="arrow" size={14} />
             </Link>
           </header>
           <div className="activity-list">

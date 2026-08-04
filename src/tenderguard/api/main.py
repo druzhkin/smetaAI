@@ -39,6 +39,10 @@ from tenderguard.application.business_qualification import (
 from tenderguard.application.calculations import CalculationService
 from tenderguard.application.commercial_costs import CommercialCostService
 from tenderguard.application.contracts import ContractService
+from tenderguard.application.diagnostic_project import (
+    DIAGNOSTIC_PROJECT_CURSOR,
+    DiagnosticProject,
+)
 from tenderguard.application.evidence import EvidenceService
 from tenderguard.application.exports import ExportIntegrityError, ExportPackageService
 from tenderguard.application.fgiscs_acquisition import FgisCsAcquisitionService
@@ -72,7 +76,11 @@ from tenderguard.application.rate_limits import (
 )
 from tenderguard.application.risks import RiskService
 from tenderguard.application.scenarios import ScenarioService
-from tenderguard.application.workbench import ProjectReadService, ProjectRecordSection
+from tenderguard.application.workbench import (
+    ProjectPortfolioPage,
+    ProjectReadService,
+    ProjectRecordSection,
+)
 from tenderguard.config import Settings, get_settings
 from tenderguard.domain.common import utc_now
 from tenderguard.domain.enums import ActorRole, ApprovalState, ContractTermKind
@@ -310,6 +318,14 @@ def create_app(
     session_factory = create_session_factory(resolved_engine)
     resolved_store = object_store or build_object_store(resolved_settings)
     resolved_quarantine_store = quarantine_store or build_quarantine_store(resolved_settings)
+    diagnostic_project = (
+        DiagnosticProject.load(
+            resolved_settings.diagnostic_project_manifest_path,
+            max_extraction_bytes=resolved_settings.max_api_request_bytes,
+        )
+        if resolved_settings.diagnostic_project_manifest_path is not None
+        else None
+    )
     operator_ui_dist = _operator_ui_dist(resolved_settings)
     authenticator = Authenticator(resolved_settings)
     configure_logging()
@@ -1192,13 +1208,53 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, Query(max_length=1000)] = None,
     ) -> ProjectPortfolioResponse:
+        show_diagnostic = bool(
+            diagnostic_project is not None
+            and cursor is None
+            and diagnostic_project.is_visible_in_portfolio(
+                actor=actor,
+                query=query,
+                states=frozenset(states or ()),
+            )
+        )
+        resume_database_first_page = bool(
+            diagnostic_project is not None
+            and cursor == DIAGNOSTIC_PROJECT_CURSOR
+            and diagnostic_project.is_visible_in_portfolio(
+                actor=actor,
+                query=query,
+                states=frozenset(states or ()),
+            )
+        )
+        database_cursor = None if resume_database_first_page else cursor
+        if show_diagnostic and limit == 1:
+            database_probe = read_service(session).list_projects(
+                actor=actor,
+                query=query,
+                states=frozenset(states or ()),
+                limit=1,
+                cursor=None,
+            )
+            assert diagnostic_project is not None
+            result = ProjectPortfolioPage(
+                items=(diagnostic_project.portfolio_item(actor=actor),),
+                next_cursor=(DIAGNOSTIC_PROJECT_CURSOR if database_probe.items else None),
+            )
+            return ProjectPortfolioResponse.model_validate(result.model_dump())
+
         result = read_service(session).list_projects(
             actor=actor,
             query=query,
             states=frozenset(states or ()),
-            limit=limit,
-            cursor=cursor,
+            limit=limit - 1 if show_diagnostic else limit,
+            cursor=database_cursor,
         )
+        if show_diagnostic:
+            assert diagnostic_project is not None
+            result = ProjectPortfolioPage(
+                items=(diagnostic_project.portfolio_item(actor=actor), *result.items),
+                next_cursor=result.next_cursor,
+            )
         return ProjectPortfolioResponse.model_validate(result.model_dump())
 
     @application.get(
@@ -1258,6 +1314,8 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectView:
+        if diagnostic_project is not None and diagnostic_project.is_project(project_id):
+            return diagnostic_project.project_view(actor=actor)
         return service(session).project_view(actor=actor, project_id=project_id)
 
     @application.get(
@@ -1269,6 +1327,10 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> ProjectWorkbenchResponse:
+        if diagnostic_project is not None and diagnostic_project.is_project(project_id):
+            return ProjectWorkbenchResponse.model_validate(
+                diagnostic_project.workbench(actor=actor).model_dump()
+            )
         result = read_service(session).workbench(
             actor=actor,
             project_id=project_id,
@@ -2651,6 +2713,10 @@ def create_app(
         actor: Annotated[Actor, Depends(get_actor)],
         session: Annotated[Session, Depends(get_session)],
     ) -> BoqPriceMatrixResponse:
+        if diagnostic_project is not None and diagnostic_project.is_project(project_id):
+            return BoqPriceMatrixResponse.model_validate(
+                diagnostic_project.price_matrix(actor=actor).model_dump()
+            )
         result = pricing_service(session).boq_price_matrix(
             actor=actor,
             project_id=project_id,

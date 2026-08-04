@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     oidc_web_scope: str = "openid profile email"
     operator_ui_enabled: bool = True
     operator_ui_dist_path: Path | None = None
+    diagnostic_project_manifest_path: Path | None = None
     allow_insecure_dev_auth: bool = False
     audit_signing_key: SecretStr = SecretStr(DEVELOPMENT_AUDIT_SIGNING_KEY)
     audit_signing_key_id: str = DEVELOPMENT_AUDIT_SIGNING_KEY_ID
@@ -227,6 +228,8 @@ class Settings(BaseSettings):
             validate_anchor_public_key(self.audit_anchor_public_key_b64)
         if self.app_env in {"staging", "production"}:
             problems: list[str] = []
+            if self.diagnostic_project_manifest_path is not None:
+                problems.append("diagnostic project is configured")
             if self.allow_insecure_dev_auth:
                 problems.append("insecure development authentication is enabled")
             if not self.application_build_reference:

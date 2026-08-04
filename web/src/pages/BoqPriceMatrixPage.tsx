@@ -30,6 +30,18 @@ const blockerLabels: Record<string, string> = {
   PRICE_POLICY_INTEGRITY_FAILED: "ценовая политика не прошла проверку",
   PRICE_DECISION_MISSING: "система ещё не сформировала решение",
   PRICE_DECISION_INTEGRITY_FAILED: "решение не прошло контроль целостности",
+  HIDDEN_WORKBOOK_CONTENT: "в книге есть скрытое содержимое",
+  INTAKE_CORRUPT_OR_PROTECTED_EXCEL:
+    "исходный Excel не прошёл строгую проверку целостности",
+  INTAKE_MANIFEST_BLOCKED: "приём исходного комплекта заблокирован",
+  CONTROLLED_IMPORT_WORKFLOW_REQUIRED:
+    "нужен управляемый импорт в текущую версию проекта",
+  INDEPENDENT_ROW_REVIEW_REQUIRED:
+    "нужна независимая проверка извлечённых строк",
+  MISSING_STABLE_POSITION_ID: "нет устойчивого номера позиции",
+  POSITION_ID_FORMULA_NOT_ALLOWED: "номер позиции задан запрещённой формулой",
+  CALCULATION_SNAPSHOT_MISSING: "нет зафиксированного расчёта",
+  BID_RELEASE_NOT_APPROVED: "проект не допущен к подаче заявки",
 };
 
 function blockerLabel(value: string): string {
@@ -275,7 +287,7 @@ export function MatchCell({ row }: { row: BoqPriceMatrixRow }) {
   );
 }
 
-function ProposedPriceCell({
+export function ProposedPriceCell({
   row,
   projectId,
 }: {
@@ -283,6 +295,9 @@ function ProposedPriceCell({
   projectId: string;
 }) {
   const proposed = row.proposed_price;
+  const explanations = proposed.rationale.filter(
+    (reason) => !reason.startsWith("Blocker: "),
+  );
   return (
     <div className="matrix-proposal">
       <div className="matrix-proposal__heading">
@@ -300,17 +315,29 @@ function ProposedPriceCell({
         <strong className="matrix-proposal__withheld">Цена скрыта</strong>
       )}
       <ul>
-        {proposed.rationale.map((reason) => (
+        {explanations.map((reason) => (
           <li key={reason}>{rationaleLabel(reason)}</li>
         ))}
       </ul>
-      <Link
-        className="button button--secondary"
-        to={`/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(row.item_id)}`}
-      >
-        Открыть расчёт
-        <Icon name="arrow" size={14} />
-      </Link>
+      {row.blockers.length > 0 && (
+        <p className="matrix-proposal__blocker-summary">
+          {row.blockers.length} причин блокировки. Полный список раскрывается в
+          позиции ВОР.
+        </p>
+      )}
+      {proposed.workflow_status === "DIAGNOSTIC_ONLY" ? (
+        <span className="button button--secondary" aria-disabled="true">
+          Расчёт ещё не создан
+        </span>
+      ) : (
+        <Link
+          className="button button--secondary"
+          to={`/projects/${encodeURIComponent(projectId)}/pricing/items/${encodeURIComponent(row.item_id)}`}
+        >
+          Открыть расчёт
+          <Icon name="arrow" size={14} />
+        </Link>
+      )}
     </div>
   );
 }
@@ -364,6 +391,9 @@ export function BoqPriceMatrixPage({
   const project = projectQuery.data;
   const matrix = matrixQuery.data;
   const verified = matrix.rows.length - matrix.blocked_row_count;
+  const diagnosticMode = matrix.rows.some(
+    (row) => row.proposed_price.workflow_status === "DIAGNOSTIC_ONLY",
+  );
 
   return (
     <div className="page boq-price-matrix-page">
@@ -374,9 +404,13 @@ export function BoqPriceMatrixPage({
           {project.code}
         </Link>
         <span>/</span>
-        <Link to={`/projects/${encodeURIComponent(projectId)}/PRICING`}>
-          Цены
-        </Link>
+        {diagnosticMode ? (
+          <span>Диагностический импорт</span>
+        ) : (
+          <Link to={`/projects/${encodeURIComponent(projectId)}/PRICING`}>
+            Цены
+          </Link>
+        )}
         <span>/</span>
         <span>Ценовая матрица ВОР</span>
       </nav>
@@ -396,8 +430,9 @@ export function BoqPriceMatrixPage({
           <Icon name="shield" size={24} />
           <div>
             <strong>
-              Проверенная цена строки не является решением APPROVED_FOR_BID.
-              Итоговый шлюз выпуска проекта остаётся обязательным.
+              {diagnosticMode
+                ? matrix.release_warning
+                : "Проверенная цена строки не является решением APPROVED_FOR_BID. Итоговый шлюз выпуска проекта остаётся обязательным."}
             </strong>
             <span>Сформировано {formatDateTime(matrix.generated_at)}</span>
           </div>

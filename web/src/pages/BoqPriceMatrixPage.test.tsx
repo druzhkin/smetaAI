@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { BoqPriceMatrixRow, BoqSourcePrice } from "../types";
 import {
   MatchCell,
+  ProposedPriceCell,
   SourcePriceCard,
   SourcePriceCell,
 } from "./BoqPriceMatrixPage";
@@ -139,5 +140,41 @@ describe("BoqPriceMatrixPage evidence cells", () => {
     expect(
       screen.getByText("Нет независимой цены с прямой ссылкой."),
     ).toBeVisible();
+  });
+
+  it("keeps diagnostic blockers collapsed and does not link to a missing calculation", () => {
+    const diagnosticRow: BoqPriceMatrixRow = {
+      ...matrixRow,
+      blockers: ["MARKET_PRICE_MISSING", "PRICE_DECISION_MISSING"],
+      proposed_price: {
+        ...matrixRow.proposed_price,
+        workflow_status: "DIAGNOSTIC_ONLY",
+        rationale: [
+          "Строка извлечена как непроверенное свидетельство.",
+          "Blocker: MARKET_PRICE_MISSING",
+          "Blocker: PRICE_DECISION_MISSING",
+        ],
+      },
+    };
+
+    render(
+      <ProposedPriceCell
+        row={diagnosticRow}
+        projectId="diagnostic-alabuga-4527946"
+      />,
+    );
+
+    expect(
+      screen.getByText("Строка извлечена как непроверенное свидетельство."),
+    ).toBeVisible();
+    expect(screen.queryByText(/Блокировка:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 причин блокировки/)).toBeVisible();
+    expect(screen.getByText("Расчёт ещё не создан")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      screen.queryByRole("link", { name: "Открыть расчёт" }),
+    ).not.toBeInTheDocument();
   });
 });

@@ -177,6 +177,10 @@ export const findingLabels: Record<string, string> = {
 export const metricLabels: Record<string, string> = {
   DOCUMENTS: "Актуальные документы",
   BOQ: "Актуальные строки BoQ",
+  EXTRACTED_ROWS: "Извлечённые строки XLSX",
+  MATCHED_ROWS: "Сопоставленные позиции",
+  PRICED_ROWS: "Позиции с проверенной ценой",
+  CALCULATIONS: "Зафиксированные расчёты",
   CONFLICTS: "Неразрешённые конфликты",
   APPROVALS: "Ожидают согласования",
   FINDINGS: "Блокирующие замечания",

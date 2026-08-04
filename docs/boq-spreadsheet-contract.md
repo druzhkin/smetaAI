@@ -228,3 +228,22 @@ intake gate and cannot be treated as evidence. The original VOR inside the
 supplied archive can be extracted diagnostically with a hash-pinned profile,
 but its 23 candidates remain `BLOCKED`: they have not entered the governed
 calculation and have no verified nomenclature or prices.
+
+## Read-only diagnostic project
+
+Development and test environments may expose a diagnostic extraction through
+the normal portfolio, workbench and price-matrix read endpoints. This mode is
+enabled only by `DIAGNOSTIC_PROJECT_MANIFEST_PATH`; staging and production
+configuration reject it.
+
+The local manifest contains project display metadata, an extraction path and
+the exact SHA-256 of that extraction. The server reads and validates both files
+once during startup. A missing file, changed hash, invalid extraction or empty
+candidate set stops startup. Source tender files, extraction JSON and the local
+manifest remain ignored and must not be committed.
+
+This view never persists `BoqLineRow`, quantity, nomenclature, price evidence,
+price decisions or calculation results. Every candidate is displayed as
+`BLOCKED`, proposed prices and totals are absent, and the release decision is
+always denied. Its purpose is to make real parsing output inspectable before a
+qualified governed import exists; it is not an alternative import workflow.
