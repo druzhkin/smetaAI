@@ -646,7 +646,7 @@ export function PublicDemoPage({ config }: { config: RuntimeConfig }) {
           <p className="eyebrow">Что именно проверено в ФГИС ЦС</p>
           <h2>
             Не 12 карточек: полный журнал содержит{" "}
-            {snapshot.summary.fgis_raw_responses} ответов
+            {snapshot.summary.fgis_raw_responses} ответа ФГИС ЦС
           </h2>
           <p>
             Работы и логистика не ищутся в каталоге материалов. Для них нужны

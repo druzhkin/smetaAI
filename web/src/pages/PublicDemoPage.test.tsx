@@ -40,7 +40,7 @@ describe("public project workbench", () => {
     expect(screen.getAllByText("890,24").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("heading", {
-        name: "Не 12 карточек: полный журнал содержит 783 ответов",
+        name: "Не 12 карточек: полный журнал содержит 783 ответа ФГИС ЦС",
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("60 вариантов")).toBeInTheDocument();
